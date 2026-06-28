@@ -1,0 +1,351 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  /* Color Palette */
+  --bg-dark: #07070c;
+  --bg-panel: rgba(14, 14, 26, 0.75);
+  --bg-panel-solid: #0e0e1a;
+  --bg-card: rgba(26, 26, 46, 0.5);
+  --border-color: rgba(255, 255, 255, 0.08);
+  
+  /* Neons */
+  --neon-pink: #ff007f;
+  --neon-blue: #00e5ff;
+  --neon-green: #39ff14;
+  --neon-yellow: #fffb00;
+  --neon-purple: #9d4edd;
+  
+  /* Gradients */
+  --grad-primary: linear-gradient(135deg, var(--neon-pink) 0%, var(--neon-purple) 50%, var(--neon-blue) 100%);
+  --grad-cyber: linear-gradient(90deg, var(--neon-pink) 0%, var(--neon-blue) 100%);
+  --grad-green-blue: linear-gradient(135deg, var(--neon-green) 0%, var(--neon-blue) 100%);
+  --grad-gold: linear-gradient(135deg, var(--neon-yellow) 0%, #ff6b00 100%);
+  --grad-dark-card: linear-gradient(180deg, rgba(26, 26, 46, 0.8) 0%, rgba(14, 14, 26, 0.95) 100%);
+  
+  /* Text */
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0c0;
+  --text-muted: #5f5f7a;
+  
+  /* Glows */
+  --glow-pink: 0 0 15px rgba(255, 0, 127, 0.35);
+  --glow-blue: 0 0 15px rgba(0, 229, 255, 0.35);
+  --glow-green: 0 0 15px rgba(57, 255, 20, 0.35);
+  --glow-yellow: 0 0 15px rgba(255, 251, 0, 0.35);
+  
+  /* Fonts */
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Space Mono', monospace;
+
+  font-family: var(--font-sans);
+  color-scheme: dark;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+*, *::before, *::after {
+  box-sizing: inherit;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-dark);
+  background-image: 
+    radial-gradient(at 10% 20%, rgba(255, 0, 127, 0.08) 0px, transparent 50%),
+    radial-gradient(at 90% 80%, rgba(0, 229, 255, 0.08) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(157, 78, 221, 0.05) 0px, transparent 60%);
+  background-attachment: fixed;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(7, 7, 12, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neon-pink);
+}
+
+/* Glassmorphism Panel */
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+}
+
+.glass-panel-heavy {
+  background: var(--bg-panel-solid);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Neon Text Utilities */
+.text-neon-pink {
+  color: var(--neon-pink);
+  text-shadow: var(--glow-pink);
+}
+.text-neon-blue {
+  color: var(--neon-blue);
+  text-shadow: var(--glow-blue);
+}
+.text-neon-green {
+  color: var(--neon-green);
+  text-shadow: var(--glow-green);
+}
+.text-neon-yellow {
+  color: var(--neon-yellow);
+  text-shadow: var(--glow-yellow);
+}
+
+/* Glowing Buttons */
+.btn-neon {
+  background: var(--grad-primary);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  font-weight: 600;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow: var(--glow-pink);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-neon:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(255, 0, 127, 0.6), 0 0 10px rgba(0, 229, 255, 0.4);
+}
+
+.btn-neon:active {
+  transform: translateY(1px);
+}
+
+.btn-neon-blue {
+  background: var(--grad-green-blue);
+  box-shadow: var(--glow-blue);
+}
+
+.btn-neon-blue:hover {
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.6), 0 0 10px rgba(57, 255, 20, 0.4);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 12px 24px;
+  font-weight: 600;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Card Styling */
+.card-cyber {
+  background: var(--grad-dark-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-cyber::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--grad-cyber);
+  opacity: 0.8;
+}
+
+.card-cyber:hover {
+  border-color: rgba(255, 0, 127, 0.25);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Layout Grid for Web Simulator */
+.sim-container {
+  display: grid;
+  grid-template-columns: 420px 1fr;
+  gap: 32px;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  min-height: 100vh;
+}
+
+@media (max-width: 1024px) {
+  .sim-container {
+    grid-template-columns: 1fr;
+    padding: 20px 10px;
+  }
+}
+
+/* Phone Mockup Frame */
+.phone-frame {
+  width: 380px;
+  height: 780px;
+  border-radius: 40px;
+  border: 12px solid #1a1a2e;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 30px rgba(255, 0, 127, 0.15);
+  background: #090910;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-self: center;
+}
+
+/* Phone Bezel Notch */
+.phone-notch {
+  width: 150px;
+  height: 25px;
+  background: #1a1a2e;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-bottom-left-radius: 15px;
+  border-bottom-right-radius: 15px;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.phone-camera {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #08080f;
+  margin-left: 20px;
+}
+
+/* App Screens inside Frame */
+.app-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  padding-top: 25px; /* for notch */
+}
+
+/* Leaflet Dark Custom Theme Overrides */
+.leaflet-container {
+  background: #0d0d16 !important;
+  font-family: var(--font-sans);
+}
+
+.leaflet-bar {
+  border: 1px solid var(--border-color) !important;
+  box-shadow: none !important;
+}
+
+.leaflet-bar a {
+  background-color: var(--bg-panel-solid) !important;
+  color: var(--text-primary) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: var(--neon-pink) !important;
+  color: white !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(14, 14, 26, 0.95) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: var(--text-primary) !important;
+  border-radius: 12px !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(14, 14, 26, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0% {
+    box-shadow: 0 0 10px rgba(255, 0, 127, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(255, 0, 127, 0.7);
+  }
+  100% {
+    box-shadow: 0 0 10px rgba(255, 0, 127, 0.3);
+  }
+}
+
+.glow-active-pulse {
+  animation: pulse-glow 2s infinite ease-in-out;
+}
+
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+.scanline::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0) 0%,
+    rgba(255, 255, 255, 0.03) 10%,
+    rgba(255, 255, 255, 0) 20%
+  );
+  animation: scanline 6s linear infinite;
+  pointer-events: none;
+  z-index: 999;
+}
+
+#map {
+  height: 100%;
+  width: 100%;
+  min-height: 300px;
+}

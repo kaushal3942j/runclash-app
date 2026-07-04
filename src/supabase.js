@@ -146,7 +146,13 @@ export const registerUser = async (email, password, name, clan) => {
   if (useSupabase) {
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email,
-      password
+      password,
+      options: {
+        data: {
+          display_name: name,
+          clan_name: clan
+        }
+      }
     });
 
     if (signUpError) throw signUpError;
@@ -162,9 +168,10 @@ export const registerUser = async (email, password, name, clan) => {
       premium: false
     };
 
+    // Use upsert to be robust against trigger presence or latency
     const { error: profileError } = await supabase
       .from('profiles')
-      .insert(profile);
+      .upsert(profile);
 
     if (profileError) throw profileError;
 
@@ -244,36 +251,62 @@ export const loginUser = async (email, password) => {
 
 export const loginGuest = async (name, clan) => {
   if (useSupabase) {
-    const { data: authData, error: guestError } = await supabase.auth.signInAnonymously();
-    if (guestError) throw guestError;
-    const user = authData.user;
+    try {
+      const { data: authData, error: guestError } = await supabase.auth.signInAnonymously({
+        options: {
+          data: {
+            display_name: name || 'Guest Runner',
+            clan_name: clan || 'Udaipur Racers'
+          }
+        }
+      });
+      if (guestError) throw guestError;
+      const user = authData.user;
 
-    const profile = {
-      id: user.id,
-      display_name: name || 'Guest Runner',
-      clan_name: clan || 'Udaipur Racers',
-      level: 1,
-      xp: 0,
-      coins: 50,
-      premium: false
-    };
+      const profile = {
+        id: user.id,
+        display_name: name || 'Guest Runner',
+        clan_name: clan || 'Udaipur Racers',
+        level: 1,
+        xp: 0,
+        coins: 50,
+        premium: false
+      };
 
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert(profile);
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .upsert(profile);
 
-    if (profileError) throw profileError;
+      if (profileError) throw profileError;
 
-    return {
-      uid: user.id,
-      displayName: profile.display_name,
-      clan: profile.clan_name,
-      level: 1,
-      xp: 0,
-      coins: 50,
-      premium: false,
-      isAnonymous: true
-    };
+      return {
+        uid: user.id,
+        displayName: profile.display_name,
+        clan: profile.clan_name,
+        level: 1,
+        xp: 0,
+        coins: 50,
+        premium: false,
+        isAnonymous: true
+      };
+    } catch (err) {
+      console.warn("Supabase anonymous auth failed/disabled. Falling back to local offline guest mode:", err);
+      const profile = {
+        uid: 'local_guest_' + Date.now(),
+        displayName: name || 'Guest Runner',
+        clan: clan || 'Udaipur Racers',
+        level: 1,
+        xp: 0,
+        coins: 50,
+        premium: false,
+        isAnonymous: true,
+        offlineFallback: true
+      };
+      localStorage.setItem('runclash_mock_auth', JSON.stringify(profile));
+      mockCurrentUser = profile;
+      mockAuthChangeListeners.forEach(cb => cb(profile));
+      return profile;
+    }
   } else {
     const profile = {
       uid: 'local_guest_' + Date.now(),
@@ -332,20 +365,29 @@ export const subscribeToTerritories = (onUpdate) => {
     const loadTerritories = async () => {
       const { data, error } = await supabase
         .from('territories')
-        .select('*');
+        .select('*')
+        .eq('is_active', true);
       if (data) {
-        const list = data.map(t => ({
-          id: t.id,
-          name: t.name,
-          ownerId: t.owner_id,
-          ownerName: t.owner_name || 'Unclaimed',
-          clan: t.clan_name,
-          area: t.area_sqm + ' m²',
-          decayHours: t.decay_hours,
-          maxDecayHours: t.max_decay_hours,
-          rate: t.rate,
-          coords: t.coords
-        }));
+        const list = data.map(t => {
+          // Calculate remaining decay hours dynamically based on expires_at
+          const expires = t.expires_at ? new Date(t.expires_at) : new Date(new Date(t.created_at).getTime() + 72 * 3600000);
+          const now = new Date();
+          const diffMs = expires - now;
+          const decayHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
+
+          return {
+            id: t.id,
+            name: t.name,
+            ownerId: t.owner_id,
+            ownerName: t.owner_name || 'Unclaimed',
+            clan: t.clan_name,
+            area: t.area_sqm + ' m²',
+            decayHours: decayHours,
+            maxDecayHours: t.max_decay_hours || 72,
+            rate: t.rate,
+            coords: t.coords
+          };
+        });
         onUpdate(list);
       }
     };
@@ -375,6 +417,11 @@ export const saveNewTerritory = async (territory) => {
   if (useSupabase) {
     // Map frontend structure to SQL columns
     const areaVal = parseFloat(territory.area.replace(/[^\d.]/g, '')) || 0;
+    
+    // Set expires_at to 72 hours from now
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 72);
+
     const dbTerr = {
       name: territory.name,
       owner_id: territory.ownerId,
@@ -384,7 +431,8 @@ export const saveNewTerritory = async (territory) => {
       decay_hours: territory.decayHours,
       max_decay_hours: territory.maxDecayHours,
       rate: territory.rate,
-      coords: territory.coords
+      coords: territory.coords,
+      expires_at: expiresAt.toISOString()
     };
 
     const { error } = await supabase
@@ -408,10 +456,17 @@ export const updateTerritory = async (id, updates) => {
   if (useSupabase) {
     // Map properties
     const mapped = {};
-    if (updates.decayHours !== undefined) mapped.decay_hours = updates.decayHours;
     if (updates.ownerId !== undefined) mapped.owner_id = updates.ownerId;
     if (updates.ownerName !== undefined) mapped.owner_name = updates.ownerName;
     if (updates.clan !== undefined) mapped.clan_name = updates.clan;
+
+    if (updates.decayHours !== undefined) {
+      mapped.decay_hours = updates.decayHours;
+      // Calculate new expires_at based on updates.decayHours
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + updates.decayHours);
+      mapped.expires_at = expiresAt.toISOString();
+    }
 
     await supabase
       .from('territories')
@@ -427,5 +482,54 @@ export const updateTerritory = async (id, updates) => {
     });
     localStorage.setItem('runclash_territories', JSON.stringify(updated));
     triggerListeners(updated);
+  }
+};
+
+export const getLeaderboard = async () => {
+  if (useSupabase) {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('display_name, clan_name, level, xp')
+        .order('xp', { ascending: false })
+        .limit(10);
+      
+      if (error) throw error;
+      
+      return data.map(p => ({
+        displayName: p.display_name,
+        clan: p.clan_name,
+        level: p.level,
+        xp: p.xp
+      }));
+    } catch (e) {
+      console.error("Error fetching leaderboard:", e);
+      return [];
+    }
+  } else {
+    return [
+      { displayName: 'Lakshya', clan: 'Udaipur Racers', level: 12, xp: 5800 },
+      { displayName: 'Sam', clan: 'GITS Runners', level: 10, xp: 4500 },
+      { displayName: 'Rohan', clan: 'Udaipur Racers', level: 8, xp: 3200 },
+      { displayName: 'Divya', clan: 'Udaipur Racers', level: 7, xp: 2900 }
+    ];
+  }
+};
+
+export const reportError = async (message, stack = '', component = '', metadata = {}) => {
+  console.error(`[${component}] Error: ${message}`, stack);
+  if (useSupabase) {
+    try {
+      const { data: { user: sessionUser } } = await supabase.auth.getUser();
+      await supabase.from('error_logs').insert({
+        user_id: sessionUser?.id || null,
+        error_message: message,
+        error_stack: stack,
+        component: component,
+        metadata: metadata
+      });
+    } catch (e) {
+      console.warn("Failed to report error to Supabase:", e);
+    }
   }
 };

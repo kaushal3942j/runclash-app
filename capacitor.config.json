@@ -1,0 +1,6 @@
+{
+  "appId": "com.runclash.app",
+  "appName": "RunClash",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

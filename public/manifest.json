@@ -1,0 +1,18 @@
+{
+  "short_name": "RunClash",
+  "name": "RunClash GPS Territory Wars",
+  "description": "Inspired by Strava and Pokemon Go. Conquer real-world running loops with your crew.",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#07070c",
+  "background_color": "#07070c"
+}

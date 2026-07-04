@@ -349,3 +349,40 @@ body {
   width: 100%;
   min-height: 300px;
 }
+
+/* Responsive Styles for Real Mobile Devices */
+@media (max-width: 768px) {
+  /* Stack the simulator container vertically */
+  .sim-container {
+    grid-template-columns: 1fr;
+    padding: 0;
+    margin: 0;
+    min-height: 100vh;
+    height: 100vh;
+    gap: 0;
+  }
+
+  /* Hide the desktop tracker configuration sidebar on mobile screens */
+  .sim-container > div:first-child {
+    display: none !important;
+  }
+
+  /* Expand the phone frame to occupy the entire browser viewport */
+  .phone-frame {
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .phone-notch {
+    display: none !important;
+  }
+
+  .app-screen {
+    padding-top: 0 !important;
+  }
+}

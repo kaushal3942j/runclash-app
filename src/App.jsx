@@ -3,11 +3,11 @@ import L from 'leaflet';
 import { 
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass, 
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
-  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio
+  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings
 } from 'lucide-react';
 import { 
   isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
-  syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory
+  syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError
 } from './supabase';
 
 // Predefined Simulation Routes for Udaipur (Developer Mode)
@@ -77,13 +77,28 @@ export default function App() {
   
   // Tracking Run State
   const [runState, setRunState] = useState({
-    status: 'idle', // 'idle', 'tracking', 'finished'
+    status: 'idle', // 'idle', 'tracking', 'paused', 'finished'
     path: [],
     distance: 0,
     duration: 0,
     pace: '--:--',
     gpsAccuracy: null
   });
+
+  const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+  const [leaderboard, setLeaderboard] = useState([]);
+  
+  const runStateRef = useRef(runState);
+  useEffect(() => {
+    runStateRef.current = runState;
+  }, [runState]);
+
+  const wakeLockRef = useRef(null);
+
+  // Anti-Cheat References
+  const cheatMetricsRef = useRef({ speedSpikes: 0, repeatedJumps: 0, unrealisticAcceleration: 0 });
+  const lastPointTimeRef = useRef(null);
+  const lastSpeedRef = useRef(0);
 
   const shopCosts = { shield: 80, boots: 120, decoy: 200 };
 
@@ -126,6 +141,17 @@ export default function App() {
   // Authentication & Database Subscriptions
   // ----------------------------------------------------
   useEffect(() => {
+    // Global Crash Reporting setup
+    const handleGlobalError = (event) => {
+      reportError(event.message || 'Unknown runtime error', event.error?.stack || '', 'WindowGlobalError');
+    };
+    const handleRejection = (event) => {
+      reportError(event.reason?.message || 'Unhandled Promise Rejection', event.reason?.stack || '', 'UnhandledRejection');
+    };
+
+    window.addEventListener('error', handleGlobalError);
+    window.addEventListener('unhandledrejection', handleRejection);
+
     // 1. Subscribe to Auth Changes
     const unsubscribeAuth = subscribeToAuth((user) => {
       setCurrentUser(user);
@@ -142,10 +168,29 @@ export default function App() {
     });
 
     return () => {
+      window.removeEventListener('error', handleGlobalError);
+      window.removeEventListener('unhandledrejection', handleRejection);
       unsubscribeAuth();
       unsubscribeTerritories();
+      if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+      clearInterval(simIntervalRef.current);
+      clearInterval(timerIntervalRef.current);
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(err => console.error("Unmount wake lock release error", err));
+      }
     };
   }, []);
+
+  // Fetch leaderboard when clans tab becomes active
+  useEffect(() => {
+    if (activeTab === 'clans') {
+      const fetchLeaderboard = async () => {
+        const board = await getLeaderboard();
+        setLeaderboard(board);
+      };
+      fetchLeaderboard();
+    }
+  }, [activeTab]);
 
   // Sync user profile stats on changes
   useEffect(() => {
@@ -261,10 +306,52 @@ export default function App() {
   // GEOLOCATION & TRACKING ENGINE (REAL GPS & SIMULATOR)
   // ----------------------------------------------------
 
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        addLog("System: Screen wake lock active.");
+      } catch (err) {
+        console.warn("Screen wake lock request failed:", err);
+      }
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+        wakeLockRef.current = null;
+        addLog("System: Screen wake lock released.");
+      } catch (err) {
+        console.error("Screen wake lock release failed:", err);
+      }
+    }
+  };
+
+  const togglePauseResume = () => {
+    setRunState(prev => {
+      if (prev.status === 'tracking') {
+        addLog("System: Run paused.");
+        return { ...prev, status: 'paused' };
+      } else if (prev.status === 'paused') {
+        addLog("System: Run resumed.");
+        return { ...prev, status: 'tracking' };
+      }
+      return prev;
+    });
+  };
+
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
     addLog("GPS: Calibrating tracking device...");
+    requestWakeLock();
+
+    // Reset Anti-Cheat metrics
+    cheatMetricsRef.current = { speedSpikes: 0, repeatedJumps: 0, unrealisticAcceleration: 0 };
+    lastPointTimeRef.current = null;
+    lastSpeedRef.current = 0;
     
     // Clear drawing elements
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
@@ -280,15 +367,15 @@ export default function App() {
     });
 
     // Start Clock timer
-    let elapsed = 0;
     timerIntervalRef.current = setInterval(() => {
-      elapsed += 1;
       setRunState(prev => {
-        const paceMin = Math.floor((elapsed / 60) / (prev.distance || 0.01));
-        const paceSec = Math.floor((elapsed % 60) / (prev.distance || 0.01)) % 60;
+        if (prev.status === 'paused') return prev;
+        const newDuration = prev.duration + 1;
+        const paceMin = Math.floor((newDuration / 60) / (prev.distance || 0.01));
+        const paceSec = Math.floor((newDuration % 60) / (prev.distance || 0.01)) % 60;
         return {
           ...prev,
-          duration: elapsed,
+          duration: newDuration,
           pace: isFinite(paceMin) && prev.distance > 0.02 ? `${paceMin}:${paceSec.toString().padStart(2, '0')}` : '5:30'
         };
       });
@@ -321,11 +408,15 @@ export default function App() {
       addLog("GPS: Geolocation watch active. Requesting high accuracy position...");
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
+          if (runStateRef.current.status === 'paused') return;
+
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           const accuracy = position.coords.accuracy;
 
           setRunState(prev => {
+            if (prev.status === 'paused') return prev;
+
             // Filter poor accuracy coordinates (>25 meters accuracy discarded)
             if (accuracy > 25) {
               addLog(`GPS: Poor signal accuracy (${Math.round(accuracy)}m). Discarding point.`);
@@ -333,7 +424,7 @@ export default function App() {
             }
 
             const newPoint = [lat, lng];
-            const updatedPath = [...prev.path, newPoint];
+            const nowTime = Date.now();
             
             // Calculate distance
             let incrementalDist = 0;
@@ -341,6 +432,44 @@ export default function App() {
               const lastPoint = prev.path[prev.path.length - 1];
               incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], lat, lng);
             }
+
+            // GPS Drift Filtering: if displacement is less than 2 meters (0.002 km), ignore it
+            if (prev.path.length > 0 && incrementalDist < 0.002) {
+              return { ...prev, gpsAccuracy: accuracy };
+            }
+
+            // Anti-Cheat: Analyze speed & acceleration between successive ticks
+            if (lastPointTimeRef.current !== null && prev.path.length > 0) {
+              const dt = (nowTime - lastPointTimeRef.current) / 1000; // seconds
+              if (dt > 0.1) {
+                const distMeters = incrementalDist * 1000;
+                const instantSpeed = distMeters / dt; // m/s
+                const acceleration = Math.abs(instantSpeed - lastSpeedRef.current) / dt; // m/s²
+
+                // 1. Filter instant GPS spikes (> 12 m/s) - discard point to keep path clean
+                if (instantSpeed > 12.0) {
+                  cheatMetricsRef.current.speedSpikes += 1;
+                  addLog(`GPS: Discarding GPS speed spike (${instantSpeed.toFixed(1)} m/s).`);
+                  return { ...prev, gpsAccuracy: accuracy };
+                }
+
+                // 2. Track repeated jumps (> 6 m/s)
+                if (instantSpeed > 6.0) {
+                  cheatMetricsRef.current.repeatedJumps += 1;
+                }
+
+                // 3. Track unrealistic acceleration (> 4 m/s²)
+                if (acceleration > 4.0) {
+                  cheatMetricsRef.current.unrealisticAcceleration += 1;
+                }
+
+                lastSpeedRef.current = instantSpeed;
+              }
+            }
+
+            lastPointTimeRef.current = nowTime;
+
+            const updatedPath = [...prev.path, newPoint];
             const updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
 
             // Update Map visual
@@ -369,10 +498,9 @@ export default function App() {
         },
         (error) => {
           console.error("GPS Error", error);
-          addLog(`GPS Error: ${error.message}`);
-          alert(`GPS tracking error: ${error.message}`);
+          addLog(`GPS Warning: ${error.message} (retrying)`);
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
       );
     } else {
       // PRELOADED DEVELOPER SIMULATOR
@@ -381,6 +509,8 @@ export default function App() {
       let idx = 0;
 
       simIntervalRef.current = setInterval(() => {
+        if (runStateRef.current.status === 'paused') return;
+
         if (idx >= route.points.length) {
           clearInterval(simIntervalRef.current);
           finishRealRun(route.points);
@@ -389,6 +519,7 @@ export default function App() {
 
         const point = route.points[idx];
         setRunState(prev => {
+          if (prev.status === 'paused') return prev;
           const updatedPath = [...prev.path, point];
           let stepDist = 0;
           if (prev.path.length > 0) {
@@ -417,6 +548,7 @@ export default function App() {
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     clearInterval(simIntervalRef.current);
     clearInterval(timerIntervalRef.current);
+    releaseWakeLock();
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
@@ -436,6 +568,7 @@ export default function App() {
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     clearInterval(simIntervalRef.current);
     clearInterval(timerIntervalRef.current);
+    releaseWakeLock();
 
     addLog("GPS: Closed loop verification verified.");
     const areaSqM = calculatePolygonArea(loopCoordinates);
@@ -446,6 +579,52 @@ export default function App() {
       alert(`Loop area (${formattedArea}) was too small. Run a larger path!`);
       stopTracking();
       return;
+    }
+
+    // Anti-Cheat: Evaluate suspicion score
+    if (trackingMode === 'gps') {
+      const totalDuration = runState.duration || 1; // seconds
+      const totalDistanceMeters = runState.distance * 1000;
+      const overallAvgSpeed = totalDistanceMeters / totalDuration; // m/s
+
+      // 1. Hard cutoff check: overall average speed > 8.0 m/s (28.8 km/h) is impossible for long loops
+      if (overallAvgSpeed > 8.0) {
+        addLog(`Anti-Cheat: Run invalidated. Unrealistic average speed (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`);
+        reportError(
+          `Anti-Cheat: Invalidation. Overall avg speed is too high (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`,
+          '',
+          'AntiCheat',
+          { distance: runState.distance, duration: runState.duration, avgSpeed: overallAvgSpeed }
+        );
+        alert("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
+        stopTracking();
+        return;
+      }
+
+      // 2. Calculate dynamic suspicion score
+      let suspicionScore = 0;
+      suspicionScore += cheatMetricsRef.current.repeatedJumps * 15;
+      suspicionScore += cheatMetricsRef.current.unrealisticAcceleration * 10;
+      if (overallAvgSpeed > 5.5) {
+        suspicionScore += 40; // High running average speed suspicion
+      }
+
+      if (suspicionScore >= 80) {
+        addLog(`Anti-Cheat: Run invalidated. Suspicion Score: ${suspicionScore}/100.`);
+        reportError(
+          `Anti-Cheat: Invalidation. Suspicion Score: ${suspicionScore}/100. Metrics: ${JSON.stringify(cheatMetricsRef.current)}`,
+          '',
+          'AntiCheat',
+          { suspicionScore, metrics: cheatMetricsRef.current, avgSpeed: overallAvgSpeed }
+        );
+        alert("Anti-Cheat Triggered: Unrealistic movement signals detected. Run was flagged.");
+        stopTracking();
+        return;
+      }
+
+      if (suspicionScore > 0) {
+        addLog(`Anti-Cheat: Run verified with caution. Suspicion Score: ${suspicionScore}/100.`);
+      }
     }
 
     const sectorName = trackingMode === 'gps' 
@@ -556,6 +735,37 @@ export default function App() {
       }
     }
     return null;
+  };
+
+  const getClanStandings = () => {
+    const clanAreas = {
+      'Udaipur Racers': 0,
+      'GITS Runners': 0,
+      'Delhi Marathon Club': 0
+    };
+    let totalArea = 0;
+
+    territories.forEach(terr => {
+      const areaVal = parseFloat(terr.area.replace(/[^\d.]/g, '')) || 0;
+      if (clanAreas[terr.clan] !== undefined) {
+        clanAreas[terr.clan] += areaVal;
+        totalArea += areaVal;
+      }
+    });
+
+    // Provide default initial non-zero standings if there are no territories yet
+    if (totalArea === 0) {
+      return [
+        { name: 'Udaipur Racers', percentage: 34 },
+        { name: 'GITS Runners', percentage: 33 },
+        { name: 'Delhi Marathon Club', percentage: 33 }
+      ];
+    }
+
+    return Object.keys(clanAreas).map(name => {
+      const percentage = totalArea > 0 ? Math.round((clanAreas[name] / totalArea) * 100) : 0;
+      return { name, percentage };
+    }).sort((a, b) => b.percentage - a.percentage);
   };
 
   // Distance computation (Haversine formula in km)
@@ -964,19 +1174,139 @@ export default function App() {
                   <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--neon-pink)' }}></div>
                 </div>
               </div>
+              <button 
+                onClick={() => setShowSettingsDrawer(prev => !prev)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: showSettingsDrawer ? 'var(--neon-pink)' : 'white',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                title="Settings"
+              >
+                <Settings size={15} style={{ transition: 'transform 0.3s ease', transform: showSettingsDrawer ? 'rotate(90deg)' : 'rotate(0)' }} />
+              </button>
             </div>
           </div>
 
           {/* Active Tab Screen Content */}
           <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column' }}>
             
+            {/* SETTINGS DRAWER OVERLAY */}
+            {showSettingsDrawer && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(7, 7, 12, 0.96)',
+                zIndex: 9999,
+                padding: '24px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '18px',
+                overflowY: 'auto'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                  <h3 style={{ margin: 0, fontSize: '15px', color: 'white', fontWeight: '800', letterSpacing: '0.5px' }}>DASHBOARD CONTROLS</h3>
+                  <button 
+                    onClick={() => setShowSettingsDrawer(false)}
+                    style={{ background: 'none', border: 'none', color: 'var(--neon-pink)', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {/* Location Source Mode */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Location Source Mode</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <button 
+                      className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue' : 'btn-secondary'}
+                      onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
+                      disabled={runState.status !== 'idle'}
+                      style={{ fontSize: '10px', padding: '8px', gap: '4px' }}
+                    >
+                      <Navigation size={10} /> Real GPS
+                    </button>
+                    <button 
+                      className={trackingMode === 'sim' ? 'btn-neon' : 'btn-secondary'}
+                      onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
+                      disabled={runState.status !== 'idle'}
+                      style={{ fontSize: '10px', padding: '8px', gap: '4px' }}
+                    >
+                      <Radio size={10} /> Dev Sim
+                    </button>
+                  </div>
+                </div>
+
+                {/* Simulation Loop Selector */}
+                {trackingMode === 'sim' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Mock Simulator Loop</label>
+                    <select 
+                      value={simulationRouteKey}
+                      onChange={e => setSimulationRouteKey(e.target.value)}
+                      disabled={runState.status !== 'idle'}
+                      style={{ background: '#121222', border: '1px solid var(--border-color)', color: 'white', padding: '10px', borderRadius: '8px', outline: 'none', fontSize: '12px', fontFamily: 'var(--font-sans)' }}
+                    >
+                      <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
+                      <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
+                      <option value="monument">Udaipur Castle Park (1.4 km)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Console Logs */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minHeight: '150px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>System Logs</label>
+                  <div style={{
+                    flex: 1,
+                    background: '#040408',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '10px',
+                    padding: '10px',
+                    overflowY: 'auto',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '9px',
+                    color: 'var(--neon-green)',
+                    display: 'flex',
+                    flexDirection: 'column-reverse',
+                    gap: '4px'
+                  }}>
+                    {consoleLogs.map((log, i) => (
+                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.01)', paddingBottom: '2px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+                  <button 
+                    className="btn-secondary" 
+                    onClick={() => { handleLogout(); setShowSettingsDrawer(false); }}
+                    style={{ fontSize: '11px', padding: '10px', width: '100%', borderColor: 'var(--neon-pink)', color: 'white', gap: '6px' }}
+                  >
+                    <LogOut size={12} /> Sign Out Account
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* TAB: MAP */}
             <div style={{ display: activeTab === 'map' ? 'flex' : 'none', flexDirection: 'column', height: '100%', width: '100%' }}>
               
               <div id="map" style={{ flex: 1, width: '100%' }}></div>
 
               {/* Real-time stats box */}
-              {runState.status === 'tracking' && (
+              {(runState.status === 'tracking' || runState.status === 'paused') && (
                 <div style={{
                   position: 'absolute',
                   top: '16px',
@@ -1010,7 +1340,7 @@ export default function App() {
               )}
 
               {/* Accuracy visual alert (only in real GPS mode) */}
-              {runState.status === 'tracking' && trackingMode === 'gps' && runState.gpsAccuracy && (
+              {(runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
                 <div style={{
                   position: 'absolute',
                   top: '90px',
@@ -1028,6 +1358,68 @@ export default function App() {
                 }}>
                   <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)' }}></div>
                   GPS Accuracy: {Math.round(runState.gpsAccuracy)}m
+                </div>
+              )}
+
+              {/* Active Run Bottom Overlay (Controls) */}
+              {(runState.status === 'tracking' || runState.status === 'paused') && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '16px',
+                  left: '16px',
+                  right: '16px',
+                  background: 'rgba(7, 7, 12, 0.9)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1.5px solid var(--neon-pink)',
+                  borderRadius: '16px',
+                  padding: '12px 14px',
+                  zIndex: 999,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  boxShadow: '0 10px 20px rgba(0,0,0,0.5)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Navigation size={18} className="text-neon-pink glow-active-pulse" />
+                    <div>
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Status</span>
+                      <h4 style={{ margin: '0', fontSize: '12px', color: 'white', fontWeight: 'bold' }}>
+                        {runState.status === 'tracking' ? 'Recording Loop...' : 'Run Paused'}
+                      </h4>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                      onClick={togglePauseResume}
+                      style={{
+                        background: runState.status === 'tracking' ? 'rgba(255, 255, 255, 0.1)' : 'var(--grad-primary)',
+                        border: 'none',
+                        color: 'white',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        fontSize: '10px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                    </button>
+                    <button 
+                      onClick={stopTracking}
+                      style={{
+                        background: 'rgba(255, 0, 127, 0.2)',
+                        border: '1px solid var(--neon-pink)',
+                        color: 'white',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        fontSize: '10px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Stop
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1194,32 +1586,69 @@ export default function App() {
             </div>
 
             {/* TAB: CLANS */}
-            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '16px', height: '100%' }}>
+            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '16px', padding: '16px', height: '100%' }}>
               <div>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Trophy size={15} className="text-neon-yellow" /> Clan Standings
+                <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Trophy size={14} className="text-neon-yellow" /> Clan Standings
                 </h3>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ background: 'rgba(0, 229, 255, 0.05)', border: '1px solid rgba(0, 229, 255, 0.15)', borderRadius: '12px', padding: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 'bold', marginBottom: '3px' }}>
-                      <span style={{ color: 'var(--neon-blue)' }}>1. Udaipur Racers</span>
-                      <span>48% Domain</span>
-                    </div>
-                    <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.04)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ width: '48%', height: '100%', background: 'var(--neon-blue)' }}></div>
-                    </div>
-                  </div>
+                  {getClanStandings().map((c, index) => {
+                    const color = c.name === 'Udaipur Racers' ? 'var(--neon-blue)' : c.name === 'GITS Runners' ? 'var(--neon-pink)' : '#ffffff';
+                    return (
+                      <div key={c.name} style={{ background: `${color}0D`, border: `1px solid ${color}26`, borderRadius: '12px', padding: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 'bold', marginBottom: '3px' }}>
+                          <span style={{ color: color }}>{index + 1}. {c.name}</span>
+                          <span>{c.percentage}% Domain</span>
+                        </div>
+                        <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.04)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${c.percentage}%`, height: '100%', background: color }}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-                  <div style={{ background: 'rgba(255, 0, 127, 0.05)', border: '1px solid rgba(255, 0, 127, 0.15)', borderRadius: '12px', padding: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 'bold', marginBottom: '3px' }}>
-                      <span style={{ color: 'var(--neon-pink)' }}>2. GITS Runners</span>
-                      <span>32% Domain</span>
+              {/* Leaderboard Section */}
+              <div>
+                <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Award size={14} className="text-neon-pink" /> Top Runners
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
+                  {leaderboard.length === 0 ? (
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', textAlign: 'center', padding: '10px' }}>
+                      No active runners synced yet.
                     </div>
-                    <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.04)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ width: '32%', height: '100%', background: 'var(--neon-pink)' }}></div>
-                    </div>
-                  </div>
+                  ) : (
+                    leaderboard.map((player, idx) => {
+                      const isSelf = player.displayName === currentUser?.displayName;
+                      return (
+                        <div key={idx} style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '6px 10px',
+                          background: isSelf ? 'rgba(0, 229, 255, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                          border: isSelf ? '1px solid var(--neon-blue)' : '1px solid rgba(255,255,255,0.04)',
+                          borderRadius: '8px',
+                          fontSize: '11px'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontWeight: 'bold', color: idx === 0 ? 'var(--neon-yellow)' : 'var(--text-secondary)' }}>#{idx + 1}</span>
+                            <div>
+                              <span style={{ fontWeight: '600', color: isSelf ? 'var(--neon-blue)' : 'white' }}>{player.displayName}</span>
+                              <span style={{ fontSize: '8px', color: 'var(--text-muted)', marginLeft: '6px' }}>{player.clan}</span>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>LVL {player.level}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--neon-pink)', fontWeight: 'bold' }}>{player.xp} XP</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
 

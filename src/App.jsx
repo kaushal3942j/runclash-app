@@ -155,6 +155,7 @@ export default function App() {
     // 1. Subscribe to Auth Changes
     const unsubscribeAuth = subscribeToAuth((user) => {
       setCurrentUser(user);
+      console.log(`[AUTH]\nauthenticated: ${!!user}\nuserId: ${user?.uid || 'null'}\nsession: ${user ? 'active' : 'null'}`);
       if (user) {
         addLog(`Auth: User ${user.displayName || 'Guest'} logged in.`);
       } else {
@@ -210,18 +211,22 @@ export default function App() {
       if (authMode === 'login') {
         const profile = await loginUser(authEmail, authPassword);
         setCurrentUser(profile);
+        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'signup') {
         if (!authName.trim()) throw new Error("Display name is required.");
         const profile = await registerUser(authEmail, authPassword, authName, authClan);
         setCurrentUser(profile);
+        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'guest') {
         const name = authPassword.trim() || authName.trim() || `Runner_${Math.floor(1000 + Math.random() * 9000)}`;
         const profile = await loginGuest(name, authClan);
         setCurrentUser(profile);
+        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       }
     } catch (err) {
       setAuthError(err.message || "Authentication failed.");
       addLog(`Auth Error: ${err.message}`);
+      console.log(`[AUTH]\nauthenticated: false\nuserId: null\nsession: null\nerror: ${err.message}`);
     }
   };
 
@@ -229,6 +234,7 @@ export default function App() {
     await logout();
     setCurrentUser(null);
     stopTracking();
+    console.log(`[AUTH]\nauthenticated: false\nuserId: null\nsession: null`);
   };
 
   // ----------------------------------------------------
@@ -258,6 +264,21 @@ export default function App() {
         map.invalidateSize();
       }, 150);
     }
+
+    return () => {
+      if (mapInstanceRef.current) {
+        console.log("[Map Setup] Destroying map instance and clearing ref.");
+        try {
+          mapInstanceRef.current.remove();
+        } catch (e) {
+          console.error("Map removal error", e);
+        }
+        mapInstanceRef.current = null;
+      }
+      polylineRef.current = null;
+      runnerMarkerRef.current = null;
+      territoryPolygonsRef.current = {};
+    };
   }, [currentUser]);
 
   // Resize map when tab changes back to map
@@ -334,6 +355,9 @@ export default function App() {
 
   const togglePauseResume = () => {
     setRunState(prev => {
+      const nextStatus = prev.status === 'tracking' ? 'paused' : prev.status === 'paused' ? 'tracking' : prev.status;
+      console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: ${nextStatus}\nwatchId: ${watchIdRef.current || 'null'}`);
+      
       if (prev.status === 'tracking') {
         addLog("System: Run paused.");
         return { ...prev, status: 'paused' };
@@ -348,6 +372,7 @@ export default function App() {
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
+    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: tracking\nwatchId: null`);
     console.log(`[GPS Engine] Start Tracking invoked. Active trackingMode: "${trackingMode}"`);
     addLog(`GPS: Calibrating tracking device in [${trackingMode === 'gps' ? 'Real GPS' : 'Developer Simulator'}] mode...`);
     requestWakeLock();
@@ -382,12 +407,11 @@ export default function App() {
       setRunState(prev => {
         if (prev.status === 'paused') return prev;
         const newDuration = prev.duration + 1;
-        const paceMin = Math.floor((newDuration / 60) / (prev.distance || 0.01));
-        const paceSec = Math.floor((newDuration % 60) / (prev.distance || 0.01)) % 60;
+        const paceStr = calculatePaceStr(newDuration, prev.distance);
         return {
           ...prev,
           duration: newDuration,
-          pace: isFinite(paceMin) && prev.distance > 0.02 ? `${paceMin}:${paceSec.toString().padStart(2, '0')}` : '5:30'
+          pace: paceStr
         };
       });
     }, 1000);
@@ -417,15 +441,17 @@ export default function App() {
       }
 
       addLog("GPS: Geolocation watch active. Requesting high accuracy position...");
-      watchIdRef.current = navigator.geolocation.watchPosition(
+      const watchId = navigator.geolocation.watchPosition(
         (position) => {
           if (runStateRef.current.status === 'paused') return;
 
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           const accuracy = position.coords.accuracy;
+          const timestamp = position.timestamp || Date.now();
 
-          console.log(`[GPS Engine] Coord received from navigator.geolocation.watchPosition(). Lat: ${lat}, Lng: ${lng}, trackingMode: "${trackingMode}", timestamp: ${Date.now()}`);
+          console.log(`[GPS]\nlatitude: ${lat}\nlongitude: ${lng}\naccuracy: ${accuracy}m\ntimestamp: ${timestamp}`);
+          console.log(`[GPS Engine] Coord received from navigator.geolocation.watchPosition(). Lat: ${lat}, Lng: ${lng}, trackingMode: "${trackingMode}", timestamp: ${timestamp}`);
 
           setRunState(prev => {
             if (prev.status === 'paused') return prev;
@@ -452,11 +478,12 @@ export default function App() {
             }
 
             // Anti-Cheat: Analyze speed & acceleration between successive ticks
+            let instantSpeed = 0;
             if (lastPointTimeRef.current !== null && prev.path.length > 0) {
               const dt = (nowTime - lastPointTimeRef.current) / 1000; // seconds
               if (dt > 0.1) {
                 const distMeters = incrementalDist * 1000;
-                const instantSpeed = distMeters / dt; // m/s
+                instantSpeed = distMeters / dt; // m/s
                 const acceleration = Math.abs(instantSpeed - lastSpeedRef.current) / dt; // m/s²
 
                 // 1. Filter instant GPS spikes (> 12 m/s) - discard point to keep path clean
@@ -484,6 +511,12 @@ export default function App() {
 
             const updatedPath = [...prev.path, newPoint];
             const updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
+
+            // Log pace telemetry
+            const distanceMeters = updatedDistance * 1000;
+            const elapsedSeconds = prev.duration;
+            const currentPace = calculatePaceStr(elapsedSeconds, updatedDistance);
+            console.log(`[PACE]\ndistanceMeters: ${distanceMeters.toFixed(1)}\nelapsedSeconds: ${elapsedSeconds}\nspeed: ${instantSpeed.toFixed(2)} m/s\npace: ${currentPace}`);
 
             // Update Map visual
             if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
@@ -515,6 +548,8 @@ export default function App() {
         },
         { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
       );
+      watchIdRef.current = watchId;
+      console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: tracking\nwatchId: ${watchId}`);
     } else {
       // PRELOADED DEVELOPER SIMULATOR
       const route = SIMULATION_ROUTES[simulationRouteKey];
@@ -534,7 +569,9 @@ export default function App() {
         }
 
         const point = route.points[idx];
-        console.log(`[GPS Engine] Coord received from Simulator interval. Lat: ${point[0]}, Lng: ${point[1]}, trackingMode: "${trackingMode}", timestamp: ${Date.now()}`);
+        const timestamp = Date.now();
+        console.log(`[GPS]\nlatitude: ${point[0]}\nlongitude: ${point[1]}\naccuracy: 0m (simulated)\ntimestamp: ${timestamp}`);
+        console.log(`[GPS Engine] Coord received from Simulator interval. Lat: ${point[0]}, Lng: ${point[1]}, trackingMode: "${trackingMode}", timestamp: ${timestamp}`);
 
         setRunState(prev => {
           if (prev.status === 'paused') return prev;
@@ -545,6 +582,13 @@ export default function App() {
             stepDist = getGeodeticDistance(lastPoint[0], lastPoint[1], point[0], point[1]);
           }
           const updatedDistance = parseFloat((prev.distance + stepDist).toFixed(2));
+
+          // Log pace telemetry
+          const distanceMeters = updatedDistance * 1000;
+          const elapsedSeconds = prev.duration;
+          const currentSpeed = (stepDist * 1000) / 1.5;
+          const currentPace = calculatePaceStr(elapsedSeconds, updatedDistance);
+          console.log(`[PACE]\ndistanceMeters: ${distanceMeters.toFixed(1)}\nelapsedSeconds: ${elapsedSeconds}\nspeed: ${currentSpeed.toFixed(2)} m/s\npace: ${currentPace}`);
 
           if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
           if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(point);
@@ -577,6 +621,8 @@ export default function App() {
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
+    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null`);
+
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
 
@@ -601,6 +647,7 @@ export default function App() {
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
+    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: finished\nwatchId: null`);
     addLog("GPS: Closed loop verification verified.");
     const areaSqM = calculatePolygonArea(loopCoordinates);
     const formattedArea = `${areaSqM.toLocaleString()} m²`;
@@ -832,6 +879,31 @@ export default function App() {
       area += (curr[0] * next[1]) - (next[0] * curr[1]);
     }
     return Math.round(Math.abs(area / 2));
+  };
+
+  const calculatePaceStr = (elapsedSeconds, distanceKm) => {
+    if (elapsedSeconds < 10 || !distanceKm || distanceKm < 0.02) {
+      return '--:--';
+    }
+
+    const distanceMeters = distanceKm * 1000;
+    const paceMinutesPerKm = (elapsedSeconds / 60) / (distanceMeters / 1000);
+
+    const paceMin = Math.floor(paceMinutesPerKm);
+    let paceSec = Math.round((paceMinutesPerKm - paceMin) * 60);
+
+    let finalMin = paceMin;
+    if (paceSec === 60) {
+      finalMin += 1;
+      paceSec = 0;
+    }
+
+    // Validate range: 2:00 min/km to 30:00 min/km
+    if (finalMin < 2 || finalMin > 30 || (finalMin === 30 && paceSec > 0)) {
+      return '--:--';
+    }
+
+    return `${finalMin}:${paceSec.toString().padStart(2, '0')}`;
   };
 
   // ----------------------------------------------------

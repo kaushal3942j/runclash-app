@@ -111,6 +111,8 @@ export const subscribeToAuth = (callback) => {
           .eq('id', session.user.id)
           .single();
 
+        console.log(`[SUPABASE]\noperation: SELECT\ntable: profiles\nuser: ${session.user.id}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
         if (profile) {
           callback({
             uid: session.user.id,
@@ -173,6 +175,8 @@ export const registerUser = async (email, password, name, clan) => {
       .from('profiles')
       .upsert(profile);
 
+    console.log(`[SUPABASE]\noperation: UPSERT\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
+
     if (profileError) throw profileError;
 
     return {
@@ -218,6 +222,8 @@ export const loginUser = async (email, password) => {
       .select('*')
       .eq('id', user.id)
       .single();
+
+    console.log(`[SUPABASE]\noperation: SELECT\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
 
     if (profileError) throw profileError;
 
@@ -276,6 +282,8 @@ export const loginGuest = async (name, clan) => {
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert(profile);
+
+      console.log(`[SUPABASE]\noperation: UPSERT\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
 
       if (profileError) throw profileError;
 
@@ -338,8 +346,9 @@ export const logout = async () => {
 // 2. User Stats Sync
 export const syncUserStats = async (profile) => {
   if (!profile || !profile.uid) return;
-  if (useSupabase) {
-    await supabase
+  const isLocalGuest = profile.uid.startsWith('local_');
+  if (useSupabase && !isLocalGuest) {
+    const { error } = await supabase
       .from('profiles')
       .update({
         level: profile.level,
@@ -348,6 +357,8 @@ export const syncUserStats = async (profile) => {
         premium: profile.premium
       })
       .eq('id', profile.uid);
+
+    console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${profile.uid}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
   } else {
     const localUser = JSON.parse(localStorage.getItem('runclash_mock_auth'));
     if (localUser && localUser.uid === profile.uid) {
@@ -358,6 +369,8 @@ export const syncUserStats = async (profile) => {
   }
 };
 
+let activeLoadTerritories = null;
+
 // 3. Territories Database & Realtime
 export const subscribeToTerritories = (onUpdate) => {
   if (useSupabase) {
@@ -367,8 +380,12 @@ export const subscribeToTerritories = (onUpdate) => {
         .from('territories')
         .select('*')
         .eq('is_active', true);
+
+      console.log(`[SUPABASE]\noperation: SELECT\ntable: territories\nuser: public\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
+      let list = [];
       if (data) {
-        const list = data.map(t => {
+        list = data.map(t => {
           // Calculate remaining decay hours dynamically based on expires_at
           const expires = t.expires_at ? new Date(t.expires_at) : new Date(new Date(t.created_at).getTime() + 72 * 3600000);
           const now = new Date();
@@ -388,9 +405,27 @@ export const subscribeToTerritories = (onUpdate) => {
             coords: t.coords
           };
         });
-        onUpdate(list);
       }
+
+      // Merge local guest-mode territories from LocalStorage
+      try {
+        const localData = localStorage.getItem('runclash_territories');
+        if (localData) {
+          const locals = JSON.parse(localData);
+          locals.forEach(loc => {
+            if (!list.some(t => t.id === loc.id)) {
+              list.push(loc);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to parse local territories", e);
+      }
+
+      onUpdate(list);
     };
+    
+    activeLoadTerritories = loadTerritories;
     loadTerritories();
 
     // 2. Setup realtime subscription channel
@@ -401,6 +436,7 @@ export const subscribeToTerritories = (onUpdate) => {
       .subscribe();
 
     return () => {
+      activeLoadTerritories = null;
       supabase.removeChannel(channel);
     };
   } else {
@@ -414,7 +450,8 @@ export const subscribeToTerritories = (onUpdate) => {
 };
 
 export const saveNewTerritory = async (territory) => {
-  if (useSupabase) {
+  const isLocalGuest = !territory.ownerId || territory.ownerId.startsWith('local_');
+  if (useSupabase && !isLocalGuest) {
     // Map frontend structure to SQL columns
     const areaVal = parseFloat(territory.area.replace(/[^\d.]/g, '')) || 0;
     
@@ -439,6 +476,8 @@ export const saveNewTerritory = async (territory) => {
       .from('territories')
       .insert(dbTerr);
 
+    console.log(`[SUPABASE]\noperation: INSERT\ntable: territories\nuser: ${territory.ownerId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
     if (error) console.error("Supabase error inserting territory", error);
   } else {
     const list = getMockTerritories();
@@ -449,6 +488,9 @@ export const saveNewTerritory = async (territory) => {
     const updated = [...list, newTerr];
     localStorage.setItem('runclash_territories', JSON.stringify(updated));
     triggerListeners(updated);
+    if (activeLoadTerritories) {
+      activeLoadTerritories();
+    }
   }
 };
 
@@ -468,10 +510,12 @@ export const updateTerritory = async (id, updates) => {
       mapped.expires_at = expiresAt.toISOString();
     }
 
-    await supabase
+    const { error } = await supabase
       .from('territories')
       .update(mapped)
       .eq('id', id);
+
+    console.log(`[SUPABASE]\noperation: UPDATE\ntable: territories\nuser: system\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
   } else {
     const list = getMockTerritories();
     const updated = list.map(t => {
@@ -493,6 +537,8 @@ export const getLeaderboard = async () => {
         .select('display_name, clan_name, level, xp')
         .order('xp', { ascending: false })
         .limit(10);
+
+      console.log(`[SUPABASE]\noperation: SELECT\ntable: profiles\nuser: public\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
       
       if (error) throw error;
       
@@ -521,13 +567,15 @@ export const reportError = async (message, stack = '', component = '', metadata 
   if (useSupabase) {
     try {
       const { data: { user: sessionUser } } = await supabase.auth.getUser();
-      await supabase.from('error_logs').insert({
+      const { error } = await supabase.from('error_logs').insert({
         user_id: sessionUser?.id || null,
         error_message: message,
         error_stack: stack,
         component: component,
         metadata: metadata
       });
+
+      console.log(`[SUPABASE]\noperation: INSERT\ntable: error_logs\nuser: ${sessionUser?.id || 'anonymous'}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
     } catch (e) {
       console.warn("Failed to report error to Supabase:", e);
     }

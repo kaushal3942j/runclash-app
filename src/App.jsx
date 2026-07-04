@@ -173,7 +173,10 @@ export default function App() {
       unsubscribeAuth();
       unsubscribeTerritories();
       if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-      clearInterval(simIntervalRef.current);
+      if (simIntervalRef.current) {
+        console.log(`[GPS Engine] Simulator interval cleared (unmount). ID: ${simIntervalRef.current}`);
+        clearInterval(simIntervalRef.current);
+      }
       clearInterval(timerIntervalRef.current);
       if (wakeLockRef.current) {
         wakeLockRef.current.release().catch(err => console.error("Unmount wake lock release error", err));
@@ -345,8 +348,16 @@ export default function App() {
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
-    addLog("GPS: Calibrating tracking device...");
+    console.log(`[GPS Engine] Start Tracking invoked. Active trackingMode: "${trackingMode}"`);
+    addLog(`GPS: Calibrating tracking device in [${trackingMode === 'gps' ? 'Real GPS' : 'Developer Simulator'}] mode...`);
     requestWakeLock();
+
+    // Safety check: verify no simulator interval exists while trackingMode === 'gps'
+    if (trackingMode === 'gps' && simIntervalRef.current) {
+      console.warn(`[GPS Engine] Warning: active simulator interval ${simIntervalRef.current} detected in Real GPS mode. Force clearing.`);
+      clearInterval(simIntervalRef.current);
+      simIntervalRef.current = null;
+    }
 
     // Reset Anti-Cheat metrics
     cheatMetricsRef.current = { speedSpikes: 0, repeatedJumps: 0, unrealisticAcceleration: 0 };
@@ -413,6 +424,8 @@ export default function App() {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           const accuracy = position.coords.accuracy;
+
+          console.log(`[GPS Engine] Coord received from navigator.geolocation.watchPosition(). Lat: ${lat}, Lng: ${lng}, trackingMode: "${trackingMode}", timestamp: ${Date.now()}`);
 
           setRunState(prev => {
             if (prev.status === 'paused') return prev;
@@ -508,16 +521,21 @@ export default function App() {
       addLog(`GPS Sim: Starting developer walk on loop: ${route.name}`);
       let idx = 0;
 
-      simIntervalRef.current = setInterval(() => {
+      const intervalId = setInterval(() => {
         if (runStateRef.current.status === 'paused') return;
 
         if (idx >= route.points.length) {
+          console.log(`[GPS Engine] Simulator interval cleared (finished). Interval ID: ${simIntervalRef.current}`);
+          addLog(`GPS: Simulator interval cleared (finished).`);
           clearInterval(simIntervalRef.current);
+          simIntervalRef.current = null;
           finishRealRun(route.points);
           return;
         }
 
         const point = route.points[idx];
+        console.log(`[GPS Engine] Coord received from Simulator interval. Lat: ${point[0]}, Lng: ${point[1]}, trackingMode: "${trackingMode}", timestamp: ${Date.now()}`);
+
         setRunState(prev => {
           if (prev.status === 'paused') return prev;
           const updatedPath = [...prev.path, point];
@@ -541,12 +559,21 @@ export default function App() {
 
         idx++;
       }, 1500);
+
+      simIntervalRef.current = intervalId;
+      console.log(`[GPS Engine] Simulator interval created. Interval ID: ${intervalId}, trackingMode: "${trackingMode}"`);
+      addLog(`GPS: Simulator interval created with ID: ${intervalId}`);
     }
   };
 
   const stopTracking = () => {
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-    clearInterval(simIntervalRef.current);
+    if (simIntervalRef.current) {
+      console.log(`[GPS Engine] Simulator interval cleared (stop). Interval ID: ${simIntervalRef.current}`);
+      addLog("GPS: Simulator interval cleared.");
+      clearInterval(simIntervalRef.current);
+      simIntervalRef.current = null;
+    }
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
@@ -566,7 +593,11 @@ export default function App() {
 
   const finishRealRun = async (loopCoordinates) => {
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
-    clearInterval(simIntervalRef.current);
+    if (simIntervalRef.current) {
+      console.log(`[GPS Engine] Simulator interval cleared (finish). Interval ID: ${simIntervalRef.current}`);
+      clearInterval(simIntervalRef.current);
+      simIntervalRef.current = null;
+    }
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 

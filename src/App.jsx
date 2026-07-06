@@ -49,6 +49,17 @@ const SIMULATION_ROUTES = {
       [24.5760, 73.6960],
       [24.5780, 73.6920]
     ]
+  },
+  micro: {
+    name: "Micro Loop (Too Small Test)",
+    distance: "0.01 km",
+    points: [
+      [24.5950, 73.6800],
+      [24.59501, 73.6800],
+      [24.59501, 73.68001],
+      [24.5950, 73.68001],
+      [24.5950, 73.6800]
+    ]
   }
 };
 
@@ -610,7 +621,7 @@ export default function App() {
     }
   };
 
-  const stopTracking = () => {
+  const stopTracking = (reason = "Explicit User Request") => {
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     if (simIntervalRef.current) {
       console.log(`[GPS Engine] Simulator interval cleared (stop). Interval ID: ${simIntervalRef.current}`);
@@ -621,7 +632,7 @@ export default function App() {
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
-    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null`);
+    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null\nterminationReason: ${reason}`);
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
@@ -638,6 +649,15 @@ export default function App() {
   };
 
   const finishRealRun = async (loopCoordinates) => {
+    const areaSqM = calculatePolygonArea(loopCoordinates);
+    const formattedArea = `${areaSqM.toLocaleString()} m²`;
+
+    if (areaSqM < 200) {
+      addLog(`GeoCalc: Loop area is too small (${formattedArea} < 200 m²). Territory not recorded.`);
+      alert("Loop too small. Continue running to create a larger loop.");
+      return;
+    }
+
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     if (simIntervalRef.current) {
       console.log(`[GPS Engine] Simulator interval cleared (finish). Interval ID: ${simIntervalRef.current}`);
@@ -649,15 +669,6 @@ export default function App() {
 
     console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: finished\nwatchId: null`);
     addLog("GPS: Closed loop verification verified.");
-    const areaSqM = calculatePolygonArea(loopCoordinates);
-    const formattedArea = `${areaSqM.toLocaleString()} m²`;
-
-    if (areaSqM < 200) {
-      addLog("GeoCalc: Loop area is too small (<200 m²). Territory not recorded.");
-      alert(`Loop area (${formattedArea}) was too small. Run a larger path!`);
-      stopTracking();
-      return;
-    }
 
     // Anti-Cheat: Evaluate suspicion score
     if (trackingMode === 'gps') {
@@ -675,7 +686,7 @@ export default function App() {
           { distance: runState.distance, duration: runState.duration, avgSpeed: overallAvgSpeed }
         );
         alert("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
-        stopTracking();
+        stopTracking("Anti-Cheat Average Speed Spike Cutoff");
         return;
       }
 
@@ -696,7 +707,7 @@ export default function App() {
           { suspicionScore, metrics: cheatMetricsRef.current, avgSpeed: overallAvgSpeed }
         );
         alert("Anti-Cheat Triggered: Unrealistic movement signals detected. Run was flagged.");
-        stopTracking();
+        stopTracking("Anti-Cheat High Suspicion Score Invalidation");
         return;
       }
 
@@ -748,6 +759,8 @@ export default function App() {
     // Clean tracking layers
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null\nterminationReason: Successful Conquest Completion`);
 
     setRunState({
       status: 'idle',
@@ -1165,6 +1178,7 @@ export default function App() {
               <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
               <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
               <option value="monument">Udaipur Castle Park (1.4 km)</option>
+              <option value="micro">Micro Loop (Too Small Test)</option>
             </select>
           </div>
         )}

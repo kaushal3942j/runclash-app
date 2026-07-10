@@ -2,41 +2,41 @@
 
 :root {
   /* Color Palette */
-  --bg-dark: #050509;
-  --bg-panel: rgba(10, 10, 20, 0.7);
-  --bg-panel-solid: #090914;
-  --bg-card: rgba(20, 20, 35, 0.45);
-  --border-color: rgba(255, 255, 255, 0.06);
-  --border-color-glow: rgba(255, 0, 127, 0.2);
+  --bg-dark: #0B0B0B;
+  --bg-panel: #151515;
+  --bg-panel-solid: #151515;
+  --bg-card: #151515;
+  --border-color: #2A2A2A;
+  --border-color-glow: transparent;
   
-  /* Neons */
-  --neon-pink: #ff007f;
-  --neon-blue: #00e5ff;
-  --neon-green: #39ff14;
-  --neon-yellow: #fffb00;
-  --neon-purple: #9d4edd;
+  /* Neons - Redefined to Orange Accent */
+  --neon-pink: #FC4C02;
+  --neon-blue: #FC4C02;
+  --neon-green: #2ecc71; /* Flat green status */
+  --neon-yellow: #FC4C02;
+  --neon-purple: #FC4C02;
   
   /* Gradients */
-  --grad-primary: linear-gradient(135deg, var(--neon-pink) 0%, var(--neon-purple) 50%, var(--neon-blue) 100%);
-  --grad-cyber: linear-gradient(90deg, var(--neon-pink) 0%, var(--neon-blue) 100%);
-  --grad-green-blue: linear-gradient(135deg, var(--neon-green) 0%, var(--neon-blue) 100%);
-  --grad-gold: linear-gradient(135deg, var(--neon-yellow) 0%, #ff6b00 100%);
-  --grad-dark-card: linear-gradient(180deg, rgba(20, 20, 35, 0.7) 0%, rgba(10, 10, 20, 0.9) 100%);
-  --grad-purple-glow: linear-gradient(135deg, var(--neon-purple) 0%, var(--neon-pink) 100%);
+  --grad-primary: linear-gradient(135deg, #FC4C02 0%, #ff6b00 100%);
+  --grad-cyber: #FC4C02;
+  --grad-green-blue: #FC4C02;
+  --grad-gold: #FC4C02;
+  --grad-dark-card: #151515;
+  --grad-purple-glow: #FC4C02;
   
   /* Text colors */
-  --text-primary: #ffffff;
-  --text-secondary: #9ea4c4;
-  --text-muted: #535875;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A8A8A8;
+  --text-muted: #666666;
   
-  /* Glows */
-  --glow-pink: 0 0 16px rgba(255, 0, 127, 0.25);
-  --glow-blue: 0 0 16px rgba(0, 229, 255, 0.25);
-  --glow-green: 0 0 16px rgba(57, 255, 20, 0.25);
-  --glow-yellow: 0 0 16px rgba(255, 251, 0, 0.25);
-  --glow-purple: 0 0 16px rgba(157, 78, 221, 0.25);
+  /* Glows - Removed for Strava Design Language */
+  --glow-pink: 0 0 0 transparent;
+  --glow-blue: 0 0 0 transparent;
+  --glow-green: 0 0 0 transparent;
+  --glow-yellow: 0 0 0 transparent;
+  --glow-purple: 0 0 0 transparent;
   
-  /* Typography Scale (with responsive clamp headings) */
+  /* Typography Scale */
   --text-xs: clamp(9px, 0.25vw + 8px, 10px);
   --text-sm: clamp(11px, 0.25vw + 10px, 12px);
   --text-base: clamp(13px, 0.3vw + 12px, 14px);
@@ -60,8 +60,8 @@
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  --radius-lg: 20px;
+  --radius-xl: 20px;
   --radius-full: 9999px;
 
   /* Fonts */
@@ -84,12 +84,7 @@
 body {
   margin: 0;
   background-color: var(--bg-dark);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(255, 0, 127, 0.06) 0px, transparent 40%),
-    radial-gradient(at 100% 100%, rgba(0, 229, 255, 0.06) 0px, transparent 40%),
-    radial-gradient(at 50% 50%, rgba(157, 78, 221, 0.04) 0px, transparent 50%);
-  background-attachment: fixed;
-  overflow-x: hidden;
+  color: var(--text-primary);
   min-height: 100vh;
 }
 
@@ -107,46 +102,38 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--neon-pink);
-  box-shadow: var(--glow-pink);
 }
 
 /* Glassmorphism Panels */
 .glass-panel {
   background: var(--bg-panel);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border-color);
   border-radius: 20px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
 .glass-panel-heavy {
   background: var(--bg-panel-solid);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 24px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 /* Neon Text Utilities */
 .text-neon-pink {
   color: var(--neon-pink);
-  text-shadow: var(--glow-pink);
 }
 .text-neon-blue {
   color: var(--neon-blue);
-  text-shadow: var(--glow-blue);
 }
 .text-neon-green {
   color: var(--neon-green);
-  text-shadow: var(--glow-green);
 }
 .text-neon-yellow {
   color: var(--neon-yellow);
-  text-shadow: var(--glow-yellow);
 }
 .text-neon-purple {
   color: var(--neon-purple);
-  text-shadow: var(--glow-purple);
 }
 
 /* Cyber Inputs & Selects */
@@ -311,7 +298,7 @@ body {
 
 /* Card Styling */
 .card-cyber {
-  background: var(--grad-dark-card);
+  background: var(--bg-panel);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 20px;
@@ -320,21 +307,10 @@ body {
   transition: all 0.3s ease;
 }
 
-.card-cyber::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 3px;
-  background: var(--grad-cyber);
-  opacity: 0.75;
-}
-
 .card-cyber:hover {
-  border-color: rgba(255, 0, 127, 0.22);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-  transform: translateY(-2px);
+  border-color: #2A2A2A;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
 }
 
 /* Card Variants */
@@ -343,8 +319,7 @@ body {
 }
 
 .card-cyber-interactive:hover {
-  border-color: var(--neon-blue);
-  box-shadow: var(--glow-blue), 0 12px 30px rgba(0,0,0,0.5);
+  border-color: var(--neon-blue) !important;
 }
 
 .card-cyber-static {
@@ -367,7 +342,7 @@ body {
 
 .focus-ring:focus-visible {
   outline-color: var(--neon-blue) !important;
-  box-shadow: 0 0 0 4px rgba(0, 229, 255, 0.2) !important;
+  box-shadow: 0 0 0 4px rgba(252, 76, 2, 0.15) !important;
 }
 
 /* Typography Utility Classes */
@@ -508,30 +483,28 @@ body {
 }
 
 .leaflet-popup-content-wrapper {
-  background: rgba(10, 10, 20, 0.95) !important;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: #151515 !important;
+  border: 1px solid #2A2A2A !important;
   color: var(--text-primary) !important;
   border-radius: 14px !important;
-  box-shadow: 0 10px 24px rgba(0,0,0,0.6) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
 }
 
 .leaflet-popup-tip {
-  background: rgba(10, 10, 20, 0.95) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: #151515 !important;
+  border: 1px solid #2A2A2A !important;
 }
 
 /* Animations */
 @keyframes pulse-glow {
   0% {
-    box-shadow: 0 0 8px rgba(255, 0, 127, 0.25);
+    opacity: 0.8;
   }
   50% {
-    box-shadow: 0 0 20px rgba(255, 0, 127, 0.6);
+    opacity: 1;
   }
   100% {
-    box-shadow: 0 0 8px rgba(255, 0, 127, 0.25);
+    opacity: 0.8;
   }
 }
 
@@ -549,21 +522,7 @@ body {
 }
 
 .scanline::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(
-    to bottom,
-    rgba(255,255,255,0) 0%,
-    rgba(255, 255, 255, 0.025) 10%,
-    rgba(255, 255, 255, 0) 20%
-  );
-  animation: scanline 8s linear infinite;
-  pointer-events: none;
-  z-index: 999;
+  display: none !important;
 }
 
 #map {
@@ -584,16 +543,16 @@ body {
 }
 
 .chat-bubble-coach {
-  background: rgba(157, 78, 221, 0.08);
-  border: 1px solid rgba(157, 78, 221, 0.16);
-  border-left: 3px solid var(--neon-purple);
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-left: 3px solid var(--neon-purple) !important;
   align-self: flex-start;
 }
 
 .chat-bubble-user {
-  background: rgba(0, 229, 255, 0.08);
-  border: 1px solid rgba(0, 229, 255, 0.16);
-  border-right: 3px solid var(--neon-blue);
+  background: rgba(252, 76, 2, 0.08) !important;
+  border: 1px solid rgba(252, 76, 2, 0.2) !important;
+  border-right: 3px solid var(--neon-blue) !important;
   align-self: flex-end;
 }
 
@@ -694,3 +653,98 @@ body {
     transform: translateY(0);
   }
 }
+
+/* ---------------------------------------------------- */
+/* Strava Redesign Theme System                         */
+/* ---------------------------------------------------- */
+.strava-dashboard-container {
+  background-color: #0B0B0B !important;
+  color: #FFFFFF !important;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 18px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.strava-card {
+  background: #151515 !important;
+  border-radius: 20px !important;
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  padding: 18px !important;
+  display: flex;
+  flex-direction: column;
+  text-shadow: none !important;
+}
+
+.strava-btn-primary {
+  background: #FC4C02 !important;
+  color: #FFFFFF !important;
+  border: none !important;
+  border-radius: 24px !important;
+  padding: 14px 24px !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.8px !important;
+  cursor: pointer !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(252, 76, 2, 0.2) !important;
+  transition: transform 0.15s ease, opacity 0.15s ease !important;
+}
+
+.strava-btn-primary:active {
+  transform: scale(0.97);
+  opacity: 0.9;
+}
+
+.strava-btn-secondary {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #FFFFFF !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 24px !important;
+  padding: 14px 24px !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.8px !important;
+  cursor: pointer !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.15s ease !important;
+}
+
+.strava-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.strava-orange {
+  color: #FC4C02 !important;
+}
+
+.strava-text-secondary {
+  color: #A8A8A8 !important;
+}
+
+.strava-progress-bar-bg {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.strava-progress-bar-fill {
+  height: 100%;
+  background: #FC4C02;
+  border-radius: 4px;
+  transition: width 0.4s ease-out;
+}
+

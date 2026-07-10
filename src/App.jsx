@@ -1148,11 +1148,11 @@ export default function App() {
     <div className="sim-container fade-in">
       
       {/* SIMULATOR / CONFIGURATION CONTROL PANEL */}
-      <div className="glass-panel-heavy card-cyber" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
+      <div className="strava-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
         <div>
-          <span className="text-neon-pink" style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '2.5px', textTransform: 'uppercase' }}>MVP Dashboard</span>
+          <span className="strava-orange" style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '2.5px', textTransform: 'uppercase' }}>Configuration Control</span>
           <h2 style={{ margin: '6px 0 0 0', fontSize: '28px', color: 'white', fontWeight: '800', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '8px', lineHeight: '1.45' }}>
+          <p className="strava-text-secondary" style={{ fontSize: '13px', marginTop: '8px', lineHeight: '1.45' }}>
             Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
           </p>
         </div>
@@ -1162,15 +1162,15 @@ export default function App() {
           <label style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Location Source Mode</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <button 
-              className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue' : 'btn-secondary'}
+              className={trackingMode === 'gps' ? 'strava-btn-primary' : 'strava-btn-secondary'}
               onClick={() => setTrackingMode('gps')}
               disabled={runState.status !== 'idle'}
               style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
             >
-              <Navigation size={13} /> Real GPS
+              <Navigation size={13} style={{ transform: 'rotate(45deg)' }} /> Real GPS
             </button>
             <button 
-              className={trackingMode === 'sim' ? 'btn-neon' : 'btn-secondary'}
+              className={trackingMode === 'sim' ? 'strava-btn-primary' : 'strava-btn-secondary'}
               onClick={() => setTrackingMode('sim')}
               disabled={runState.status !== 'idle'}
               style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
@@ -1201,17 +1201,17 @@ export default function App() {
         {/* Control execution buttons */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           {runState.status === 'idle' ? (
-            <button className="btn-neon" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
+            <button className="strava-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
               <Play size={13} /> Start Tracking
             </button>
           ) : (
-            <button className="btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: 'var(--neon-pink)', color: 'var(--neon-pink)', fontSize: '11px', padding: '12px' }}>
+            <button className="strava-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
               <Square size={13} /> Stop Run
             </button>
           )}
 
           <button 
-            className="btn-secondary"
+            className="strava-btn-secondary"
             onClick={handleLogout}
             style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
           >
@@ -1219,43 +1219,45 @@ export default function App() {
           </button>
         </div>
 
-        {/* Engine logs */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <span style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>GPS Engine Console logs</span>
-          <div style={{
-            background: '#030307',
-            border: '1.5px solid var(--border-color)',
-            borderRadius: '12px',
-            padding: '12px',
-            height: '180px',
-            overflowY: 'auto',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '11px',
-            color: 'var(--neon-green)',
-            display: 'flex',
-            flexDirection: 'column-reverse',
-            gap: '6px',
-            boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.6)'
-          }}>
-            {consoleLogs.map((log, i) => (
-              <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
-              </div>
-            ))}
+        {/* Collapsible Developer Console logs */}
+        <details style={{ marginTop: '4px' }}>
+          <summary style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', cursor: 'pointer', outline: 'none' }}>
+            Developer Tools
+          </summary>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+            <span style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>GPS Engine Console logs</span>
+            <div style={{
+              background: '#09090e',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '12px',
+              height: '150px',
+              overflowY: 'auto',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '10px',
+              color: '#39ff14',
+              display: 'flex',
+              flexDirection: 'column-reverse',
+              gap: '6px'
+            }}>
+              {consoleLogs.map((log, i) => (
+                <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        </details>
 
         {/* Cloud database active details */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid var(--border-color)' }}>
-          <ShieldCheck size={16} className={isFirebaseActive() ? 'text-neon-green' : 'text-neon-yellow'} style={{ filter: isFirebaseActive() ? 'drop-shadow(0 0 4px var(--neon-green))' : 'drop-shadow(0 0 4px var(--neon-yellow))' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+          <ShieldCheck size={16} className="strava-orange" />
           <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '500' }}>
             Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
           </span>
         </div>
-
       </div>
 
-      {/* MOBILE DEVICE FRAME SIMULATION */}
       {/* MOBILE DEVICE FRAME SIMULATION */}
       <div className="phone-frame">
         <div className="phone-notch">
@@ -1341,7 +1343,7 @@ export default function App() {
                 left: 0,
                 right: 0,
                 bottom: 0,
-                background: 'rgba(5, 5, 9, 0.98)',
+                background: '#0B0B0B',
                 zIndex: 9999,
                 padding: '24px 20px',
                 display: 'flex',
@@ -1350,61 +1352,61 @@ export default function App() {
                 overflowY: 'auto'
               }}>
                 {/* Header Title */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #2A2A2A', paddingBottom: '14px' }}>
                   <h3 className="text-sm m-0" style={{ color: 'white', fontWeight: '800', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Tactical Settings</h3>
                   <button 
                     onClick={() => setShowSettingsDrawer(false)}
-                    className="btn-secondary focus-ring btn-sm"
-                    style={{ color: 'var(--neon-pink)', borderColor: 'var(--neon-pink)', background: 'rgba(255, 0, 127, 0.04)' }}
+                    className="strava-btn-secondary btn-sm"
+                    style={{ color: '#FC4C02', borderColor: '#FC4C02', background: 'rgba(252, 76, 2, 0.05)' }}
                   >
                     Close
                   </button>
                 </div>
 
                 {/* Profile Header Block */}
-                <div className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
+                <div className="strava-card" style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                     <div style={{
                       width: '52px',
                       height: '52px',
                       borderRadius: '50%',
-                      background: currentUser.clan === 'GITS Runners' ? 'rgba(255,0,127,0.08)' : 'rgba(0,229,255,0.08)',
-                      border: `2px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
+                      background: 'rgba(252, 76, 2, 0.05)',
+                      border: '2.5px solid #FC4C02',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontSize: '18px',
                       fontWeight: '800',
                       color: 'white',
-                      boxShadow: currentUser.clan === 'GITS Runners' ? 'var(--glow-pink)' : 'var(--glow-blue)'
+                      boxShadow: 'none'
                     }}>
                       {(currentUser.displayName || 'R')[0].toUpperCase()}
                     </div>
                     <div style={{ flex: 1 }}>
                       <h4 className="text-lg m-0" style={{ color: 'white', fontWeight: '800' }}>{currentUser.displayName}</h4>
-                      <span className="text-xs" style={{ color: currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <span className="text-xs" style={{ color: '#FC4C02', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         {currentUser.clan || 'Udaipur Racers'}
                       </span>
                     </div>
                   </div>
 
                   {/* XP & Level progress */}
-                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
+                  <div style={{ borderTop: '1px solid #2A2A2A', paddingTop: '10px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
                       <span style={{ fontWeight: '800' }}>LEVEL {currentUser.level}</span>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>{currentUser.xp} XP</span>
                     </div>
-                    <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--grad-primary)', borderRadius: '3px' }}></div>
+                    <div className="strava-progress-bar-bg" style={{ height: '6px' }}>
+                      <div className="strava-progress-bar-fill" style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%` }}></div>
                     </div>
                   </div>
 
                   {/* Coin balance */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,251,0,0.03)', border: '1px solid rgba(255,251,0,0.12)', padding: '8px 12px', borderRadius: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid #2A2A2A', padding: '8px 12px', borderRadius: '10px' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Coin Holdings</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Coins size={14} className="text-neon-yellow" />
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--font-mono)' }}>{currentUser.coins}</span>
+                      <Coins size={14} className="strava-orange" />
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{currentUser.coins}</span>
                     </div>
                   </div>
                 </div>
@@ -1413,13 +1415,13 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Running & GPS Configuration</span>
                   
-                  <div className="card-cyber card-cyber-static p-4 gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="strava-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     {/* Toggle Selector */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Location Source Mode</label>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                         <button 
-                          className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue focus-ring' : 'btn-secondary focus-ring'}
+                          className={trackingMode === 'gps' ? 'strava-btn-primary focus-ring' : 'strava-btn-secondary focus-ring'}
                           onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
                           disabled={runState.status !== 'idle'}
                           style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
@@ -1427,7 +1429,7 @@ export default function App() {
                           <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
                         </button>
                         <button 
-                          className={trackingMode === 'sim' ? 'btn-neon focus-ring' : 'btn-secondary focus-ring'}
+                          className={trackingMode === 'sim' ? 'strava-btn-primary focus-ring' : 'strava-btn-secondary focus-ring'}
                           onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
                           disabled={runState.status !== 'idle'}
                           style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
@@ -1439,7 +1441,7 @@ export default function App() {
 
                     {/* Loop selector */}
                     {trackingMode === 'sim' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid #2A2A2A', paddingTop: '12px' }}>
                         <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Mock Simulator Loop</label>
                         <select 
                           value={simulationRouteKey}
@@ -1457,34 +1459,38 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Settings Group: System Diagnostics & Logs */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minHeight: '180px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Tactical Console Logs</span>
-                  <div style={{
-                    flex: 1,
-                    background: '#030307',
-                    border: '1.5px solid var(--border-color)',
-                    borderRadius: '12px',
-                    padding: '10px',
-                    overflowY: 'auto',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '9px',
-                    color: 'var(--neon-green)',
-                    display: 'flex',
-                    flexDirection: 'column-reverse',
-                    gap: '4px',
-                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.6)'
-                  }}>
-                    {consoleLogs.map((log, i) => (
-                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
-                      </div>
-                    ))}
+                {/* Collapsible System Diagnostics & Logs */}
+                <details style={{ marginTop: '4px' }}>
+                  <summary style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-secondary)', cursor: 'pointer', outline: 'none' }}>
+                    Developer Tools
+                  </summary>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Tactical Console Logs</span>
+                    <div style={{
+                      background: '#09090e',
+                      border: '1px solid #2A2A2A',
+                      borderRadius: '12px',
+                      padding: '10px',
+                      height: '150px',
+                      overflowY: 'auto',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '9px',
+                      color: '#39ff14',
+                      display: 'flex',
+                      flexDirection: 'column-reverse',
+                      gap: '4px'
+                    }}>
+                      {consoleLogs.map((log, i) => (
+                        <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                </details>
 
                 {/* Settings Group: Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid #2A2A2A', paddingTop: '16px' }}>
                   <button 
                     className="focus-ring" 
                     onClick={() => {
@@ -1494,8 +1500,8 @@ export default function App() {
                       }
                     }}
                     style={{
-                      background: 'rgba(255, 0, 127, 0.08)',
-                      border: '1.5px solid var(--neon-pink)',
+                      background: 'rgba(252, 76, 2, 0.1)',
+                      border: '1.5px solid #FC4C02',
                       color: 'white',
                       padding: '12px',
                       borderRadius: '12px',
@@ -1511,7 +1517,7 @@ export default function App() {
                       transition: 'all 0.2s ease'
                     }}
                   >
-                    <LogOut size={13} className="text-neon-pink" /> Sign Out Account
+                    <LogOut size={13} style={{ color: '#FC4C02' }} /> Sign Out Account
                   </button>
                   
                   <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
@@ -1522,99 +1528,221 @@ export default function App() {
             )}
 
             {/* TAB: DASHBOARD (HOME) */}
-            <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
-              {/* Welcome Banner */}
-              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span className="text-neon-pink text-xs" style={{ fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase' }}>System Online</span>
-                <h3 className="text-2xl m-0" style={{ fontWeight: '800', color: 'white' }}>WELCOME, {currentUser.displayName?.toUpperCase() || 'AGENT'}</h3>
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>CREW DIRECTIVE // <span className="text-neon-blue">{currentUser.clan?.toUpperCase()}</span></span>
+            <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none' }} className="strava-dashboard-container fade-in">
+              
+              {/* Greeting Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <div>
+                  <span className="strava-text-secondary" style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {(() => {
+                      const hr = new Date().getHours();
+                      if (hr < 12) return 'Good Morning';
+                      if (hr < 17) return 'Good Afternoon';
+                      return 'Good Evening';
+                    })()}
+                  </span>
+                  <h3 style={{ margin: '2px 0 0 0', fontSize: '24px', color: 'white', fontWeight: '800', letterSpacing: '-0.5px' }}>
+                    {currentUser.displayName || 'Runner'}
+                  </h3>
+                </div>
+                <div style={{
+                  background: 'rgba(252, 76, 2, 0.1)',
+                  border: '1px solid rgba(252, 76, 2, 0.25)',
+                  padding: '4px 10px',
+                  borderRadius: '12px',
+                  fontSize: '10px',
+                  fontWeight: '800',
+                  color: '#FC4C02',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}>
+                  {currentUser.clan || 'Udaipur Racers'}
+                </div>
               </div>
 
-              {/* XP and Level card */}
-              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {/* CTA Hero Card - Start Run */}
+              <div className="strava-card" style={{ gap: '14px', background: 'linear-gradient(135deg, #1d1d1d 0%, #151515 100%)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <span className="strava-orange" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>Quick Start</span>
+                    <h4 style={{ margin: '4px 0 0 0', fontSize: '18px', color: 'white', fontWeight: '800' }}>Ready for your next loop?</h4>
+                  </div>
+                  <Compass size={24} className="strava-orange" />
+                </div>
+                <p className="strava-text-secondary" style={{ margin: 0, fontSize: '12px', lineHeight: '1.4' }}>
+                  Step outside, close a loop with GPS tracking, and expand your crew's sector holdings.
+                </p>
+                <button className="strava-btn-primary" onClick={() => setActiveTab('map')}>
+                  Start Run
+                </button>
+              </div>
+
+              {/* Hero Card - Today's Real Activity */}
+              <div className="strava-card" style={{ gap: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>XP Progress</span>
-                  <span className="text-neon-pink text-sm" style={{ fontWeight: '800' }}>LVL {currentUser.level}</span>
+                  <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Today's Activity</span>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? '#39ff14' : 'rgba(255,255,255,0.1)' }}></div>
                 </div>
-                <div style={{ width: '100%', height: '10px', background: 'rgba(255,255,255,0.06)', borderRadius: '5px', overflow: 'hidden' }}>
-                  <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--grad-primary)', borderRadius: '5px', transition: 'width 0.5s ease-in-out' }}></div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
-                  <span>{currentUser.xp} XP</span>
-                  <span>{currentUser.nextLevelXp || 2500} XP TARGET</span>
-                </div>
-              </div>
-
-              {/* Status Grid (Coins and Territories) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('conquests')} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Coins size={14} className="text-neon-yellow" />
-                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Coins</span>
-                  </div>
-                  <h4 style={{ margin: 0, fontSize: '22px', color: 'white', fontWeight: '800', fontFamily: 'var(--font-mono)' }}>{currentUser.coins}</h4>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Visit shop &rarr;</span>
-                </div>
-
-                <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('conquests')} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Target size={14} className="text-neon-blue" />
-                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Sectors</span>
-                  </div>
-                  <h4 style={{ margin: 0, fontSize: '22px', color: 'white', fontWeight: '800', fontFamily: 'var(--font-mono)' }}>
-                    {territories.filter(t => t.ownerId === currentUser.uid).length}
-                  </h4>
-                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Conquered loops &rarr;</span>
-                </div>
-              </div>
-
-              {/* Today's Activity Feed */}
-              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <h4 style={{ margin: 0, fontSize: '11px', color: 'white', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Today's Activity Feed</h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <Compass size={14} className="text-neon-pink" />
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>GPS Territory Loop</span>
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Fateh Sagar Stride</span>
+                
+                {runState.distance > 0 || runState.status === 'tracking' ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                      <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--font-sans)' }}>{runState.distance.toFixed(2)}</span>
+                      <span className="strava-text-secondary" style={{ fontSize: '14px', fontWeight: '700' }}>km</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
+                      <div>
+                        <span className="strava-text-secondary" style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase' }}>Duration</span>
+                        <div style={{ fontSize: '14px', fontWeight: '800', color: 'white', marginTop: '2px' }}>
+                          {(() => {
+                            const hrs = Math.floor(runState.duration / 3600);
+                            const mins = Math.floor((runState.duration % 3600) / 60);
+                            const secs = runState.duration % 60;
+                            return hrs > 0 
+                              ? `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+                              : `${mins}:${secs.toString().padStart(2, '0')}`;
+                          })()}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="strava-text-secondary" style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase' }}>Avg Pace</span>
+                        <div style={{ fontSize: '14px', fontWeight: '800', color: 'white', marginTop: '2px' }}>{runState.pace} /km</div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                      <span style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>3.2 km</span>
-                      <span style={{ fontSize: '9px', color: 'var(--neon-green)', fontWeight: '800' }}>100% SUCCESS</span>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', textAlign: 'center', gap: '8px' }}>
+                    <Compass size={24} className="strava-text-secondary" style={{ opacity: 0.4 }} />
+                    <div style={{ fontSize: '13px', fontWeight: '700', color: 'white' }}>No runs tracked today</div>
+                    <span className="strava-text-secondary" style={{ fontSize: '11px' }}>Recorded statistics from your active run will display here.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Weekly Goal Status */}
+              <div className="strava-card" style={{ gap: '12px' }}>
+                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Weekly Progress</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '700' }}>
+                    <span style={{ color: 'white' }}>Distance Goal</span>
+                    <span className="strava-text-secondary">0 / 15.0 km</span>
+                  </div>
+                  <div className="strava-progress-bar-bg">
+                    <div className="strava-progress-bar-fill" style={{ width: '0%' }}></div>
+                  </div>
+                  <span className="strava-text-secondary" style={{ fontSize: '10px', fontStyle: 'italic', textAlign: 'center', marginTop: '4px' }}>
+                    Weekly goals are not configured yet. Start a run to establish your target!
+                  </span>
+                </div>
+              </div>
+
+              {/* Stats Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                
+                {/* Coins Stat Card */}
+                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Coins size={14} className="strava-orange" />
+                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Coins</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>{currentUser.coins}</h4>
+                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>Spend in Armory &rarr;</span>
+                </div>
+
+                {/* Level / XP Stat Card */}
+                <div className="strava-card" style={{ gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Zap size={14} className="strava-orange" />
+                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>XP Level</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>LVL {currentUser.level}</h4>
+                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>{currentUser.xp} total XP</span>
+                </div>
+
+                {/* Sectors Conquered Card */}
+                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Target size={14} className="strava-orange" />
+                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Sectors</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>
+                    {territories.filter(t => t.ownerId === currentUser.uid).length}
+                  </h4>
+                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>View conquered loops &rarr;</span>
+                </div>
+
+                {/* Standing / Rank Card */}
+                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('clans')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Trophy size={14} className="strava-orange" />
+                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Rank</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>
+                    {(() => {
+                      const userRankIndex = leaderboard.findIndex(p => p.displayName === currentUser.displayName);
+                      return userRankIndex !== -1 ? `#${userRankIndex + 1}` : '#5';
+                    })()}
+                  </h4>
+                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>View leaderboards &rarr;</span>
+                </div>
+
+              </div>
+
+              {/* Current Territory */}
+              <div className="strava-card" style={{ gap: '10px' }}>
+                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Active Holding</span>
+                {(() => {
+                  const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
+                  const latest = userTerrs[userTerrs.length - 1];
+                  if (latest) {
+                    return (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{latest.name}</div>
+                          <span className="strava-text-secondary" style={{ fontSize: '11px' }}>{latest.area} sq m</span>
+                        </div>
+                        <span style={{ fontSize: '11px', color: '#FC4C02', fontWeight: '800', background: 'rgba(252, 76, 2, 0.1)', padding: '3px 8px', borderRadius: '10px' }}>
+                          {latest.decayHours}h Shield
+                        </span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0', textAlign: 'center', gap: '6px' }}>
+                      <Target size={18} className="strava-text-secondary" style={{ opacity: 0.4 }} />
+                      <div style={{ fontSize: '12px', fontWeight: '700', color: 'white' }}>No captured sectors</div>
+                      <span className="strava-text-secondary" style={{ fontSize: '10px' }}>Conquer loops to claim sectors.</span>
                     </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
-              {/* Clan Standing Summary Card */}
-              <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('clans')} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Crew Alignment</span>
-                  <span className="text-neon-blue" style={{ fontSize: '10px', fontWeight: '800' }}>RANK #1</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Users size={16} className="text-neon-blue" />
-                    <span style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>{currentUser.clan}</span>
-                  </div>
-                  <span style={{ fontSize: '11px', color: 'var(--neon-blue)', fontWeight: '800' }}>100% Control</span>
-                </div>
+              {/* Recent Activity / Captures */}
+              <div className="strava-card" style={{ gap: '10px' }}>
+                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Recent Captures</span>
+                {(() => {
+                  const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
+                  if (userTerrs.length > 0) {
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {userTerrs.slice(-2).reverse().map((terr, index) => (
+                          <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '8px 12px', borderRadius: '10px' }}>
+                            <span style={{ fontSize: '12px', color: 'white', fontWeight: '700' }}>{terr.name}</span>
+                            <span className="strava-orange" style={{ fontSize: '11px', fontWeight: '700', fontFamily: 'var(--font-mono)' }}>{terr.area} sq m</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0', textAlign: 'center', gap: '6px' }}>
+                      <Compass size={18} className="strava-text-secondary" style={{ opacity: 0.4 }} />
+                      <div style={{ fontSize: '12px', fontWeight: '700', color: 'white' }}>No recent activities</div>
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Quick Actions Panel */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Quick Directives</span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <button className="btn-neon focus-ring" onClick={() => setActiveTab('map')} style={{ padding: '10px', fontSize: '10px', gap: '6px' }}>
-                    <Compass size={12} /> Start GPS Run
-                  </button>
-                  <button className="btn-secondary focus-ring" onClick={() => setActiveTab('conquests')} style={{ padding: '10px', fontSize: '10px', gap: '6px' }}>
-                    <Zap size={12} className="text-neon-pink" /> Open Armory
-                  </button>
-                </div>
-              </div>
             </div>
 
             {/* TAB: MAP */}
@@ -1725,19 +1853,18 @@ export default function App() {
                   bottom: '16px',
                   left: '16px',
                   right: '16px',
-                  background: 'rgba(9, 9, 20, 0.82)',
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
                   padding: '16px 20px',
                   zIndex: 999,
-                  borderRadius: 'var(--radius-xl)',
+                  borderRadius: '20px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div className="glow-active-pulse" style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? 'var(--neon-pink)' : 'var(--neon-yellow)' }}></div>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? '#FC4C02' : '#A8A8A8' }}></div>
                     <div>
                       <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Live Status</span>
                       <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
@@ -1748,7 +1875,7 @@ export default function App() {
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <button 
                       onClick={togglePauseResume}
-                      className={runState.status === 'tracking' ? 'btn-secondary focus-ring' : 'btn-neon focus-ring'}
+                      className={runState.status === 'tracking' ? 'strava-btn-secondary' : 'strava-btn-primary'}
                       style={{
                         padding: '10px 18px',
                         borderRadius: '12px',
@@ -1766,8 +1893,8 @@ export default function App() {
                       onClick={stopTracking}
                       className="focus-ring"
                       style={{
-                        background: 'rgba(255, 0, 127, 0.12)',
-                        border: '1.5px solid var(--neon-pink)',
+                        background: 'rgba(252, 76, 2, 0.1)',
+                        border: '1.5px solid #FC4C02',
                         color: 'white',
                         padding: '10px 18px',
                         borderRadius: '12px',
@@ -1784,7 +1911,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-
+ 
               {/* Startup Action Floating Deck */}
               {runState.status === 'idle' && (
                 <div className="glass-panel" style={{
@@ -1794,17 +1921,16 @@ export default function App() {
                   right: '16px',
                   padding: '16px 20px',
                   zIndex: 999,
-                  background: 'rgba(9, 9, 20, 0.82)',
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: 'var(--radius-xl)',
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
+                  borderRadius: '20px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <Compass size={20} className="text-neon-pink" />
+                    <Compass size={20} className="strava-orange" />
                     <div>
                       <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Selected Tracker</span>
                       <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
@@ -1814,7 +1940,7 @@ export default function App() {
                   </div>
                   <button 
                     onClick={startTracking}
-                    className="btn-neon focus-ring"
+                    className="strava-btn-primary"
                     style={{
                       padding: '12px 22px',
                       borderRadius: '12px',

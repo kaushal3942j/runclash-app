@@ -3,7 +3,7 @@ import L from 'leaflet';
 import { 
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass, 
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
-  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings
+  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home
 } from 'lucide-react';
 import { 
   isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
@@ -74,7 +74,7 @@ export default function App() {
   const [authError, setAuthError] = useState('');
 
   // Global App States
-  const [activeTab, setActiveTab] = useState('map'); // 'map', 'conquests', 'clans', 'coach'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'conquests', 'clans', 'coach'
   const [territories, setTerritories] = useState([]);
   const [inventory, setInventory] = useState({
     shields: 2,
@@ -648,6 +648,20 @@ export default function App() {
     addLog("System: Run tracking halted.");
   };
 
+  const recenterMap = () => {
+    if (mapInstanceRef.current && runnerMarkerRef.current) {
+      mapInstanceRef.current.setView(runnerMarkerRef.current.getLatLng(), 16);
+      addLog("GPS: Centered map on user position.");
+    } else if (mapInstanceRef.current && runState.path && runState.path.length > 0) {
+      const path = runState.path;
+      const lastCoord = path[path.length - 1];
+      mapInstanceRef.current.setView(lastCoord, 16);
+      addLog("GPS: Centered map on last known coordinate.");
+    } else {
+      addLog("GPS: Position not available for centering.");
+    }
+  };
+
   const finishRealRun = async (loopCoordinates) => {
     const areaSqM = calculatePolygonArea(loopCoordinates);
     const formattedArea = `${areaSqM.toLocaleString()} m²`;
@@ -951,21 +965,24 @@ export default function App() {
   // ----------------------------------------------------
   // AI Coach Chat
   // ----------------------------------------------------
-  const handleCoachSendMessage = (e) => {
-    e.preventDefault();
-    if (!coachInput.trim()) return;
-
+  const handleCoachSendMessage = (e, textOverride = '') => {
+    if (e) e.preventDefault();
+    const textToSend = textOverride || coachInput;
+    if (!textToSend.trim()) return;
+ 
     const userMsg = {
       id: Date.now(),
       sender: 'user',
-      text: coachInput,
+      text: textToSend,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-
+ 
     setCoachMessages(prev => [...prev, userMsg]);
-    const input = coachInput.toLowerCase();
-    setCoachInput('');
-
+    const input = textToSend.toLowerCase();
+    if (!textOverride) {
+      setCoachInput('');
+    }
+ 
     setTimeout(() => {
       let reply = "I am processing your pace index. Ask 'routes' for nearby targets.";
       if (input.includes('hi') || input.includes('hello') || input.includes('hey')) {
@@ -1022,80 +1039,78 @@ export default function App() {
   // AUTH GATED VIEW
   if (!currentUser) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '20px' }}>
-        <div className="glass-panel-heavy card-cyber" style={{ width: '420px', padding: '32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div className="fade-in p-6" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div className="glass-panel-heavy card-cyber card-cyber-static p-8 gap-6" style={{ width: '420px', display: 'flex', flexDirection: 'column' }}>
           
           <div style={{ textAlign: 'center' }}>
-            <span className="text-neon-pink" style={{ fontSize: '13px', fontWeight: 'bold', letterSpacing: '3px', textTransform: 'uppercase' }}>RunClash MVP // GPS Conquest</span>
-            <h1 style={{ margin: '8px 0 0 0', fontSize: '36px', color: 'white', fontWeight: '800', letterSpacing: '-1px' }}>RUNCLASH</h1>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '6px' }}>
+            <span className="text-neon-pink text-xs" style={{ fontWeight: '800', letterSpacing: '3px', textTransform: 'uppercase' }}>RunClash MVP // GPS Conquest</span>
+            <h1 className="text-4xl m-0" style={{ marginTop: '10px', color: 'white', fontWeight: '800', letterSpacing: '-1.5px', textShadow: '0 0 10px rgba(255,255,255,0.08)' }}>RUNCLASH</h1>
+            <p className="text-base m-0" style={{ color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.4' }}>
               Connect your GPS to conquer real-world loops. Powered by {isFirebaseActive() ? 'Supabase Cloud' : 'LocalStorage persistence'}.
             </p>
           </div>
 
           {authError && (
-            <div style={{ background: 'rgba(255, 0, 127, 0.1)', border: '1px solid var(--neon-pink)', color: 'white', padding: '10px 14px', borderRadius: '10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <AlertCircle size={14} className="text-neon-pink" />
-              <span>{authError}</span>
+            <div className="p-3 gap-2" style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid var(--neon-pink)', color: 'white', borderRadius: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', boxShadow: 'var(--glow-pink)' }}>
+              <AlertCircle size={15} className="text-neon-pink" />
+              <span style={{ fontWeight: '500' }}>{authError}</span>
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
             {authMode !== 'guest' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: '600' }}>Email Address</label>
+              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
+                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Email Address</label>
                 <div style={{ position: 'relative' }}>
-                  <Mail size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <Mail size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                   <input 
                     type="email" 
                     value={authEmail} 
                     onChange={e => setAuthEmail(e.target.value)}
                     required
                     placeholder="email@provider.com"
-                    style={{ width: '100%', padding: '12px 12px 12px 36px', background: '#090912', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'white', fontSize: '14px', outline: 'none' }}
+                    className="cyber-input cyber-input-with-icon focus-ring"
                   />
                 </div>
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: '600' }}>Password / Nickname</label>
+            <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
+              <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Password / Nickname</label>
               <div style={{ position: 'relative' }}>
-                <Lock size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <Lock size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                 <input 
                   type={authMode === 'guest' ? 'text' : 'password'}
                   value={authPassword} 
                   onChange={e => setAuthPassword(e.target.value)}
                   required={authMode !== 'guest'}
                   placeholder={authMode === 'guest' ? 'e.g. Lakshya' : '••••••••'}
-                  style={{ width: '100%', padding: '12px 12px 12px 36px', background: '#090912', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'white', fontSize: '14px', outline: 'none' }}
+                  className="cyber-input cyber-input-with-icon focus-ring"
                 />
               </div>
             </div>
 
             {authMode === 'signup' && (
-              <>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600' }}>Display Name</label>
-                  <input 
-                    type="text" 
-                    value={authName} 
-                    onChange={e => setAuthName(e.target.value)}
-                    required
-                    placeholder="e.g. Lakshya"
-                    style={{ width: '100%', padding: '12px', background: '#090912', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'white', fontSize: '14px', outline: 'none' }}
-                  />
-                </div>
-              </>
+              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
+                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Display Name</label>
+                <input 
+                  type="text" 
+                  value={authName} 
+                  onChange={e => setAuthName(e.target.value)}
+                  required
+                  placeholder="e.g. Lakshya"
+                  className="cyber-input focus-ring"
+                />
+              </div>
             )}
 
             {(authMode === 'signup' || authMode === 'guest') && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: '600' }}>Choose Crew / Clan</label>
+              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
+                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Choose Crew / Clan</label>
                 <select 
                   value={authClan} 
                   onChange={e => setAuthClan(e.target.value)}
-                  style={{ width: '100%', padding: '12px', background: '#090912', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'white', fontSize: '14px', outline: 'none', fontFamily: 'var(--font-sans)' }}
+                  className="cyber-select focus-ring"
                 >
                   <option value="Udaipur Racers">Udaipur Racers (Cyan)</option>
                   <option value="GITS Runners">GITS Runners (Pink)</option>
@@ -1104,22 +1119,22 @@ export default function App() {
               </div>
             )}
 
-            <button type="submit" className="btn-neon" style={{ marginTop: '10px' }}>
+            <button type="submit" className="btn-neon focus-ring" style={{ marginTop: '12px' }}>
               {authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : 'Enter Arena'}
             </button>
           </form>
 
           {/* Form Switching Toggles */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '16px', fontSize: '12px', textAlign: 'center' }}>
+          <div className="gap-2 text-base" style={{ display: 'flex', flexDirection: 'column', borderTop: '1.5px solid var(--border-color)', paddingTop: '20px', textAlign: 'center' }}>
             {authMode === 'login' ? (
               <>
-                <div>New runner? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
-                <div>Just exploring? <span className="text-neon-pink" style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
+                <div style={{ color: 'var(--text-secondary)' }}>New runner? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+                <div style={{ color: 'var(--text-secondary)' }}>Just exploring? <span className="text-neon-pink" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
               </>
             ) : authMode === 'signup' ? (
-              <div>Already registered? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+              <div style={{ color: 'var(--text-secondary)' }}>Already registered? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
             ) : (
-              <div>Want cloud account? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+              <div style={{ color: 'var(--text-secondary)' }}>Want cloud account? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
             )}
           </div>
 
@@ -1130,37 +1145,37 @@ export default function App() {
 
   // ACTIVE GAMEPLAY DASHBOARD
   return (
-    <div className="sim-container">
+    <div className="sim-container fade-in">
       
       {/* SIMULATOR / CONFIGURATION CONTROL PANEL */}
-      <div className="glass-panel-heavy card-cyber" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', height: 'fit-content' }}>
+      <div className="glass-panel-heavy card-cyber" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
         <div>
-          <span className="text-neon-pink" style={{ fontSize: '11px', fontWeight: 'bold', letterSpacing: '2px', textTransform: 'uppercase' }}>MVP Dashboard</span>
-          <h2 style={{ margin: '6px 0 0 0', fontSize: '26px', color: 'white', fontWeight: '800' }}>GPS Tracker Setup</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '6px', lineHeight: '1.4' }}>
+          <span className="text-neon-pink" style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '2.5px', textTransform: 'uppercase' }}>MVP Dashboard</span>
+          <h2 style={{ margin: '6px 0 0 0', fontSize: '28px', color: 'white', fontWeight: '800', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '8px', lineHeight: '1.45' }}>
             Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
           </p>
         </div>
 
         {/* Tracking Mode selection */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <label style={{ fontSize: '12px', fontWeight: '600' }}>Location Source Mode</label>
+          <label style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Location Source Mode</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <button 
               className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue' : 'btn-secondary'}
               onClick={() => setTrackingMode('gps')}
               disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '4px' }}
+              style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
             >
-              <Navigation size={12} /> Real GPS
+              <Navigation size={13} /> Real GPS
             </button>
             <button 
               className={trackingMode === 'sim' ? 'btn-neon' : 'btn-secondary'}
               onClick={() => setTrackingMode('sim')}
               disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '4px' }}
+              style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
             >
-              <Radio size={12} /> Developer Sim
+              <Radio size={13} /> Developer Sim
             </button>
           </div>
         </div>
@@ -1168,12 +1183,12 @@ export default function App() {
         {/* Predefined Simulator selection (Only shown if mode is sim) */}
         {trackingMode === 'sim' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: '600' }}>Mock Simulator Loop</label>
+            <label style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Mock Simulator Loop</label>
             <select 
               value={simulationRouteKey}
               onChange={e => setSimulationRouteKey(e.target.value)}
               disabled={runState.status !== 'idle'}
-              style={{ background: '#121222', border: '1px solid var(--border-color)', color: 'white', padding: '10px', borderRadius: '8px', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: '13px' }}
+              className="cyber-select"
             >
               <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
               <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
@@ -1186,31 +1201,31 @@ export default function App() {
         {/* Control execution buttons */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           {runState.status === 'idle' ? (
-            <button className="btn-neon" onClick={startTracking} style={{ width: '100%', fontSize: '12px' }}>
-              <Play size={14} /> Start Tracking
+            <button className="btn-neon" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
+              <Play size={13} /> Start Tracking
             </button>
           ) : (
-            <button className="btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: 'var(--neon-pink)', color: 'var(--neon-pink)', fontSize: '12px' }}>
-              <Square size={14} /> Stop Run
+            <button className="btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: 'var(--neon-pink)', color: 'var(--neon-pink)', fontSize: '11px', padding: '12px' }}>
+              <Square size={13} /> Stop Run
             </button>
           )}
 
           <button 
             className="btn-secondary"
             onClick={handleLogout}
-            style={{ width: '100%', fontSize: '12px', gap: '4px' }}
+            style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
           >
-            <LogOut size={14} /> Sign Out
+            <LogOut size={13} /> Sign Out
           </button>
         </div>
 
         {/* Engine logs */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <span style={{ fontSize: '12px', fontWeight: '600' }}>GPS Engine Console logs</span>
+          <span style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>GPS Engine Console logs</span>
           <div style={{
-            background: '#040408',
-            border: '1px solid var(--border-color)',
-            borderRadius: '10px',
+            background: '#030307',
+            border: '1.5px solid var(--border-color)',
+            borderRadius: '12px',
             padding: '12px',
             height: '180px',
             overflowY: 'auto',
@@ -1219,10 +1234,11 @@ export default function App() {
             color: 'var(--neon-green)',
             display: 'flex',
             flexDirection: 'column-reverse',
-            gap: '6px'
+            gap: '6px',
+            boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.6)'
           }}>
             {consoleLogs.map((log, i) => (
-              <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.01)', paddingBottom: '3px' }}>
+              <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
                 <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
               </div>
             ))}
@@ -1230,15 +1246,16 @@ export default function App() {
         </div>
 
         {/* Cloud database active details */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255, 255, 255, 0.02)', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid var(--border-color)' }}>
-          <ShieldCheck size={16} className={isFirebaseActive() ? 'text-neon-green' : 'text-neon-yellow'} />
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-            Active Sync: <b>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</b>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1.5px solid var(--border-color)' }}>
+          <ShieldCheck size={16} className={isFirebaseActive() ? 'text-neon-green' : 'text-neon-yellow'} style={{ filter: isFirebaseActive() ? 'drop-shadow(0 0 4px var(--neon-green))' : 'drop-shadow(0 0 4px var(--neon-yellow))' }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '500' }}>
+            Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
           </span>
         </div>
 
       </div>
 
+      {/* MOBILE DEVICE FRAME SIMULATION */}
       {/* MOBILE DEVICE FRAME SIMULATION */}
       <div className="phone-frame">
         <div className="phone-notch">
@@ -1249,63 +1266,66 @@ export default function App() {
           
           {/* Header */}
           <div style={{
-            padding: '14px 16px',
+            padding: '16px',
             borderBottom: '1px solid var(--border-color)',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            background: 'rgba(14, 14, 26, 0.9)',
+            background: 'rgba(10, 10, 20, 0.9)',
+            backdropFilter: 'blur(10px)',
             zIndex: 100
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{
-                width: '32px',
-                height: '32px',
+                width: '34px',
+                height: '34px',
                 borderRadius: '50%',
-                background: 'linear-gradient(135deg, #00e5ff 0%, #9d4edd 100%)',
-                border: '2.5px solid var(--neon-blue)',
+                background: 'linear-gradient(135deg, var(--neon-blue) 0%, var(--neon-purple) 100%)',
+                border: '2px solid var(--neon-blue)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontWeight: 'bold',
-                fontSize: '13px'
+                fontWeight: '800',
+                fontSize: '13px',
+                color: 'white',
+                boxShadow: 'var(--glow-blue)'
               }}>
                 {currentUser.displayName?.substring(0,1).toUpperCase() || 'U'}
               </div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: '700' }}>{currentUser.displayName}</span>
-                </div>
-                <span style={{ fontSize: '9px', color: 'var(--neon-blue)', fontWeight: 'bold' }}>{currentUser.clan}</span>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', letterSpacing: '-0.3px' }}>{currentUser.displayName}</span>
+                <span style={{ fontSize: '9px', color: 'var(--neon-blue)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{currentUser.clan}</span>
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', background: 'rgba(255, 255, 255, 0.05)', padding: '3px 8px', borderRadius: '20px' }}>
-                <Coins size={10} className="text-neon-yellow" />
-                <span style={{ fontSize: '11px', fontWeight: '700', fontFamily: 'var(--font-mono)' }}>{currentUser.coins}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 251, 0, 0.08)', border: '1px solid rgba(255, 251, 0, 0.15)', padding: '4px 8px', borderRadius: '20px', boxShadow: 'var(--glow-yellow)' }}>
+                <Coins size={11} className="text-neon-yellow" />
+                <span style={{ fontSize: '11px', fontWeight: '800', fontFamily: 'var(--font-mono)', color: 'white' }}>{currentUser.coins}</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>LVL {currentUser.level}</span>
-                <div style={{ width: '45px', height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden', marginTop: '2px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+                <span style={{ fontSize: '9px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>LVL {currentUser.level}</span>
+                <div style={{ width: '45px', height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--neon-pink)' }}></div>
                 </div>
               </div>
               <button 
                 onClick={() => setShowSettingsDrawer(prev => !prev)}
                 style={{
-                  background: 'none',
-                  border: 'none',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1.5px solid var(--border-color)',
+                  borderRadius: '10px',
                   color: showSettingsDrawer ? 'var(--neon-pink)' : 'white',
                   cursor: 'pointer',
-                  padding: '4px',
+                  padding: '6px',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease'
                 }}
                 title="Settings"
               >
-                <Settings size={15} style={{ transition: 'transform 0.3s ease', transform: showSettingsDrawer ? 'rotate(90deg)' : 'rotate(0)' }} />
+                <Settings size={14} style={{ transition: 'transform 0.3s ease', transform: showSettingsDrawer ? 'rotate(90deg)' : 'rotate(0)' }} />
               </button>
             </div>
           </div>
@@ -1315,78 +1335,136 @@ export default function App() {
             
             {/* SETTINGS DRAWER OVERLAY */}
             {showSettingsDrawer && (
-              <div style={{
+              <div className="fade-in settings-drawer-mobile" style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 right: 0,
                 bottom: 0,
-                background: 'rgba(7, 7, 12, 0.96)',
+                background: 'rgba(5, 5, 9, 0.98)',
                 zIndex: 9999,
                 padding: '24px 20px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '18px',
+                gap: '22px',
                 overflowY: 'auto'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
-                  <h3 style={{ margin: 0, fontSize: '15px', color: 'white', fontWeight: '800', letterSpacing: '0.5px' }}>DASHBOARD CONTROLS</h3>
+                {/* Header Title */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '14px' }}>
+                  <h3 className="text-sm m-0" style={{ color: 'white', fontWeight: '800', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Tactical Settings</h3>
                   <button 
                     onClick={() => setShowSettingsDrawer(false)}
-                    style={{ background: 'none', border: 'none', color: 'var(--neon-pink)', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+                    className="btn-secondary focus-ring btn-sm"
+                    style={{ color: 'var(--neon-pink)', borderColor: 'var(--neon-pink)', background: 'rgba(255, 0, 127, 0.04)' }}
                   >
                     Close
                   </button>
                 </div>
 
-                {/* Location Source Mode */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Location Source Mode</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <button 
-                      className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue' : 'btn-secondary'}
-                      onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
-                      disabled={runState.status !== 'idle'}
-                      style={{ fontSize: '10px', padding: '8px', gap: '4px' }}
-                    >
-                      <Navigation size={10} /> Real GPS
-                    </button>
-                    <button 
-                      className={trackingMode === 'sim' ? 'btn-neon' : 'btn-secondary'}
-                      onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
-                      disabled={runState.status !== 'idle'}
-                      style={{ fontSize: '10px', padding: '8px', gap: '4px' }}
-                    >
-                      <Radio size={10} /> Dev Sim
-                    </button>
+                {/* Profile Header Block */}
+                <div className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <div style={{
+                      width: '52px',
+                      height: '52px',
+                      borderRadius: '50%',
+                      background: currentUser.clan === 'GITS Runners' ? 'rgba(255,0,127,0.08)' : 'rgba(0,229,255,0.08)',
+                      border: `2px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '18px',
+                      fontWeight: '800',
+                      color: 'white',
+                      boxShadow: currentUser.clan === 'GITS Runners' ? 'var(--glow-pink)' : 'var(--glow-blue)'
+                    }}>
+                      {(currentUser.displayName || 'R')[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <h4 className="text-lg m-0" style={{ color: 'white', fontWeight: '800' }}>{currentUser.displayName}</h4>
+                      <span className="text-xs" style={{ color: currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {currentUser.clan || 'Udaipur Racers'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* XP & Level progress */}
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      <span style={{ fontWeight: '800' }}>LEVEL {currentUser.level}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{currentUser.xp} XP</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--grad-primary)', borderRadius: '3px' }}></div>
+                    </div>
+                  </div>
+
+                  {/* Coin balance */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,251,0,0.03)', border: '1px solid rgba(255,251,0,0.12)', padding: '8px 12px', borderRadius: '10px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Coin Holdings</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Coins size={14} className="text-neon-yellow" />
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--font-mono)' }}>{currentUser.coins}</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Simulation Loop Selector */}
-                {trackingMode === 'sim' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>Mock Simulator Loop</label>
-                    <select 
-                      value={simulationRouteKey}
-                      onChange={e => setSimulationRouteKey(e.target.value)}
-                      disabled={runState.status !== 'idle'}
-                      style={{ background: '#121222', border: '1px solid var(--border-color)', color: 'white', padding: '10px', borderRadius: '8px', outline: 'none', fontSize: '12px', fontFamily: 'var(--font-sans)' }}
-                    >
-                      <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-                      <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-                      <option value="monument">Udaipur Castle Park (1.4 km)</option>
-                    </select>
-                  </div>
-                )}
+                {/* Settings Group: Location Source */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Running & GPS Configuration</span>
+                  
+                  <div className="card-cyber card-cyber-static p-4 gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
+                    {/* Toggle Selector */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Location Source Mode</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        <button 
+                          className={trackingMode === 'gps' ? 'btn-neon btn-neon-blue focus-ring' : 'btn-secondary focus-ring'}
+                          onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
+                          disabled={runState.status !== 'idle'}
+                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
+                        >
+                          <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
+                        </button>
+                        <button 
+                          className={trackingMode === 'sim' ? 'btn-neon focus-ring' : 'btn-secondary focus-ring'}
+                          onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
+                          disabled={runState.status !== 'idle'}
+                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
+                        >
+                          <Radio size={12} /> Dev Sim
+                        </button>
+                      </div>
+                    </div>
 
-                {/* Console Logs */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minHeight: '150px' }}>
-                  <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '600' }}>System Logs</label>
+                    {/* Loop selector */}
+                    {trackingMode === 'sim' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
+                        <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Mock Simulator Loop</label>
+                        <select 
+                          value={simulationRouteKey}
+                          onChange={e => setSimulationRouteKey(e.target.value)}
+                          disabled={runState.status !== 'idle'}
+                          className="cyber-select focus-ring"
+                          style={{ fontSize: '11px' }}
+                        >
+                          <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
+                          <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
+                          <option value="monument">Udaipur Castle Park (1.4 km)</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Settings Group: System Diagnostics & Logs */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minHeight: '180px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Tactical Console Logs</span>
                   <div style={{
                     flex: 1,
-                    background: '#040408',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '10px',
+                    background: '#030307',
+                    border: '1.5px solid var(--border-color)',
+                    borderRadius: '12px',
                     padding: '10px',
                     overflowY: 'auto',
                     fontFamily: 'var(--font-mono)',
@@ -1394,144 +1472,311 @@ export default function App() {
                     color: 'var(--neon-green)',
                     display: 'flex',
                     flexDirection: 'column-reverse',
-                    gap: '4px'
+                    gap: '4px',
+                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.6)'
                   }}>
                     {consoleLogs.map((log, i) => (
-                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.01)', paddingBottom: '2px' }}>
+                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
                         <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+                {/* Settings Group: Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '16px' }}>
                   <button 
-                    className="btn-secondary" 
-                    onClick={() => { handleLogout(); setShowSettingsDrawer(false); }}
-                    style={{ fontSize: '11px', padding: '10px', width: '100%', borderColor: 'var(--neon-pink)', color: 'white', gap: '6px' }}
+                    className="focus-ring" 
+                    onClick={() => {
+                      if (confirm("Are you sure you want to sign out?")) {
+                        handleLogout();
+                        setShowSettingsDrawer(false);
+                      }
+                    }}
+                    style={{
+                      background: 'rgba(255, 0, 127, 0.08)',
+                      border: '1.5px solid var(--neon-pink)',
+                      color: 'white',
+                      padding: '12px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      letterSpacing: '0.5px',
+                      textTransform: 'uppercase',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      transition: 'all 0.2s ease'
+                    }}
                   >
-                    <LogOut size={12} /> Sign Out Account
+                    <LogOut size={13} className="text-neon-pink" /> Sign Out Account
                   </button>
+                  
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
+                    RunClash v1.2.0 • Secured Database Sync
+                  </div>
                 </div>
               </div>
             )}
 
+            {/* TAB: DASHBOARD (HOME) */}
+            <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
+              {/* Welcome Banner */}
+              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <span className="text-neon-pink text-xs" style={{ fontWeight: '800', letterSpacing: '2px', textTransform: 'uppercase' }}>System Online</span>
+                <h3 className="text-2xl m-0" style={{ fontWeight: '800', color: 'white' }}>WELCOME, {currentUser.displayName?.toUpperCase() || 'AGENT'}</h3>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>CREW DIRECTIVE // <span className="text-neon-blue">{currentUser.clan?.toUpperCase()}</span></span>
+              </div>
+
+              {/* XP and Level card */}
+              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>XP Progress</span>
+                  <span className="text-neon-pink text-sm" style={{ fontWeight: '800' }}>LVL {currentUser.level}</span>
+                </div>
+                <div style={{ width: '100%', height: '10px', background: 'rgba(255,255,255,0.06)', borderRadius: '5px', overflow: 'hidden' }}>
+                  <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--grad-primary)', borderRadius: '5px', transition: 'width 0.5s ease-in-out' }}></div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                  <span>{currentUser.xp} XP</span>
+                  <span>{currentUser.nextLevelXp || 2500} XP TARGET</span>
+                </div>
+              </div>
+
+              {/* Status Grid (Coins and Territories) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('conquests')} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Coins size={14} className="text-neon-yellow" />
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Coins</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '22px', color: 'white', fontWeight: '800', fontFamily: 'var(--font-mono)' }}>{currentUser.coins}</h4>
+                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Visit shop &rarr;</span>
+                </div>
+
+                <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('conquests')} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Target size={14} className="text-neon-blue" />
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Sectors</span>
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '22px', color: 'white', fontWeight: '800', fontFamily: 'var(--font-mono)' }}>
+                    {territories.filter(t => t.ownerId === currentUser.uid).length}
+                  </h4>
+                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Conquered loops &rarr;</span>
+                </div>
+              </div>
+
+              {/* Today's Activity Feed */}
+              <div className="card-cyber card-cyber-static" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <h4 style={{ margin: 0, fontSize: '11px', color: 'white', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Today's Activity Feed</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Compass size={14} className="text-neon-pink" />
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>GPS Territory Loop</span>
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Fateh Sagar Stride</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                      <span style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>3.2 km</span>
+                      <span style={{ fontSize: '9px', color: 'var(--neon-green)', fontWeight: '800' }}>100% SUCCESS</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Clan Standing Summary Card */}
+              <div className="card-cyber card-cyber-interactive" onClick={() => setActiveTab('clans')} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Crew Alignment</span>
+                  <span className="text-neon-blue" style={{ fontSize: '10px', fontWeight: '800' }}>RANK #1</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Users size={16} className="text-neon-blue" />
+                    <span style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>{currentUser.clan}</span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--neon-blue)', fontWeight: '800' }}>100% Control</span>
+                </div>
+              </div>
+
+              {/* Quick Actions Panel */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Quick Directives</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <button className="btn-neon focus-ring" onClick={() => setActiveTab('map')} style={{ padding: '10px', fontSize: '10px', gap: '6px' }}>
+                    <Compass size={12} /> Start GPS Run
+                  </button>
+                  <button className="btn-secondary focus-ring" onClick={() => setActiveTab('conquests')} style={{ padding: '10px', fontSize: '10px', gap: '6px' }}>
+                    <Zap size={12} className="text-neon-pink" /> Open Armory
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* TAB: MAP */}
-            <div style={{ display: activeTab === 'map' ? 'flex' : 'none', flexDirection: 'column', height: '100%', width: '100%' }}>
+            <div style={{ display: activeTab === 'map' ? 'flex' : 'none', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
               
               <div id="map" style={{ flex: 1, width: '100%' }}></div>
 
-              {/* Real-time stats box */}
+              {/* Floating top HUD: Strava / Nike Run Club Style */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (
-                <div style={{
+                <div className="glass-panel" style={{
                   position: 'absolute',
                   top: '16px',
                   left: '16px',
                   right: '16px',
-                  background: 'rgba(7, 7, 12, 0.9)',
-                  backdropFilter: 'blur(8px)',
-                  border: '1.5px solid var(--neon-pink)',
-                  borderRadius: '16px',
-                  padding: '12px 14px',
+                  background: 'rgba(9, 9, 20, 0.82)',
+                  backdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '16px 12px',
                   zIndex: 999,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  boxShadow: '0 10px 20px rgba(0,0,0,0.5)'
+                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
                 }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Distance</span>
-                    <h3 style={{ margin: '1px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'white' }}>{runState.distance} <span style={{ fontSize: '10px' }}>KM</span></h3>
-                  </div>
-                  <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255, 255, 255, 0.08)', borderRight: '1px solid rgba(255, 255, 255, 0.08)', padding: '0 10px' }}>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Pace</span>
-                    <h3 style={{ margin: '1px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'var(--neon-green)' }}>{runState.pace}</h3>
-                  </div>
-                  <div style={{ textAlign: 'center' }}>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Time</span>
-                    <h3 style={{ margin: '1px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'white' }}>
-                      {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                    </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr 1fr', alignItems: 'center' }}>
+                    {/* Time */}
+                    <div style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Duration</span>
+                      <h3 style={{ margin: '4px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'white', fontWeight: '800' }}>
+                        {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                      </h3>
+                    </div>
+                    {/* Distance (Hero Metric) */}
+                    <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '1px' }}>Distance</span>
+                      <h2 style={{ margin: '2px 0 0 0', fontSize: '32px', fontFamily: 'var(--font-mono)', color: 'white', fontWeight: '800', letterSpacing: '-1px' }}>
+                        {runState.distance} <span style={{ fontSize: '12px', fontWeight: '800', color: 'var(--text-secondary)' }}>KM</span>
+                      </h2>
+                    </div>
+                    {/* Pace */}
+                    <div style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Pace</span>
+                      <h3 style={{ margin: '4px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'var(--neon-green)', fontWeight: '800', textShadow: 'var(--glow-green)' }}>
+                        {runState.pace}
+                      </h3>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Accuracy visual alert (only in real GPS mode) */}
+              {/* Accuracy floating indicator */}
               {(runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
                 <div style={{
                   position: 'absolute',
-                  top: '90px',
-                  left: '16px',
-                  background: 'rgba(7, 7, 12, 0.8)',
+                  top: '115px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(5, 5, 9, 0.88)',
+                  backdropFilter: 'blur(8px)',
                   borderRadius: '20px',
-                  padding: '4px 10px',
+                  padding: '5px 14px',
                   fontSize: '9px',
                   zIndex: 999,
-                  border: '1px solid rgba(255,255,255,0.05)',
+                  border: '1.5px solid var(--border-color)',
                   color: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px'
+                  gap: '6px',
+                  fontWeight: '800',
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
                 }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)' }}></div>
+                  <div className="glow-active-pulse" style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)' }}></div>
                   GPS Accuracy: {Math.round(runState.gpsAccuracy)}m
                 </div>
               )}
 
-              {/* Active Run Bottom Overlay (Controls) */}
+              {/* Floating Recenter Map Button */}
+              <button 
+                onClick={recenterMap}
+                className="btn-secondary focus-ring"
+                style={{
+                  position: 'absolute',
+                  bottom: (runState.status === 'tracking' || runState.status === 'paused') ? '112px' : '106px',
+                  right: '16px',
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '50%',
+                  padding: 0,
+                  zIndex: 999,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(9, 9, 20, 0.85)',
+                  border: '1.5px solid var(--border-color)',
+                  boxShadow: '0 6px 16px rgba(0,0,0,0.6)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+                title="Recenter Map"
+              >
+                <Navigation size={16} className="text-neon-blue" style={{ transform: 'rotate(45deg)' }} />
+              </button>
+
+              {/* Active Run Controls Floating Deck */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (
-                <div style={{
+                <div className="glass-panel" style={{
                   position: 'absolute',
                   bottom: '16px',
                   left: '16px',
                   right: '16px',
-                  background: 'rgba(7, 7, 12, 0.9)',
-                  backdropFilter: 'blur(8px)',
-                  border: '1.5px solid var(--neon-pink)',
-                  borderRadius: '16px',
-                  padding: '12px 14px',
+                  background: 'rgba(9, 9, 20, 0.82)',
+                  backdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  padding: '16px 20px',
                   zIndex: 999,
+                  borderRadius: 'var(--radius-xl)',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  boxShadow: '0 10px 20px rgba(0,0,0,0.5)'
+                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Navigation size={18} className="text-neon-pink glow-active-pulse" />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div className="glow-active-pulse" style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? 'var(--neon-pink)' : 'var(--neon-yellow)' }}></div>
                     <div>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Status</span>
-                      <h4 style={{ margin: '0', fontSize: '12px', color: 'white', fontWeight: 'bold' }}>
-                        {runState.status === 'tracking' ? 'Recording Loop...' : 'Run Paused'}
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Live Status</span>
+                      <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
+                        {runState.status === 'tracking' ? 'STRIDE RECORDING' : 'RUN PAUSED'}
                       </h4>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <button 
                       onClick={togglePauseResume}
+                      className={runState.status === 'tracking' ? 'btn-secondary focus-ring' : 'btn-neon focus-ring'}
                       style={{
-                        background: runState.status === 'tracking' ? 'rgba(255, 255, 255, 0.1)' : 'var(--grad-primary)',
-                        border: 'none',
-                        color: 'white',
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        fontSize: '10px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer'
+                        padding: '10px 18px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        letterSpacing: '0.5px',
+                        textTransform: 'uppercase',
+                        minWidth: '90px'
                       }}
                     >
                       {runState.status === 'tracking' ? 'Pause' : 'Resume'}
                     </button>
                     <button 
                       onClick={stopTracking}
+                      className="focus-ring"
                       style={{
-                        background: 'rgba(255, 0, 127, 0.2)',
-                        border: '1px solid var(--neon-pink)',
+                        background: 'rgba(255, 0, 127, 0.12)',
+                        border: '1.5px solid var(--neon-pink)',
                         color: 'white',
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        fontSize: '10px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer'
+                        padding: '10px 18px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        letterSpacing: '0.5px',
+                        textTransform: 'uppercase',
+                        transition: 'all 0.2s ease'
                       }}
                     >
                       Stop
@@ -1540,44 +1785,41 @@ export default function App() {
                 </div>
               )}
 
-              {/* Action trigger button */}
+              {/* Startup Action Floating Deck */}
               {runState.status === 'idle' && (
-                <div style={{
+                <div className="glass-panel" style={{
                   position: 'absolute',
                   bottom: '16px',
                   left: '16px',
                   right: '16px',
-                  background: 'rgba(7, 7, 12, 0.85)',
-                  backdropFilter: 'blur(8px)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '16px',
-                  padding: '12px 14px',
+                  padding: '16px 20px',
                   zIndex: 999,
+                  background: 'rgba(9, 9, 20, 0.82)',
+                  backdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 'var(--radius-xl)',
                   display: 'flex',
                   justifyContent: 'space-between',
-                  alignItems: 'center'
+                  alignItems: 'center',
+                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Compass size={18} className="text-neon-pink" />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Compass size={20} className="text-neon-pink" />
                     <div>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Selected Tracker</span>
-                      <h4 style={{ margin: '0', fontSize: '12px', color: 'white', fontWeight: 'bold' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Selected Tracker</span>
+                      <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
                         {trackingMode === 'gps' ? 'Outside Real GPS Stride' : SIMULATION_ROUTES[simulationRouteKey].name}
                       </h4>
                     </div>
                   </div>
                   <button 
                     onClick={startTracking}
+                    className="btn-neon focus-ring"
                     style={{
-                      background: 'var(--grad-primary)',
-                      border: 'none',
-                      color: 'white',
-                      padding: '8px 14px',
-                      borderRadius: '8px',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      cursor: 'pointer',
-                      boxShadow: 'var(--glow-pink)'
+                      padding: '12px 22px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: '800'
                     }}
                   >
                     Start Run
@@ -1587,139 +1829,199 @@ export default function App() {
             </div>
 
             {/* TAB: CONQUESTS */}
-            <div style={{ display: activeTab === 'conquests' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '16px' }}>
+            <div style={{ display: activeTab === 'conquests' ? 'flex' : 'none', flexDirection: 'column', gap: '22px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
+              
+              {/* Controlled Sectors */}
               <div>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Target size={15} className="text-neon-blue" /> Controlled Sectors ({territories.filter(t => t.ownerId === currentUser.uid).length})
+                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
+                  <Target size={15} className="text-neon-blue" /> Controlled Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).length})
                 </h3>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {territories.filter(t => t.ownerId === currentUser.uid).length === 0 ? (
-                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed var(--border-color)', borderRadius: '12px', padding: '24px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px' }}>
-                      No controlled sectors detected. Touch grass, start your GPS run, and enclose a loop to capture!
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).length === 0 ? (
+                    <div className="card-cyber card-cyber-static" style={{ borderStyle: 'dashed', padding: '32px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                      <Compass size={32} className="text-neon-pink glow-active-pulse" style={{ margin: '0 auto 12px auto' }} />
+                      <h4 className="text-base m-0" style={{ color: 'white', fontWeight: '800', marginBottom: '6px' }}>NO ACTIVE SECTORS DETECTED</h4>
+                      <p className="text-sm m-0" style={{ lineHeight: '1.4', marginBottom: '16px' }}>
+                        Step outside, start your GPS run, and close a path loop to establish Udaipur crew dominance.
+                      </p>
+                      <button className="btn-neon focus-ring btn-sm" onClick={() => setActiveTab('map')}>
+                        Launch Tactical Map
+                      </button>
                     </div>
                   ) : (
-                    territories.filter(t => t.ownerId === currentUser.uid).map(terr => (
-                      <div key={terr.id} className="card-cyber" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '700' }}>{terr.name}</h4>
-                            <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Yields +{terr.rate} Coins/hr • Area {terr.area}</span>
+                    territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).map(terr => {
+                      const clanColor = terr.clan === 'Udaipur Racers' ? 'var(--neon-blue)' : terr.clan === 'GITS Runners' ? 'var(--neon-pink)' : '#ffffff';
+                      const maxDecay = terr.maxDecayHours || 72;
+                      const currentDecay = terr.decayHours || 72;
+                      const percentage = Math.max(0, Math.min(100, (currentDecay / maxDecay) * 100));
+                      
+                      return (
+                        <div key={terr.id} className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', borderLeft: `3.5px solid ${clanColor}` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <h4 className="text-base m-0" style={{ color: 'white', fontWeight: '800' }}>{terr.name}</h4>
+                                <span className="text-xs" style={{ background: 'rgba(0, 229, 255, 0.08)', border: '1px solid var(--neon-blue)', padding: '2px 6px', borderRadius: '8px', color: 'var(--neon-blue)', fontWeight: '800', textTransform: 'uppercase' }}>SECURED</span>
+                              </div>
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                Area: {terr.area}
+                              </span>
+                            </div>
+                            <button 
+                              onClick={() => useShield(terr.id)}
+                              className="btn-secondary focus-ring btn-sm"
+                              style={{ borderColor: 'var(--neon-blue)', color: 'var(--neon-blue)', background: 'rgba(0, 229, 255, 0.04)' }}
+                            >
+                              <Shield size={11} /> Fortify
+                            </button>
                           </div>
-                          <button 
-                            onClick={() => useShield(terr.id)}
-                            style={{
-                              background: 'rgba(0, 229, 255, 0.08)',
-                              border: '1px solid var(--neon-blue)',
-                              color: 'var(--neon-blue)',
-                              borderRadius: '6px',
-                              padding: '4px 8px',
-                              fontSize: '9px',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              fontWeight: 'bold'
-                            }}
-                          >
-                            <Shield size={10} /> Fortify
-                          </button>
-                        </div>
 
-                        <div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', marginBottom: '2px' }}>
-                            <span style={{ color: 'var(--text-secondary)' }}>Shield integrity</span>
-                            <span style={{ color: 'var(--neon-blue)', fontWeight: 'bold' }}>{terr.decayHours || 72}h remaining</span>
+                          {/* Rewards details */}
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 251, 0, 0.06)', border: '1px solid rgba(255,251,0,0.12)', padding: '2px 8px', borderRadius: '12px' }}>
+                              <Coins size={10} className="text-neon-yellow" />
+                              <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>+{terr.rate || 5} COINS/HR</span>
+                            </div>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(157, 78, 221, 0.06)', border: '1px solid rgba(157,78,221,0.12)', padding: '2px 8px', borderRadius: '12px' }}>
+                              <Award size={10} className="text-neon-purple" />
+                              <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>+150 XP CAPTURE</span>
+                            </div>
                           </div>
-                          <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                            <div style={{ width: `${((terr.decayHours || 72) / (terr.maxDecayHours || 72)) * 100}%`, height: '100%', background: 'linear-gradient(90deg, var(--neon-blue) 0%, var(--neon-pink) 100%)' }}></div>
+
+                          {/* Shield integrity slider */}
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', marginBottom: '4px' }}>
+                              <span style={{ color: 'var(--text-secondary)' }}>Shield integrity</span>
+                              <span style={{ color: clanColor, fontWeight: '800' }}>{currentDecay}h remaining</span>
+                            </div>
+                            <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ width: `${percentage}%`, height: '100%', background: `linear-gradient(90deg, ${clanColor} 0%, var(--neon-pink) 100%)`, borderRadius: '3px', transition: 'width 0.4s ease' }}></div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
 
+              {/* Historical / Expired holdings */}
+              {territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).length > 0 && (
+                <div>
+                  <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px', color: 'var(--text-secondary)' }}>
+                    <RefreshCw size={14} className="text-neon-pink" /> Lost & Expired Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).length})
+                  </h3>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).map(terr => (
+                      <div key={terr.id} className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', opacity: 0.65, borderLeft: '3.5px solid var(--text-muted)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <h4 className="text-base m-0" style={{ color: 'var(--text-secondary)', fontWeight: '800' }}>{terr.name}</h4>
+                              <span className="text-xs" style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid var(--neon-pink)', padding: '2px 6px', borderRadius: '8px', color: 'var(--neon-pink)', fontWeight: '800', textTransform: 'uppercase' }}>DECAYED</span>
+                            </div>
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Lost area: {terr.area}</span>
+                          </div>
+                          <button 
+                            onClick={() => setActiveTab('map')}
+                            className="btn-secondary focus-ring btn-sm"
+                            style={{ borderColor: 'var(--neon-pink)', color: 'var(--neon-pink)', background: 'rgba(255, 0, 127, 0.04)' }}
+                          >
+                            Reclaim
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Power-up Shop */}
               <div>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
                   <Coins size={15} className="text-neon-yellow" /> Power-Up Armory
                 </h3>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div style={{ background: '#121222', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', textAlign: 'center' }}>
-                    <Shield size={22} className="text-neon-blue" style={{ filter: 'drop-shadow(0 0 5px var(--neon-blue))' }} />
-                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'white' }}>Shield (24h)</span>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Inventory: {inventory.shields}</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="card-cyber card-cyber-interactive" onClick={() => buyItem('shields', shopCosts.shield)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center' }}>
+                    <Shield size={24} className="text-neon-blue" style={{ filter: 'drop-shadow(0 0 6px rgba(0, 229, 255, 0.3))' }} />
+                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', marginTop: '2px' }}>Shield (24h)</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Inventory: {inventory.shields}</span>
                     <button 
-                      onClick={() => buyItem('shields', shopCosts.shield)}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.04)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        color: 'white',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '9px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer',
-                        marginTop: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '2px'
-                      }}
+                      className="btn-secondary btn-sm focus-ring"
+                      style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
-                      <Coins size={9} className="text-neon-yellow" /> {shopCosts.shield}
+                      <Coins size={10} className="text-neon-yellow" /> {shopCosts.shield}
                     </button>
                   </div>
 
-                  <div style={{ background: '#121222', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', textAlign: 'center' }}>
-                    <Zap size={22} className="text-neon-pink" style={{ filter: 'drop-shadow(0 0 5px var(--neon-pink))' }} />
-                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'white' }}>Speed Boots</span>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Inventory: {inventory.boots}</span>
+                  <div className="card-cyber card-cyber-interactive" onClick={() => buyItem('boots', shopCosts.boots)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center' }}>
+                    <Zap size={24} className="text-neon-pink" style={{ filter: 'drop-shadow(0 0 6px rgba(255, 0, 127, 0.3))' }} />
+                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', marginTop: '2px' }}>Speed Boots</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Inventory: {inventory.boots}</span>
                     <button 
-                      onClick={() => buyItem('boots', shopCosts.boots)}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.04)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        color: 'white',
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '9px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer',
-                        marginTop: '4px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '2px'
-                      }}
+                      className="btn-secondary btn-sm focus-ring"
+                      style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
-                      <Coins size={9} className="text-neon-yellow" /> {shopCosts.boots}
+                      <Coins size={10} className="text-neon-yellow" /> {shopCosts.boots}
                     </button>
                   </div>
                 </div>
               </div>
-
             </div>
 
             {/* TAB: CLANS */}
-            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '16px', padding: '16px', height: '100%' }}>
+            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '18px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
+              
+              {/* Crew Header Banner */}
+              <div className="card-cyber card-cyber-static p-4 gap-3" style={{ borderLeft: `4px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '46px',
+                    height: '46px',
+                    borderRadius: '12px',
+                    background: currentUser.clan === 'GITS Runners' ? 'rgba(255, 0, 127, 0.08)' : 'rgba(0, 229, 255, 0.08)',
+                    border: `1.5px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: currentUser.clan === 'GITS Runners' ? '0 0 12px rgba(255, 0, 127, 0.15)' : '0 0 12px rgba(0, 229, 255, 0.15)'
+                  }}>
+                    <Users size={22} className={currentUser.clan === 'GITS Runners' ? 'text-neon-pink' : 'text-neon-blue'} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Active Tactical Crew</span>
+                    <h3 className="text-lg m-0" style={{ color: 'white', fontWeight: '800' }}>{currentUser.clan || 'Udaipur Racers'}</h3>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span className="text-xs" style={{ background: 'rgba(255, 251, 0, 0.08)', border: '1px solid var(--neon-yellow)', padding: '3px 8px', borderRadius: '10px', color: 'var(--neon-yellow)', fontWeight: '800' }}>
+                      DOMINANT
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Clan Standings */}
               <div>
-                <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Trophy size={14} className="text-neon-yellow" /> Clan Standings
+                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
+                  <Trophy size={14} className="text-neon-yellow" /> Crew Dominance Standings
                 </h3>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {getClanStandings().map((c, index) => {
                     const color = c.name === 'Udaipur Racers' ? 'var(--neon-blue)' : c.name === 'GITS Runners' ? 'var(--neon-pink)' : '#ffffff';
                     return (
-                      <div key={c.name} style={{ background: `${color}0D`, border: `1px solid ${color}26`, borderRadius: '12px', padding: '10px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 'bold', marginBottom: '3px' }}>
-                          <span style={{ color: color }}>{index + 1}. {c.name}</span>
-                          <span>{c.percentage}% Domain</span>
+                      <div key={c.name} className="card-cyber card-cyber-static p-3 gap-2" style={{ background: `${color}06`, borderColor: `${color}20` }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '800', marginBottom: '2px' }}>
+                          <span style={{ color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ color: 'var(--text-secondary)', fontWeight: 'bold' }}>#{index + 1}</span> {c.name}
+                          </span>
+                          <span style={{ color: 'white' }}>{c.percentage}% DOMAIN</span>
                         </div>
                         <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.04)', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ width: `${c.percentage}%`, height: '100%', background: color }}></div>
+                          <div style={{ width: `${c.percentage}%`, height: '100%', background: color, borderRadius: '3px', transition: 'width 0.4s ease' }}></div>
                         </div>
                       </div>
                     );
@@ -1729,125 +2031,257 @@ export default function App() {
 
               {/* Leaderboard Section */}
               <div>
-                <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Award size={14} className="text-neon-pink" /> Top Runners
+                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
+                  <Award size={14} className="text-neon-pink" /> Elite Runners Leaderboard
                 </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
-                  {leaderboard.length === 0 ? (
-                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', textAlign: 'center', padding: '10px' }}>
-                      No active runners synced yet.
-                    </div>
-                  ) : (
-                    leaderboard.map((player, idx) => {
-                      const isSelf = player.displayName === currentUser?.displayName;
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {(() => {
+                    const displayLeaderboard = [...leaderboard];
+                    if (currentUser) {
+                      const userInBoard = displayLeaderboard.some(p => p.displayName === currentUser.displayName);
+                      if (!userInBoard) {
+                        displayLeaderboard.push({
+                          displayName: currentUser.displayName,
+                          clan: currentUser.clan || 'Udaipur Racers',
+                          level: currentUser.level || 1,
+                          xp: currentUser.xp || 0
+                        });
+                      }
+                    }
+                    displayLeaderboard.sort((a, b) => b.xp - a.xp);
+
+                    if (displayLeaderboard.length === 0) {
                       return (
-                        <div key={idx} style={{
+                        <div className="card-cyber card-cyber-static p-4 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                          No active tactical runners synced.
+                        </div>
+                      );
+                    }
+
+                    return displayLeaderboard.map((player, idx) => {
+                      const isSelf = player.displayName === currentUser?.displayName;
+                      
+                      // Rank visual coloring
+                      let rankBorder = 'var(--border-color)';
+                      let rankColor = 'var(--text-secondary)';
+                      let badgeIcon = `#${idx + 1}`;
+                      if (idx === 0) {
+                        rankBorder = 'var(--neon-yellow)'; // Gold
+                        rankColor = 'var(--neon-yellow)';
+                        badgeIcon = '👑';
+                      } else if (idx === 1) {
+                        rankBorder = 'rgba(255,255,255,0.4)'; // Silver
+                        rankColor = '#ffffff';
+                        badgeIcon = '🥈';
+                      } else if (idx === 2) {
+                        rankBorder = 'rgba(217, 119, 6, 0.5)'; // Bronze
+                        rankColor = 'var(--neon-pink)';
+                        badgeIcon = '🥉';
+                      }
+
+                      return (
+                        <div key={idx} className="card-cyber card-cyber-static" style={{
                           display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'center',
-                          padding: '6px 10px',
-                          background: isSelf ? 'rgba(0, 229, 255, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                          border: isSelf ? '1px solid var(--neon-blue)' : '1px solid rgba(255,255,255,0.04)',
-                          borderRadius: '8px',
-                          fontSize: '11px'
+                          padding: '10px 14px',
+                          borderLeft: `4px solid ${isSelf ? 'var(--neon-blue)' : rankBorder}`,
+                          boxShadow: isSelf ? '0 0 10px rgba(0, 229, 255, 0.1)' : 'none',
+                          background: isSelf ? 'rgba(0, 229, 255, 0.04)' : 'rgba(9, 9, 20, 0.4)'
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontWeight: 'bold', color: idx === 0 ? 'var(--neon-yellow)' : 'var(--text-secondary)' }}>#{idx + 1}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <span style={{ fontWeight: '800', color: rankColor, fontSize: '13px', width: '20px', textAlign: 'center' }}>
+                              {badgeIcon}
+                            </span>
+                            
+                            {/* Avatar */}
+                            <div style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '50%',
+                              background: player.clan === 'GITS Runners' ? 'rgba(255, 0, 127, 0.1)' : 'rgba(0, 229, 255, 0.1)',
+                              border: `1.5px solid ${player.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '11px',
+                              fontWeight: '800',
+                              color: 'white'
+                            }}>
+                              {(player.displayName || 'G')[0].toUpperCase()}
+                            </div>
+
                             <div>
-                              <span style={{ fontWeight: '600', color: isSelf ? 'var(--neon-blue)' : 'white' }}>{player.displayName}</span>
-                              <span style={{ fontSize: '8px', color: 'var(--text-muted)', marginLeft: '6px' }}>{player.clan}</span>
+                              <span style={{ fontWeight: '800', color: isSelf ? 'var(--neon-blue)' : 'white' }}>
+                                {player.displayName} {isSelf && <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>(You)</span>}
+                              </span>
+                              <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '8px', fontWeight: '800', textTransform: 'uppercase' }}>
+                                {player.clan}
+                              </span>
                             </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>LVL {player.level}</span>
-                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--neon-pink)', fontWeight: 'bold' }}>{player.xp} XP</span>
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>LVL {player.level}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--neon-pink)', fontWeight: '800', fontSize: '12px' }}>
+                              {player.xp.toLocaleString()} XP
+                            </span>
                           </div>
                         </div>
                       );
-                    })
-                  )}
+                    });
+                  })()}
                 </div>
               </div>
 
               {/* Clan Chat */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', background: '#090910', border: '1px solid var(--border-color)', borderRadius: '16px', padding: '10px', minHeight: '220px' }}>
-                <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'white', borderBottom: '1px solid var(--border-color)', paddingBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(5, 5, 9, 0.4)', border: '1.5px solid var(--border-color)', borderRadius: '18px', padding: '14px', minHeight: '230px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', borderBottom: '1.5px solid var(--border-color)', paddingBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                   <MessageSquare size={13} className="text-neon-blue" /> Crew Comm Channel
                 </span>
-
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
-                  {clanMessages.map((msg) => (
-                    <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', alignSelf: msg.sender.includes('You') ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                        <span style={{ fontSize: '9px', fontWeight: 'bold', color: msg.sender.includes('You') ? 'var(--neon-blue)' : 'var(--text-secondary)' }}>{msg.sender}</span>
-                        <span style={{ fontSize: '7px', color: 'var(--text-muted)' }}>{msg.time}</span>
+ 
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', padding: '4px 0' }}>
+                  {clanMessages.map((msg) => {
+                    const isSelf = msg.sender.includes('You');
+                    return (
+                      <div key={msg.id} className={isSelf ? 'chat-bubble chat-bubble-user' : 'chat-bubble chat-bubble-coach'} style={{ alignSelf: isSelf ? 'flex-end' : 'flex-start' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
+                          <span style={{ fontSize: '9px', fontWeight: '800', color: isSelf ? 'var(--neon-blue)' : 'var(--neon-pink)' }}>{msg.sender}</span>
+                          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>{msg.time}</span>
+                        </div>
+                        <p style={{ margin: '0', fontSize: '11px', color: 'white', fontWeight: '500' }}>{msg.text}</p>
                       </div>
-                      <p style={{ margin: '0', fontSize: '11px', color: 'white' }}>{msg.text}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-
-                <form onSubmit={handleClanSendMessage} style={{ display: 'flex', gap: '6px', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
+ 
+                <form onSubmit={handleClanSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1.5px solid var(--border-color)', paddingTop: '10px' }}>
                   <input 
                     type="text" 
                     value={clanInput}
                     onChange={(e) => setClanInput(e.target.value)}
                     placeholder="Message crew..."
-                    style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'white', padding: '6px 10px', fontSize: '11px', outline: 'none', fontFamily: 'var(--font-sans)' }}
+                    className="cyber-input"
+                    style={{ padding: '8px 12px', fontSize: '12px' }}
                   />
-                  <button type="submit" style={{ background: 'var(--neon-blue)', border: 'none', color: 'black', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
-                    <Send size={11} />
+                  <button type="submit" style={{ background: 'var(--neon-blue)', border: 'none', color: 'black', borderRadius: '10px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', boxShadow: 'var(--glow-blue)', transition: 'transform 0.1s ease' }}>
+                    <Send size={12} />
                   </button>
                 </form>
               </div>
             </div>
 
             {/* TAB: AI COACH */}
-            <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', gap: '12px', padding: '16px', height: '100%' }}>
-              <div className="card-cyber" style={{ padding: '10px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Sparkles size={22} className="text-neon-yellow" style={{ filter: 'drop-shadow(0 0 4px var(--neon-yellow))' }} />
-                <div>
-                  <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '700' }}>Synergy AI Coach</h4>
-                  <p style={{ margin: '0', fontSize: '9px', color: 'var(--text-secondary)' }}>GPS Sector Planner</p>
+            <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', gap: '14px', padding: '16px', height: '100%' }} className="fade-in">
+              
+              {/* Coach Header Banner */}
+              <div className="card-cyber card-cyber-static p-3" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid var(--neon-purple)' }}>
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: 'rgba(157, 78, 221, 0.08)',
+                  border: '1.5px solid var(--neon-purple)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 0 10px rgba(157, 78, 221, 0.15)'
+                }}>
+                  <Sparkles size={18} className="text-neon-purple glow-active-pulse" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <h4 className="text-sm m-0" style={{ color: 'white', fontWeight: '800' }}>Synergy AI Coach</h4>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--neon-green)', filter: 'drop-shadow(0 0 3px var(--neon-green))' }}></span>
+                  </div>
+                  <p className="text-xs m-0" style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    Tactical Route Assistant • Online
+                  </p>
                 </div>
               </div>
 
-              {/* Chat Thread */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', background: '#090910', border: '1px solid var(--border-color)', borderRadius: '16px', padding: '10px', minHeight: '220px' }}>
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {coachMessages.map((msg) => (
-                    <div key={msg.id} style={{
-                      alignSelf: msg.sender === 'coach' ? 'flex-start' : 'flex-end',
-                      background: msg.sender === 'coach' ? 'rgba(157, 78, 221, 0.1)' : 'rgba(0, 229, 255, 0.1)',
-                      border: msg.sender === 'coach' ? '1px solid rgba(157, 78, 221, 0.15)' : '1px solid rgba(0, 229, 255, 0.15)',
-                      borderRadius: '12px',
-                      padding: '8px 12px',
-                      maxWidth: '85%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '2px'
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                        <span style={{ fontSize: '9px', fontWeight: 'bold', color: msg.sender === 'coach' ? 'var(--neon-purple)' : 'var(--neon-blue)' }}>
-                          {msg.sender === 'coach' ? '🛡️ Coach' : 'You'}
-                        </span>
-                        <span style={{ fontSize: '7px', color: 'var(--text-muted)' }}>{msg.time}</span>
+              {/* Chat Thread Panel */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(5, 5, 9, 0.4)', border: '1.5px solid var(--border-color)', borderRadius: '18px', padding: '14px', minHeight: '230px' }}>
+                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px 0' }}>
+                  {coachMessages.map((msg) => {
+                    const isCoach = msg.sender === 'coach';
+                    return (
+                      <div 
+                        key={msg.id} 
+                        className={isCoach ? 'chat-bubble chat-bubble-coach' : 'chat-bubble chat-bubble-user'} 
+                        style={{ 
+                          alignSelf: isCoach ? 'flex-start' : 'flex-end',
+                          border: isCoach ? '1.5px solid var(--neon-purple)' : '1.5px solid var(--neon-blue)',
+                          boxShadow: isCoach ? '0 0 8px rgba(157, 78, 221, 0.05)' : '0 0 8px rgba(0, 229, 255, 0.05)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
+                          <span style={{ fontSize: '9px', fontWeight: '800', color: isCoach ? 'var(--neon-purple)' : 'var(--neon-blue)' }}>
+                            {isCoach ? '🛡️ Coach' : 'You'}
+                          </span>
+                          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>{msg.time}</span>
+                        </div>
+                        <p style={{ margin: '0', fontSize: '11px', color: 'white', lineHeight: '1.45', fontWeight: '500' }}>{msg.text}</p>
                       </div>
-                      <p style={{ margin: '0', fontSize: '11px', color: 'white', lineHeight: '1.4' }}>{msg.text}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
-                <form onSubmit={handleCoachSendMessage} style={{ display: 'flex', gap: '6px', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
-                  <input 
-                    type="text" 
-                    value={coachInput}
-                    onChange={(e) => setCoachInput(e.target.value)}
-                    placeholder="Ask Coach (e.g. 'gps', 'pace')..."
-                    style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'white', padding: '6px 10px', fontSize: '11px', outline: 'none', fontFamily: 'var(--font-sans)' }}
-                  />
-                  <button type="submit" style={{ background: 'var(--neon-purple)', border: 'none', color: 'white', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
-                    <Send size={11} />
+                {/* Quick Action Suggestion Chips */}
+                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', borderTop: '1px solid rgba(255,255,255,0.02)', paddingTop: '8px', scrollbarWidth: 'none' }}>
+                  <button 
+                    onClick={() => handleCoachSendMessage(null, "routes")}
+                    className="btn-secondary focus-ring btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                  >
+                    Plan route
+                  </button>
+                  <button 
+                    onClick={() => handleCoachSendMessage(null, "pace")}
+                    className="btn-secondary focus-ring btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                  >
+                    Check pace
+                  </button>
+                  <button 
+                    onClick={() => handleCoachSendMessage(null, "gps")}
+                    className="btn-secondary focus-ring btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                  >
+                    How to run GPS?
+                  </button>
+                  <button 
+                    onClick={() => handleCoachSendMessage(null, "hello")}
+                    className="btn-secondary focus-ring btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                  >
+                    Calibrate
+                  </button>
+                </div>
+
+                {/* Input Area */}
+                <form onSubmit={handleCoachSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1.5px solid var(--border-color)', paddingTop: '10px', alignItems: 'center' }}>
+                  <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+                    <input 
+                      type="text" 
+                      value={coachInput}
+                      onChange={(e) => setCoachInput(e.target.value)}
+                      placeholder="Ask Coach (e.g. 'gps', 'pace')..."
+                      className="cyber-input"
+                      style={{ padding: '8px 36px 8px 12px', fontSize: '12px', width: '100%' }}
+                    />
+                    {/* Voice mic icon placeholder */}
+                    <button 
+                      type="button"
+                      onClick={() => alert("Voice assistant module loading...")}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', position: 'absolute', right: '10px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
+                      title="Voice Input (Coming Soon)"
+                    >
+                      <Settings size={12} className="text-neon-purple" style={{ opacity: 0.6 }} />
+                    </button>
+                  </div>
+                  <button type="submit" className="focus-ring" style={{ background: 'var(--neon-purple)', border: 'none', color: 'white', borderRadius: '10px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--glow-purple)', transition: 'transform 0.1s ease', flexShrink: 0 }}>
+                    <Send size={12} />
                   </button>
                 </form>
               </div>
@@ -1858,42 +2292,56 @@ export default function App() {
           {/* Navigation Bar */}
           <div style={{
             height: '60px',
-            borderTop: '1px solid var(--border-color)',
-            background: 'rgba(14, 14, 26, 0.95)',
+            borderTop: '1.5px solid var(--border-color)',
+            background: 'rgba(10, 10, 20, 0.95)',
+            backdropFilter: 'blur(10px)',
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
+            gridTemplateColumns: 'repeat(5, 1fr)',
             zIndex: 100
           }}>
             <button 
+              onClick={() => setActiveTab('dashboard')}
+              className={`tab-btn ${activeTab === 'dashboard' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'dashboard' ? 'var(--neon-pink)' : 'var(--text-secondary)' }}
+            >
+              <Home size={18} />
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Home</span>
+            </button>
+
+            <button 
               onClick={() => setActiveTab('map')}
-              style={{ background: 'none', border: 'none', color: activeTab === 'map' ? 'var(--neon-pink)' : 'var(--text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer' }}
+              className={`tab-btn ${activeTab === 'map' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'map' ? 'var(--neon-pink)' : 'var(--text-secondary)' }}
             >
               <Compass size={18} />
-              <span style={{ fontSize: '9px', fontWeight: 'bold' }}>Map</span>
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Map</span>
             </button>
 
             <button 
               onClick={() => setActiveTab('conquests')}
-              style={{ background: 'none', border: 'none', color: activeTab === 'conquests' ? 'var(--neon-blue)' : 'var(--text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer' }}
+              className={`tab-btn ${activeTab === 'conquests' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'conquests' ? 'var(--neon-blue)' : 'var(--text-secondary)' }}
             >
               <Shield size={18} />
-              <span style={{ fontSize: '9px', fontWeight: 'bold' }}>Conquests</span>
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Conquests</span>
             </button>
 
             <button 
               onClick={() => setActiveTab('clans')}
-              style={{ background: 'none', border: 'none', color: activeTab === 'clans' ? 'var(--neon-yellow)' : 'var(--text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer' }}
+              className={`tab-btn ${activeTab === 'clans' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'clans' ? 'var(--neon-yellow)' : 'var(--text-secondary)' }}
             >
               <Users size={18} />
-              <span style={{ fontSize: '9px', fontWeight: 'bold' }}>Clans</span>
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Clans</span>
             </button>
 
             <button 
               onClick={() => setActiveTab('coach')}
-              style={{ background: 'none', border: 'none', color: activeTab === 'coach' ? 'var(--neon-purple)' : 'var(--text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', cursor: 'pointer' }}
+              className={`tab-btn ${activeTab === 'coach' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'coach' ? 'var(--neon-purple)' : 'var(--text-secondary)' }}
             >
               <Sparkles size={18} />
-              <span style={{ fontSize: '9px', fontWeight: 'bold' }}>Coach</span>
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Coach</span>
             </button>
           </div>
 
@@ -1903,3 +2351,6 @@ export default function App() {
     </div>
   );
 }
+
+
+

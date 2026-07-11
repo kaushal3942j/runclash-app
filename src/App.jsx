@@ -3,7 +3,8 @@ import L from 'leaflet';
 import { 
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass, 
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
-  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home
+  Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home,
+  ChevronUp, ChevronDown
 } from 'lucide-react';
 import { 
   isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
@@ -97,6 +98,12 @@ export default function App() {
   });
 
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+  const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
+  const [mapAutoFollow, setMapAutoFollow] = useState(true);
+  const mapAutoFollowRef = useRef(true);
+  useEffect(() => {
+    mapAutoFollowRef.current = mapAutoFollow;
+  }, [mapAutoFollow]);
   const [leaderboard, setLeaderboard] = useState([]);
   
   const runStateRef = useRef(runState);
@@ -270,6 +277,10 @@ export default function App() {
 
       mapInstanceRef.current = map;
       addLog("System: Leaflet Map loaded.");
+
+      map.on('dragstart', () => {
+        setMapAutoFollow(false);
+      });
       
       setTimeout(() => {
         map.invalidateSize();
@@ -314,12 +325,24 @@ export default function App() {
     // Redraw list
     territories.forEach(terr => {
       const isOwner = terr.ownerId === currentUser.uid;
-      const polyColor = terr.ownerName === 'Unclaimed' ? '#fffb00' : isOwner ? '#00e5ff' : '#ff007f';
+      const isTeammate = terr.clan === currentUser.clan && !isOwner;
+      const isEnemy = terr.clan && terr.clan !== currentUser.clan && terr.ownerName !== 'Unclaimed';
+      
+      let polyColor = '#888888'; // Neutral
+      if (terr.ownerName === 'Unclaimed') {
+        polyColor = '#f1c40f'; // Yellow
+      } else if (isOwner) {
+        polyColor = '#FC4C02'; // Orange
+      } else if (isTeammate) {
+        polyColor = '#3498db'; // Blue
+      } else if (isEnemy) {
+        polyColor = '#e74c3c'; // Red
+      }
 
       const poly = L.polygon(terr.coords, {
         color: polyColor,
         fillColor: polyColor,
-        fillOpacity: 0.25,
+        fillOpacity: 0.08,
         weight: 2
       }).addTo(mapInstanceRef.current);
 
@@ -430,14 +453,13 @@ export default function App() {
     // Initial Path Polyline
     if (mapInstanceRef.current) {
       polylineRef.current = L.polyline([], {
-        color: '#ff007f',
-        weight: 4,
-        className: 'glow-active-pulse'
+        color: '#FC4C02',
+        weight: 4
       }).addTo(mapInstanceRef.current);
 
       const runnerIcon = L.divIcon({
         className: 'custom-runner-icon',
-        html: `<div style="background-color: var(--neon-pink); width: 16px; height: 16px; border-radius: 50%; box-shadow: 0 0 15px var(--neon-pink); border: 3px solid white;"></div>`,
+        html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
         iconSize: [16, 16]
       });
       runnerMarkerRef.current = L.marker([24.5950, 73.6800], { icon: runnerIcon }).addTo(mapInstanceRef.current);
@@ -532,7 +554,7 @@ export default function App() {
             // Update Map visual
             if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
             if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
-            if (mapInstanceRef.current) mapInstanceRef.current.panTo(newPoint);
+            if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
             // Real self-intersection check
             if (updatedPath.length >= 5 && updatedDistance > 0.05) {
@@ -603,7 +625,7 @@ export default function App() {
 
           if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
           if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(point);
-          if (mapInstanceRef.current) mapInstanceRef.current.panTo(point);
+          if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(point);
 
           return {
             ...prev,
@@ -649,13 +671,14 @@ export default function App() {
   };
 
   const recenterMap = () => {
+    setMapAutoFollow(true);
     if (mapInstanceRef.current && runnerMarkerRef.current) {
-      mapInstanceRef.current.setView(runnerMarkerRef.current.getLatLng(), 16);
+      mapInstanceRef.current.setView(runnerMarkerRef.current.getLatLng(), 16.5);
       addLog("GPS: Centered map on user position.");
     } else if (mapInstanceRef.current && runState.path && runState.path.length > 0) {
       const path = runState.path;
       const lastCoord = path[path.length - 1];
-      mapInstanceRef.current.setView(lastCoord, 16);
+      mapInstanceRef.current.setView(lastCoord, 16.5);
       addLog("GPS: Centered map on last known coordinate.");
     } else {
       addLog("GPS: Position not available for centering.");
@@ -1270,7 +1293,7 @@ export default function App() {
           <div style={{
             padding: '16px',
             borderBottom: '1px solid var(--border-color)',
-            display: 'flex',
+            display: activeTab === 'map' ? 'none' : 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             background: 'rgba(10, 10, 20, 0.9)',
@@ -1748,208 +1771,550 @@ export default function App() {
             {/* TAB: MAP */}
             <div style={{ display: activeTab === 'map' ? 'flex' : 'none', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
               
-              <div id="map" style={{ flex: 1, width: '100%' }}></div>
+              {/* Fullscreen Map Hero */}
+              <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
 
-              {/* Floating top HUD: Strava / Nike Run Club Style */}
-              {(runState.status === 'tracking' || runState.status === 'paused') && (
-                <div className="glass-panel" style={{
-                  position: 'absolute',
-                  top: '16px',
-                  left: '16px',
-                  right: '16px',
-                  background: 'rgba(9, 9, 20, 0.82)',
-                  backdropFilter: 'blur(16px)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: '16px 12px',
-                  zIndex: 999,
-                  boxShadow: '0 20px 40px rgba(0,0,0,0.65)'
-                }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr 1fr', alignItems: 'center' }}>
-                    {/* Time */}
-                    <div style={{ textAlign: 'center' }}>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Duration</span>
-                      <h3 style={{ margin: '4px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'white', fontWeight: '800' }}>
-                        {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                      </h3>
-                    </div>
-                    {/* Distance (Hero Metric) */}
-                    <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)' }}>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '1px' }}>Distance</span>
-                      <h2 style={{ margin: '2px 0 0 0', fontSize: '32px', fontFamily: 'var(--font-mono)', color: 'white', fontWeight: '800', letterSpacing: '-1px' }}>
-                        {runState.distance} <span style={{ fontSize: '12px', fontWeight: '800', color: 'var(--text-secondary)' }}>KM</span>
-                      </h2>
-                    </div>
-                    {/* Pace */}
-                    <div style={{ textAlign: 'center' }}>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Pace</span>
-                      <h3 style={{ margin: '4px 0 0 0', fontSize: '18px', fontFamily: 'var(--font-mono)', color: 'var(--neon-green)', fontWeight: '800', textShadow: 'var(--glow-green)' }}>
-                        {runState.pace}
-                      </h3>
-                    </div>
-                  </div>
+              {/* Floating top HUD */}
+              <div style={{
+                position: 'absolute',
+                top: '16px',
+                left: '16px',
+                right: '16px',
+                background: '#151515',
+                border: '1px solid #2A2A2A',
+                borderRadius: '20px',
+                padding: '8px 12px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                zIndex: 999,
+                boxShadow: 'var(--clash-shadow-md)'
+              }}>
+                {/* Profile Avatar circle */}
+                <div 
+                  onClick={() => setShowSettingsDrawer(true)}
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    background: '#FC4C02',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '13px',
+                    fontWeight: '800',
+                    cursor: 'pointer',
+                    border: '2px solid white',
+                    boxShadow: 'var(--clash-shadow-sm)',
+                    transition: 'transform 0.15s ease',
+                    flexShrink: 0
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  title="Open settings"
+                >
+                  {(currentUser.displayName || 'R')[0].toUpperCase()}
                 </div>
-              )}
+
+                {/* Coin Balance Chip */}
+                <div style={{
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid #2A2A2A',
+                  height: '40px',
+                  padding: '0 12px',
+                  borderRadius: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  <Coins size={14} style={{ color: '#FC4C02' }} />
+                  <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
+                    {currentUser.coins}
+                  </span>
+                </div>
+
+                {/* GPS Status Chip */}
+                <div style={{
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid #2A2A2A',
+                  height: '40px',
+                  padding: '0 12px',
+                  borderRadius: '20px',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  color: 'white'
+                }}>
+                  {(() => {
+                    if (trackingMode === 'sim') {
+                      return (
+                        <>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }}></span>
+                          <span>Sim Stride</span>
+                        </>
+                      );
+                    }
+                    if (runState.gpsAccuracy === null) {
+                      return (
+                        <>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f1c40f', display: 'inline-block' }}></span>
+                          <span>Searching</span>
+                        </>
+                      );
+                    }
+                    if (runState.gpsAccuracy < 30) {
+                      return (
+                        <>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71', display: 'inline-block' }}></span>
+                          <span>GPS Ready</span>
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#e74c3c', display: 'inline-block' }}></span>
+                        <span>GPS Lost</span>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                {/* Settings Gear Button */}
+                <button 
+                  onClick={() => setShowSettingsDrawer(true)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid #2A2A2A',
+                    color: 'white',
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  title="Tactical settings"
+                >
+                  <Settings size={15} />
+                </button>
+              </div>
 
               {/* Accuracy floating indicator */}
               {(runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
                 <div style={{
                   position: 'absolute',
-                  top: '115px',
+                  top: '76px',
                   left: '50%',
                   transform: 'translateX(-50%)',
-                  background: 'rgba(5, 5, 9, 0.88)',
-                  backdropFilter: 'blur(8px)',
+                  background: '#151515',
                   borderRadius: '20px',
                   padding: '5px 14px',
                   fontSize: '9px',
                   zIndex: 999,
-                  border: '1.5px solid var(--border-color)',
-                  color: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)',
+                  border: '1px solid #2A2A2A',
+                  color: runState.gpsAccuracy < 15 ? '#2ecc71' : '#f1c40f',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   fontWeight: '800',
                   letterSpacing: '0.5px',
                   textTransform: 'uppercase',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                  boxShadow: 'var(--clash-shadow-sm)'
                 }}>
-                  <div className="glow-active-pulse" style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? 'var(--neon-green)' : 'var(--neon-yellow)' }}></div>
+                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? '#2ecc71' : '#f1c40f' }}></div>
                   GPS Accuracy: {Math.round(runState.gpsAccuracy)}m
                 </div>
               )}
 
-              {/* Floating Recenter Map Button */}
-              <button 
-                onClick={recenterMap}
-                className="btn-secondary focus-ring"
-                style={{
-                  position: 'absolute',
-                  bottom: (runState.status === 'tracking' || runState.status === 'paused') ? '112px' : '106px',
-                  right: '16px',
-                  width: '42px',
-                  height: '42px',
-                  borderRadius: '50%',
-                  padding: 0,
-                  zIndex: 999,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'rgba(9, 9, 20, 0.85)',
-                  border: '1.5px solid var(--border-color)',
-                  boxShadow: '0 6px 16px rgba(0,0,0,0.6)',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease'
-                }}
-                title="Recenter Map"
-              >
-                <Navigation size={16} className="text-neon-blue" style={{ transform: 'rotate(45deg)' }} />
-              </button>
+              {/* Right Circular Map Controls (Aligned Vertically) */}
+              <div style={{
+                position: 'absolute',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                right: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                zIndex: 999
+              }}>
+                {/* Zoom In */}
+                <button 
+                  onClick={() => {
+                    if (mapInstanceRef.current) mapInstanceRef.current.zoomIn();
+                  }}
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '50%',
+                    border: '1px solid #2A2A2A',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#151515',
+                    boxShadow: 'var(--clash-shadow-md)',
+                    cursor: 'pointer',
+                    fontSize: '18px',
+                    fontWeight: '800',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  title="Zoom In"
+                >
+                  +
+                </button>
 
-              {/* Active Run Controls Floating Deck */}
+                {/* Zoom Out */}
+                <button 
+                  onClick={() => {
+                    if (mapInstanceRef.current) mapInstanceRef.current.zoomOut();
+                  }}
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '50%',
+                    border: '1px solid #2A2A2A',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#151515',
+                    boxShadow: 'var(--clash-shadow-md)',
+                    cursor: 'pointer',
+                    fontSize: '18px',
+                    fontWeight: '800',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  title="Zoom Out"
+                >
+                  -
+                </button>
+
+                {/* Recenter */}
+                <button 
+                  onClick={recenterMap}
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '50%',
+                    border: '1px solid #2A2A2A',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#151515',
+                    boxShadow: 'var(--clash-shadow-md)',
+                    cursor: 'pointer',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
+                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  title="Recenter GPS"
+                >
+                  <Navigation size={15} style={{ transform: 'rotate(45deg)', color: '#FC4C02' }} />
+                </button>
+              </div>
+
+              {/* Draggable bottom sheet / Startup Action Deck */}
+              {runState.status === 'idle' && (
+                <div 
+                  className="clash-bottom-sheet"
+                  style={{
+                    position: 'absolute',
+                    bottom: '16px',
+                    left: '16px',
+                    right: '16px',
+                    zIndex: 999,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                    maxHeight: isBottomSheetExpanded ? '440px' : '110px',
+                    overflow: 'hidden',
+                    transition: 'max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+                  }}
+                >
+                  {/* Pull Tab Handle */}
+                  <div 
+                    onClick={() => setIsBottomSheetExpanded(prev => !prev)}
+                    style={{
+                      width: '40px',
+                      height: '4px',
+                      background: '#2D2D2D',
+                      borderRadius: '2px',
+                      margin: '0 auto 4px auto',
+                      cursor: 'pointer'
+                    }}
+                  ></div>
+
+                  {!isBottomSheetExpanded ? (
+                    /* Collapsed Panel View */
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '60px' }}>
+                      <div 
+                        onClick={() => setIsBottomSheetExpanded(true)}
+                        style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer', gap: '2px' }}
+                      >
+                        <span className="clash-label">Selected Sector</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span className="clash-subtitle" style={{ fontSize: '14px' }}>
+                            {trackingMode === 'gps' ? 'Outside Real GPS' : SIMULATION_ROUTES[simulationRouteKey].name}
+                          </span>
+                          <ChevronUp size={14} style={{ color: '#FC4C02' }} />
+                        </div>
+                        <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
+                          {trackingMode === 'gps' ? 'Dynamic Stride • Ready' : `${SIMULATION_ROUTES[simulationRouteKey].distance} • Medium`}
+                        </span>
+                      </div>
+
+                      <button 
+                        onClick={startTracking}
+                        className="clash-btn-primary"
+                        style={{ height: '48px', padding: '0 24px' }}
+                      >
+                        START RUN
+                      </button>
+                    </div>
+                  ) : (
+                    /* Expanded Configuration Panel View */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 className="clash-subtitle" style={{ margin: 0, fontSize: '16px' }}>Configure Run Explorer</h3>
+                        <button 
+                          onClick={() => setIsBottomSheetExpanded(false)}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', cursor: 'pointer' }}
+                        >
+                          <ChevronDown size={20} />
+                        </button>
+                      </div>
+
+                      {/* Tracker switcher control */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>Tracking Technology</span>
+                        <div style={{ display: 'flex', background: '#0B0B0B', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
+                          <button 
+                            onClick={() => setTrackingMode('sim')}
+                            style={{
+                              flex: 1,
+                              background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
+                              color: 'white',
+                              border: 'none',
+                              padding: '8px 0',
+                              borderRadius: '10px',
+                              fontSize: '11px',
+                              fontWeight: '800',
+                              cursor: 'pointer',
+                              transition: 'background 0.2s'
+                            }}
+                          >
+                            Dev Simulator
+                          </button>
+                          <button 
+                            onClick={() => setTrackingMode('gps')}
+                            style={{
+                              flex: 1,
+                              background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
+                              color: 'white',
+                              border: 'none',
+                              padding: '8px 0',
+                              borderRadius: '10px',
+                              fontSize: '11px',
+                              fontWeight: '800',
+                              cursor: 'pointer',
+                              transition: 'background 0.2s'
+                            }}
+                          >
+                            Real GPS Stride
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Simulation route selector dropdown */}
+                      {trackingMode === 'sim' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <span className="clash-label" style={{ fontSize: '9px' }}>Simulation Route Key</span>
+                          <select 
+                            value={simulationRouteKey}
+                            onChange={(e) => setSimulationRouteKey(e.target.value)}
+                            style={{
+                              background: '#0B0B0B',
+                              border: '1px solid #2A2A2A',
+                              color: 'white',
+                              padding: '10px',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                              fontWeight: '700',
+                              width: '100%',
+                              outline: 'none',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {Object.entries(SIMULATION_ROUTES).map(([key, val]) => (
+                              <option key={key} value={key}>{val.name} ({val.distance})</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Details Grid */}
+                      {(() => {
+                        let runnerLatLng = null;
+                        if (runnerMarkerRef.current) {
+                          runnerLatLng = runnerMarkerRef.current.getLatLng();
+                        } else if (mapInstanceRef.current) {
+                          runnerLatLng = mapInstanceRef.current.getCenter();
+                        }
+
+                        let nearest = null;
+                        let minDist = Infinity;
+                        if (runnerLatLng && territories.length > 0) {
+                          territories.forEach(terr => {
+                            if (!terr.coords || terr.coords.length === 0) return;
+                            const firstCoord = terr.coords[0];
+                            const dist = getGeodeticDistance(runnerLatLng.lat, runnerLatLng.lng, firstCoord[0], firstCoord[1]);
+                            if (dist < minDist) {
+                              minDist = dist;
+                              nearest = terr;
+                            }
+                          });
+                        }
+
+                        const hasNearest = nearest && minDist <= 1.5;
+
+                        return (
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#0B0B0B', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
+                            <div>
+                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Sector Owner</span>
+                              <span style={{ fontSize: '11px', fontWeight: '700', color: 'white' }}>
+                                {hasNearest ? nearest.ownerName : 'Unclaimed'}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Shield Status</span>
+                              <span style={{ fontSize: '11px', fontWeight: '700', color: hasNearest && nearest.decayHours > 0 ? '#2ecc71' : '#e74c3c' }}>
+                                {hasNearest ? (nearest.decayHours > 0 ? `${nearest.decayHours}h remaining` : 'Decayed') : 'No Shield'}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Target Distance</span>
+                              <span style={{ fontSize: '11px', fontWeight: '700', color: 'white' }}>
+                                {trackingMode === 'gps' ? 'Dynamic' : SIMULATION_ROUTES[simulationRouteKey].distance}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Difficulty</span>
+                              <span style={{ fontSize: '11px', fontWeight: '700', color: '#f1c40f' }}>
+                                {trackingMode === 'gps' ? 'Custom' : simulationRouteKey === 'lake' ? 'Hard' : 'Medium'}
+                              </span>
+                            </div>
+                            <div style={{ gridColumn: 'span 2' }}>
+                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Estimated Conquest Rewards</span>
+                              <span style={{ fontSize: '11px', fontWeight: '700', color: '#FC4C02' }}>
+                                {hasNearest ? `+${nearest.rate || 5} Coins/Hr & +150 XP` : '+50 Coins & +150 XP on completion'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <button 
+                          onClick={() => alert("Route planning active! Map out your sector loop bounds.")}
+                          className="clash-btn-secondary"
+                          style={{ height: '48px', flex: 1 }}
+                        >
+                          Plan Route
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setIsBottomSheetExpanded(false);
+                            startTracking();
+                          }}
+                          className="clash-btn-primary"
+                          style={{ height: '48px', flex: 1.5 }}
+                        >
+                          START RUN NOW
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Active Run HUD (Live Stride stats overlay) */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (
-                <div className="glass-panel" style={{
-                  position: 'absolute',
-                  bottom: '16px',
-                  left: '16px',
-                  right: '16px',
-                  background: '#151515',
-                  border: '1px solid #2A2A2A',
-                  padding: '16px 20px',
-                  zIndex: 999,
-                  borderRadius: '20px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? '#FC4C02' : '#A8A8A8' }}></div>
+                <div 
+                  className="clash-bottom-sheet"
+                  style={{
+                    position: 'absolute',
+                    bottom: '16px',
+                    left: '16px',
+                    right: '16px',
+                    zIndex: 999,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="clash-label" style={{ fontSize: '9px' }}>Live HUD</span>
+                      <span style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: '#FC4C02',
+                        display: 'inline-block',
+                        animation: 'pulse 1.5s infinite'
+                      }}></span>
+                    </div>
+                    <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02' }}>
+                      {runState.status === 'tracking' ? 'Recording' : 'Paused'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', background: '#0B0B0B', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A', textAlign: 'center' }}>
                     <div>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Live Status</span>
-                      <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
-                        {runState.status === 'tracking' ? 'STRIDE RECORDING' : 'RUN PAUSED'}
-                      </h4>
+                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '10px' }}>KM</span></span>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                        {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
                     </div>
                   </div>
+
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <button 
                       onClick={togglePauseResume}
-                      className={runState.status === 'tracking' ? 'strava-btn-secondary' : 'strava-btn-primary'}
-                      style={{
-                        padding: '10px 18px',
-                        borderRadius: '12px',
-                        fontSize: '11px',
-                        fontWeight: '800',
-                        cursor: 'pointer',
-                        letterSpacing: '0.5px',
-                        textTransform: 'uppercase',
-                        minWidth: '90px'
-                      }}
+                      className="clash-btn-secondary"
+                      style={{ height: '44px', flex: 1 }}
                     >
                       {runState.status === 'tracking' ? 'Pause' : 'Resume'}
                     </button>
                     <button 
                       onClick={stopTracking}
-                      className="focus-ring"
-                      style={{
-                        background: 'rgba(252, 76, 2, 0.1)',
-                        border: '1.5px solid #FC4C02',
-                        color: 'white',
-                        padding: '10px 18px',
-                        borderRadius: '12px',
-                        fontSize: '11px',
-                        fontWeight: '800',
-                        cursor: 'pointer',
-                        letterSpacing: '0.5px',
-                        textTransform: 'uppercase',
-                        transition: 'all 0.2s ease'
-                      }}
+                      className="clash-btn-primary"
+                      style={{ height: '44px', flex: 1.2 }}
                     >
-                      Stop
+                      STOP & CLAIM
                     </button>
                   </div>
-                </div>
-              )}
- 
-              {/* Startup Action Floating Deck */}
-              {runState.status === 'idle' && (
-                <div className="glass-panel" style={{
-                  position: 'absolute',
-                  bottom: '16px',
-                  left: '16px',
-                  right: '16px',
-                  padding: '16px 20px',
-                  zIndex: 999,
-                  background: '#151515',
-                  border: '1px solid #2A2A2A',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.3)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <Compass size={20} className="strava-orange" />
-                    <div>
-                      <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>Selected Tracker</span>
-                      <h4 style={{ margin: '0', fontSize: '13px', color: 'white', fontWeight: '800' }}>
-                        {trackingMode === 'gps' ? 'Outside Real GPS Stride' : SIMULATION_ROUTES[simulationRouteKey].name}
-                      </h4>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={startTracking}
-                    className="strava-btn-primary"
-                    style={{
-                      padding: '12px 22px',
-                      borderRadius: '12px',
-                      fontSize: '11px',
-                      fontWeight: '800'
-                    }}
-                  >
-                    Start Run
-                  </button>
                 </div>
               )}
             </div>

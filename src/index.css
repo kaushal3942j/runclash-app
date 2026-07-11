@@ -26,7 +26,7 @@
   
   /* Text colors */
   --text-primary: #FFFFFF;
-  --text-secondary: #A8A8A8;
+  --text-secondary: #9CA3AF;
   --text-muted: #666666;
   
   /* Glows - Removed for Strava Design Language */
@@ -747,4 +747,361 @@ body {
   border-radius: 4px;
   transition: width 0.4s ease-out;
 }
+
+/* ========================================================
+   RUNCLASH 2.0 - SPRINT 0 DESIGN SYSTEM FOUNDATION
+   ======================================================== */
+
+:root {
+  /* Brand Tokens */
+  --clash-primary: #FC4C02;
+  --clash-bg: #0B0B0B;
+  --clash-card: #151515;
+  --clash-border: #2A2A2A;
+  --clash-text-primary: #FFFFFF;
+  --clash-text-secondary: #9CA3AF;
+  
+  /* Dynamic Territory Faction Colors */
+  --clash-color-mine: #2ecc71;       /* Mine -> Green */
+  --clash-color-friendly: #3498db;   /* Friendly Clan -> Blue */
+  --clash-color-rival: #9b59b6;      /* Rival Clan -> Purple */
+  --clash-color-enemy: #e74c3c;      /* Enemy -> Red */
+  --clash-color-neutral: #f1c40f;    /* Neutral -> Yellow */
+  --clash-color-expired: #888888;    /* Expired -> Gray */
+
+  /* Spacing Scale (8pt System) */
+  --clash-space-4: 4px;
+  --clash-space-8: 8px;
+  --clash-space-16: 16px;
+  --clash-space-24: 24px;
+  --clash-space-32: 32px;
+  --clash-space-40: 40px;
+  --clash-space-48: 48px;
+  --clash-space-64: 64px;
+
+  /* Corner Radii */
+  --clash-radius-button: 16px;
+  --clash-radius-card: 20px;
+  --clash-radius-bottom-sheet: 28px;
+  --clash-radius-circular: 50%;
+
+  /* Fluid Typography Scale (Outfit with Inter fallback) */
+  --clash-font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --clash-font-hero: clamp(32px, 1.2vw + 26px, 38px);
+  --clash-font-display: clamp(24px, 0.7vw + 22px, 28px);
+  --clash-font-title: clamp(20px, 0.5vw + 18px, 22px);
+  --clash-font-subtitle: clamp(16px, 0.4vw + 14px, 18px);
+  --clash-font-body: clamp(13px, 0.3vw + 12px, 14px);
+  --clash-font-caption: clamp(11px, 0.25vw + 10px, 12px);
+  --clash-font-label: clamp(9px, 0.25vw + 8px, 10px);
+
+  /* Animation Durations */
+  --clash-duration-normal: 280ms;
+  --clash-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Shadows (Subtle only, no neon glows) */
+  --clash-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.15);
+  --clash-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --clash-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* --- Typographic Styles --- */
+.clash-hero {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-hero);
+  font-weight: 800;
+  color: var(--clash-text-primary);
+  letter-spacing: -1px;
+  line-height: 1.15;
+}
+
+.clash-display {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-display);
+  font-weight: 800;
+  color: var(--clash-text-primary);
+  letter-spacing: -0.5px;
+  line-height: 1.2;
+}
+
+.clash-title {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-title);
+  font-weight: 700;
+  color: var(--clash-text-primary);
+  line-height: 1.35;
+}
+
+.clash-subtitle {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-subtitle);
+  font-weight: 600;
+  color: var(--clash-text-primary);
+  line-height: 1.4;
+}
+
+.clash-body {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-body);
+  font-weight: 400;
+  color: var(--clash-text-secondary);
+  line-height: 1.5;
+}
+
+.clash-caption {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-caption);
+  font-weight: 400;
+  color: var(--clash-text-secondary);
+}
+
+.clash-label {
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-label);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--clash-text-secondary);
+}
+
+/* --- Reusable Layouts & Components --- */
+
+/* Primary solid orange button */
+.clash-btn-primary {
+  background-color: var(--clash-primary);
+  color: #FFFFFF;
+  border: none;
+  border-radius: var(--clash-radius-button);
+  padding: 12px 24px;
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-body);
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(252, 76, 2, 0.2);
+  transition: transform var(--clash-duration-normal) var(--clash-ease), background-color var(--clash-duration-normal) var(--clash-ease);
+}
+.clash-btn-primary:hover {
+  background-color: #e04300;
+}
+.clash-btn-primary:active {
+  transform: scale(0.96);
+}
+
+/* Secondary dark border action button */
+.clash-btn-secondary {
+  background-color: var(--clash-card);
+  color: #FFFFFF;
+  border: 1px solid var(--clash-border);
+  border-radius: var(--clash-radius-button);
+  padding: 12px 24px;
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-body);
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform var(--clash-duration-normal) var(--clash-ease), background-color var(--clash-duration-normal) var(--clash-ease), border-color var(--clash-duration-normal) var(--clash-ease);
+}
+.clash-btn-secondary:hover {
+  background-color: #222222;
+  border-color: #444444;
+}
+.clash-btn-secondary:active {
+  transform: scale(0.96);
+}
+
+/* Rounded circular icon container */
+.clash-btn-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--clash-radius-circular);
+  background-color: var(--clash-card);
+  border: 1px solid var(--clash-border);
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--clash-shadow-sm);
+  transition: transform var(--clash-duration-normal) var(--clash-ease), background-color var(--clash-duration-normal) var(--clash-ease);
+}
+.clash-btn-icon:hover {
+  background-color: #222222;
+}
+.clash-btn-icon:active {
+  transform: scale(0.92);
+}
+
+/* Card - flat, 20px radius, 1px border */
+.clash-card {
+  background-color: var(--clash-card);
+  border: 1px solid var(--clash-border);
+  border-radius: var(--clash-radius-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--clash-shadow-md);
+}
+
+/* Bottom Sheet Container */
+.clash-bottom-sheet {
+  background-color: var(--clash-card);
+  border: 1px solid var(--clash-border);
+  border-top-left-radius: var(--clash-radius-bottom-sheet);
+  border-top-right-radius: var(--clash-radius-bottom-sheet);
+  padding: 24px 16px;
+  box-shadow: var(--clash-shadow-lg);
+}
+
+/* Profile Avatar circle */
+.clash-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--clash-radius-circular);
+  border: 2px solid #FFFFFF;
+  background-color: var(--clash-primary);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  box-shadow: var(--clash-shadow-sm);
+  flex-shrink: 0;
+}
+
+/* Inline metadata indicator */
+.clash-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--clash-border);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: var(--clash-font-caption);
+  font-weight: 700;
+  color: #FFFFFF;
+}
+
+/* Progress Bar */
+.clash-progress-bar {
+  background-color: rgba(255, 255, 255, 0.05);
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--clash-border);
+  width: 100%;
+}
+.clash-progress-bar-fill {
+  background-color: var(--clash-primary);
+  height: 100%;
+  border-radius: 4px;
+  transition: width var(--clash-duration-normal) var(--clash-ease);
+}
+
+/* Pill switches */
+.clash-toggle {
+  display: inline-flex;
+  background-color: var(--clash-bg);
+  border: 1px solid var(--clash-border);
+  border-radius: 24px;
+  padding: 2px;
+  height: 44px;
+  align-items: center;
+}
+.clash-toggle-button {
+  background-color: transparent;
+  color: var(--clash-text-secondary);
+  border: none;
+  padding: 0 16px;
+  height: 38px;
+  border-radius: 20px;
+  font-family: var(--clash-font-family);
+  font-size: var(--clash-font-caption);
+  font-weight: 800;
+  cursor: pointer;
+  transition: all var(--clash-duration-normal) var(--clash-ease);
+}
+.clash-toggle-button.active {
+  background-color: var(--clash-primary);
+  color: #FFFFFF;
+}
+
+/* Top floating navigation bar */
+.clash-toolbar {
+  background-color: var(--clash-card);
+  border: 1px solid var(--clash-border);
+  border-radius: 16px;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--clash-shadow-md);
+}
+
+/* Floating Action Button (FAB) */
+.clash-fab {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--clash-radius-circular);
+  background-color: var(--clash-primary);
+  color: #FFFFFF;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(252, 76, 2, 0.35);
+  transition: transform var(--clash-duration-normal) var(--clash-ease), background-color var(--clash-duration-normal) var(--clash-ease);
+}
+.clash-fab:hover {
+  background-color: #e04300;
+}
+.clash-fab:active {
+  transform: scale(0.92);
+}
+
+/* Live run statistics container */
+.clash-hud {
+  background-color: var(--clash-card);
+  border: 1px solid var(--clash-border);
+  border-radius: 24px;
+  padding: 16px;
+  box-shadow: var(--clash-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Metric Card inside grid */
+.clash-metric-card {
+  background-color: var(--clash-bg);
+  border: 1px solid var(--clash-border);
+  border-radius: 16px;
+  padding: 12px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* --- Reusable Transition Animations --- */
+.clash-transition-fade {
+  transition: opacity var(--clash-duration-normal) var(--clash-ease);
+}
+
+.clash-transition-slide {
+  transition: transform var(--clash-duration-normal) cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.clash-transition-scale {
+  transition: transform var(--clash-duration-normal) var(--clash-ease);
+}
+
 

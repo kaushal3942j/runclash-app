@@ -64,6 +64,15 @@ const SIMULATION_ROUTES = {
   }
 };
 
+// Database of profiles for social system discovery/search
+const INITIAL_PROFILES = [
+  { id: 'user_lakshya', displayName: 'Lakshya', clan: 'Udaipur Racers', level: 12, xp: 5800, distance: '112.5 km', territories: 5, bio: 'Conquering lake sectors one run at a time.', online: true, postsCount: 24, friendsCount: 31 },
+  { id: 'user_sam', displayName: 'Sam', clan: 'GITS Runners', level: 10, xp: 4500, distance: '74.8 km', territories: 3, bio: 'Pacing Sajjan Garh foothills daily.', online: false, postsCount: 15, friendsCount: 22 },
+  { id: 'user_rohan', displayName: 'Rohan', clan: 'Udaipur Racers', level: 8, xp: 3200, distance: '48.2 km', territories: 2, bio: 'Sprinting through the old city gates.', online: true, postsCount: 8, friendsCount: 14 },
+  { id: 'user_divya', displayName: 'Divya', clan: 'Udaipur Racers', level: 7, xp: 2900, distance: '35.4 km', territories: 1, bio: 'Run, capture, defend, repeat.', online: true, postsCount: 5, friendsCount: 19 },
+  { id: 'user_arjun', displayName: 'Arjun', clan: 'GITS Runners', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
+];
+
 export default function App() {
   // Auth & Session State
   const [currentUser, setCurrentUser] = useState(null);
@@ -99,6 +108,116 @@ export default function App() {
 
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
+  
+  // Selected Territory State & Fade-in transition handler
+  const [selectedTerritoryId, setSelectedTerritoryId] = useState(null);
+  const [isInspectingTransition, setIsInspectingTransition] = useState(false);
+  const [renderedTerritory, setRenderedTerritory] = useState(null);
+
+  useEffect(() => {
+    setIsInspectingTransition(true);
+    const timer = setTimeout(() => {
+      const found = territories.find(t => t.id === selectedTerritoryId);
+      setRenderedTerritory(found || null);
+      setIsInspectingTransition(false);
+    }, 150); // Matches .intel-content-transition 150ms delay
+    return () => clearTimeout(timer);
+  }, [selectedTerritoryId, territories]);
+
+  // ==========================================
+  // SPRINT 3: SOCIAL FOUNDATION STATE & HOOKS
+  // ==========================================
+  const [socialSubTab, setSocialSubTab] = useState('crew'); // 'crew' (clans) or 'network' (friends)
+  const [friendsSearchQuery, setFriendsSearchQuery] = useState('');
+  const [discoverSearchQuery, setDiscoverSearchQuery] = useState('');
+  const [selectedProfileUser, setSelectedProfileUser] = useState(null);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editBio, setEditBio] = useState('');
+
+  // Persisted Social arrays
+  const [friendsList, setFriendsList] = useState(() => {
+    return JSON.parse(localStorage.getItem('clash_friends_list')) || ['user_rohan'];
+  });
+  const [friendRequestsReceived, setFriendRequestsReceived] = useState(() => {
+    return JSON.parse(localStorage.getItem('clash_requests_received')) || ['user_sam'];
+  });
+  const [friendRequestsSent, setFriendRequestsSent] = useState(() => {
+    return JSON.parse(localStorage.getItem('clash_requests_sent')) || [];
+  });
+  const [followersList, setFollowersList] = useState(() => {
+    return JSON.parse(localStorage.getItem('clash_followers_list')) || ['user_lakshya', 'user_rohan'];
+  });
+  const [userBio, setUserBio] = useState(() => {
+    return localStorage.getItem('clash_user_bio') || 'Strategic operative ready to claim territories.';
+  });
+  const [socialNotifications, setSocialNotifications] = useState(() => {
+    return JSON.parse(localStorage.getItem('clash_social_notifications')) || [
+      { id: 'n1', type: 'friend_request', senderName: 'Sam', timestamp: '2h ago', read: false },
+      { id: 'n2', type: 'new_follower', senderName: 'Lakshya', timestamp: '5h ago', read: true }
+    ];
+  });
+
+  // LocalStorage Synchronizers
+  useEffect(() => {
+    localStorage.setItem('clash_friends_list', JSON.stringify(friendsList));
+  }, [friendsList]);
+  useEffect(() => {
+    localStorage.setItem('clash_requests_received', JSON.stringify(friendRequestsReceived));
+  }, [friendRequestsReceived]);
+  useEffect(() => {
+    localStorage.setItem('clash_requests_sent', JSON.stringify(friendRequestsSent));
+  }, [friendRequestsSent]);
+  useEffect(() => {
+    localStorage.setItem('clash_followers_list', JSON.stringify(followersList));
+  }, [followersList]);
+  useEffect(() => {
+    localStorage.setItem('clash_user_bio', userBio);
+  }, [userBio]);
+  useEffect(() => {
+    localStorage.setItem('clash_social_notifications', JSON.stringify(socialNotifications));
+  }, [socialNotifications]);
+
+  // Friendship Action Helpers
+  const sendFriendRequest = (profileId) => {
+    if (friendRequestsSent.includes(profileId)) return;
+    setFriendRequestsSent(prev => [...prev, profileId]);
+    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
+    addLog(`Social: Sent friend request to ${profileName}.`);
+  };
+
+  const acceptFriendRequest = (profileId) => {
+    setFriendRequestsReceived(prev => prev.filter(id => id !== profileId));
+    if (!friendsList.includes(profileId)) {
+      setFriendsList(prev => [...prev, profileId]);
+    }
+    if (!followersList.includes(profileId)) {
+      setFollowersList(prev => [...prev, profileId]);
+    }
+    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
+    const newNotif = {
+      id: 'notif_' + Date.now(),
+      type: 'friend_accepted',
+      senderName: profileName,
+      timestamp: 'Just now',
+      read: false
+    };
+    setSocialNotifications(prev => [newNotif, ...prev]);
+    addLog(`Social: Accepted friend request from ${profileName}.`);
+  };
+
+  const rejectFriendRequest = (profileId) => {
+    setFriendRequestsReceived(prev => prev.filter(id => id !== profileId));
+    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
+    addLog(`Social: Rejected friend request from ${profileName}.`);
+  };
+
+  const removeFriend = (profileId) => {
+    setFriendsList(prev => prev.filter(id => id !== profileId));
+    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
+    addLog(`Social: Removed ${profileName} from friends list.`);
+  };
+
   const [mapAutoFollow, setMapAutoFollow] = useState(true);
   const mapAutoFollowRef = useRef(true);
   useEffect(() => {
@@ -278,6 +397,10 @@ export default function App() {
       mapInstanceRef.current = map;
       addLog("System: Leaflet Map loaded.");
 
+      map.on('click', () => {
+        setSelectedTerritoryId(null);
+      });
+
       map.on('dragstart', () => {
         setMapAutoFollow(false);
       });
@@ -327,16 +450,17 @@ export default function App() {
       const isOwner = terr.ownerId === currentUser.uid;
       const isTeammate = terr.clan === currentUser.clan && !isOwner;
       const isEnemy = terr.clan && terr.clan !== currentUser.clan && terr.ownerName !== 'Unclaimed';
+      const isBonus = terr.rate >= 10 || (terr.name && terr.name.toLowerCase().includes('landmark'));
       
-      let polyColor = '#888888'; // Neutral
-      if (terr.ownerName === 'Unclaimed') {
-        polyColor = '#f1c40f'; // Yellow
+      let polyColor = '#888888'; // Neutral: Gray
+      if (isBonus) {
+        polyColor = '#EAB308'; // Bonus territory: Gold
       } else if (isOwner) {
-        polyColor = '#FC4C02'; // Orange
+        polyColor = '#FC4C02'; // Current player: Orange
       } else if (isTeammate) {
-        polyColor = '#3498db'; // Blue
+        polyColor = '#3B82F6'; // Clan teammate: Blue
       } else if (isEnemy) {
-        polyColor = '#e74c3c'; // Red
+        polyColor = '#EF4444'; // Enemy clan: Red
       }
 
       const poly = L.polygon(terr.coords, {
@@ -346,15 +470,14 @@ export default function App() {
         weight: 2
       }).addTo(mapInstanceRef.current);
 
-      poly.bindPopup(`
-        <div style="font-family: 'Outfit', sans-serif; min-width: 140px;">
-          <h4 style="margin: 0 0 4px; color: ${polyColor}; font-weight: 700;">${terr.name}</h4>
-          <p style="margin: 0; font-size: 11px;"><b>Owner:</b> ${terr.ownerName}</p>
-          <p style="margin: 0; font-size: 11px;"><b>Clan:</b> ${terr.clan}</p>
-          <p style="margin: 0; font-size: 11px;"><b>Enclosed Area:</b> ${terr.area}</p>
-          ${terr.decayHours > 0 ? `<p style="margin: 0; font-size: 11px;"><b>Shield:</b> ${terr.decayHours}h remaining</p>` : ''}
-        </div>
-      `);
+      // Select territory on click
+      poly.on('click', (e) => {
+        if (e.originalEvent) {
+          e.originalEvent.stopPropagation();
+        }
+        setSelectedTerritoryId(terr.id);
+        setIsBottomSheetExpanded(true);
+      });
 
       territoryPolygonsRef.current[terr.id] = poly;
     });
@@ -1062,20 +1185,20 @@ export default function App() {
   // AUTH GATED VIEW
   if (!currentUser) {
     return (
-      <div className="fade-in p-6" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div className="glass-panel-heavy card-cyber card-cyber-static p-8 gap-6" style={{ width: '420px', display: 'flex', flexDirection: 'column' }}>
+      <div className="fade-in p-6" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: '#0B0B0B' }}>
+        <div className="clash-card p-8 gap-6" style={{ width: '420px', display: 'flex', flexDirection: 'column' }}>
           
           <div style={{ textAlign: 'center' }}>
-            <span className="text-neon-pink text-xs" style={{ fontWeight: '800', letterSpacing: '3px', textTransform: 'uppercase' }}>RunClash MVP // GPS Conquest</span>
-            <h1 className="text-4xl m-0" style={{ marginTop: '10px', color: 'white', fontWeight: '800', letterSpacing: '-1.5px', textShadow: '0 0 10px rgba(255,255,255,0.08)' }}>RUNCLASH</h1>
-            <p className="text-base m-0" style={{ color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.4' }}>
+            <span className="clash-label" style={{ color: '#FC4C02', letterSpacing: '3px' }}>RunClash // Sector Conquest</span>
+            <h1 className="clash-hero" style={{ margin: '10px 0 0 0', fontSize: '32px', letterSpacing: '-1px' }}>RUNCLASH</h1>
+            <p className="clash-body" style={{ marginTop: '8px', fontSize: '13px' }}>
               Connect your GPS to conquer real-world loops. Powered by {isFirebaseActive() ? 'Supabase Cloud' : 'LocalStorage persistence'}.
             </p>
           </div>
 
           {authError && (
-            <div className="p-3 gap-2" style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid var(--neon-pink)', color: 'white', borderRadius: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', boxShadow: 'var(--glow-pink)' }}>
-              <AlertCircle size={15} className="text-neon-pink" />
+            <div style={{ background: 'rgba(252, 76, 2, 0.05)', border: '1px solid #FC4C02', color: 'white', borderRadius: '12px', padding: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={15} style={{ color: '#FC4C02' }} />
               <span style={{ fontWeight: '500' }}>{authError}</span>
             </div>
           )}
@@ -1083,9 +1206,9 @@ export default function App() {
           <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
             {authMode !== 'guest' && (
               <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Email Address</label>
+                <label className="clash-label" style={{ fontSize: '9px' }}>Email Address</label>
                 <div style={{ position: 'relative' }}>
-                  <Mail size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <Mail size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--clash-text-secondary)' }} />
                   <input 
                     type="email" 
                     value={authEmail} 
@@ -1099,9 +1222,9 @@ export default function App() {
             )}
 
             <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-              <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Password / Nickname</label>
+              <label className="clash-label" style={{ fontSize: '9px' }}>Password / Nickname</label>
               <div style={{ position: 'relative' }}>
-                <Lock size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <Lock size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--clash-text-secondary)' }} />
                 <input 
                   type={authMode === 'guest' ? 'text' : 'password'}
                   value={authPassword} 
@@ -1115,7 +1238,7 @@ export default function App() {
 
             {authMode === 'signup' && (
               <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Display Name</label>
+                <label className="clash-label" style={{ fontSize: '9px' }}>Display Name</label>
                 <input 
                   type="text" 
                   value={authName} 
@@ -1129,35 +1252,35 @@ export default function App() {
 
             {(authMode === 'signup' || authMode === 'guest') && (
               <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="text-xs" style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Choose Crew / Clan</label>
+                <label className="clash-label" style={{ fontSize: '9px' }}>Choose Crew / Clan</label>
                 <select 
                   value={authClan} 
                   onChange={e => setAuthClan(e.target.value)}
                   className="cyber-select focus-ring"
                 >
-                  <option value="Udaipur Racers">Udaipur Racers (Cyan)</option>
-                  <option value="GITS Runners">GITS Runners (Pink)</option>
-                  <option value="Delhi Marathon Club">Delhi Marathon Club (White)</option>
+                  <option value="Udaipur Racers">Udaipur Racers (Orange)</option>
+                  <option value="GITS Runners">GITS Runners (White)</option>
+                  <option value="Delhi Marathon Club">Delhi Marathon Club (Gray)</option>
                 </select>
               </div>
             )}
 
-            <button type="submit" className="btn-neon focus-ring" style={{ marginTop: '12px' }}>
+            <button type="submit" className="clash-btn-primary" style={{ marginTop: '12px' }}>
               {authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : 'Enter Arena'}
             </button>
           </form>
 
           {/* Form Switching Toggles */}
-          <div className="gap-2 text-base" style={{ display: 'flex', flexDirection: 'column', borderTop: '1.5px solid var(--border-color)', paddingTop: '20px', textAlign: 'center' }}>
+          <div className="gap-2 text-base" style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--clash-border)', paddingTop: '20px', textAlign: 'center' }}>
             {authMode === 'login' ? (
               <>
-                <div style={{ color: 'var(--text-secondary)' }}>New runner? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
-                <div style={{ color: 'var(--text-secondary)' }}>Just exploring? <span className="text-neon-pink" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
+                <div className="clash-body" style={{ fontSize: '11px' }}>New runner? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Just exploring? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
               </>
             ) : authMode === 'signup' ? (
-              <div style={{ color: 'var(--text-secondary)' }}>Already registered? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+              <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
             ) : (
-              <div style={{ color: 'var(--text-secondary)' }}>Want cloud account? <span className="text-neon-blue" style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+              <div className="clash-body" style={{ fontSize: '11px' }}>Want cloud account? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
             )}
           </div>
 
@@ -1171,32 +1294,32 @@ export default function App() {
     <div className="sim-container fade-in">
       
       {/* SIMULATOR / CONFIGURATION CONTROL PANEL */}
-      <div className="strava-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
+      <div className="clash-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
         <div>
-          <span className="strava-orange" style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '2.5px', textTransform: 'uppercase' }}>Configuration Control</span>
-          <h2 style={{ margin: '6px 0 0 0', fontSize: '28px', color: 'white', fontWeight: '800', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
-          <p className="strava-text-secondary" style={{ fontSize: '13px', marginTop: '8px', lineHeight: '1.45' }}>
+          <span className="clash-label" style={{ color: '#FC4C02', fontSize: '11px', letterSpacing: '2.5px' }}>Configuration Control</span>
+          <h2 className="clash-title" style={{ margin: '6px 0 0 0', fontSize: '28px', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
+          <p className="clash-body" style={{ fontSize: '13px', marginTop: '8px' }}>
             Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
           </p>
         </div>
 
         {/* Tracking Mode selection */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <label style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Location Source Mode</label>
+          <label className="clash-label" style={{ fontSize: '10px' }}>Location Source Mode</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <button 
-              className={trackingMode === 'gps' ? 'strava-btn-primary' : 'strava-btn-secondary'}
+              className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
               onClick={() => setTrackingMode('gps')}
               disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
+              style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
             >
               <Navigation size={13} style={{ transform: 'rotate(45deg)' }} /> Real GPS
             </button>
             <button 
-              className={trackingMode === 'sim' ? 'strava-btn-primary' : 'strava-btn-secondary'}
+              className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
               onClick={() => setTrackingMode('sim')}
               disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '6px', padding: '12px' }}
+              style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
             >
               <Radio size={13} /> Developer Sim
             </button>
@@ -1206,7 +1329,7 @@ export default function App() {
         {/* Predefined Simulator selection (Only shown if mode is sim) */}
         {trackingMode === 'sim' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Mock Simulator Loop</label>
+            <label className="clash-label" style={{ fontSize: '10px' }}>Mock Simulator Loop</label>
             <select 
               value={simulationRouteKey}
               onChange={e => setSimulationRouteKey(e.target.value)}
@@ -1224,17 +1347,17 @@ export default function App() {
         {/* Control execution buttons */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           {runState.status === 'idle' ? (
-            <button className="strava-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
+            <button className="clash-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
               <Play size={13} /> Start Tracking
             </button>
           ) : (
-            <button className="strava-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
+            <button className="clash-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
               <Square size={13} /> Stop Run
             </button>
           )}
 
           <button 
-            className="strava-btn-secondary"
+            className="clash-btn-secondary"
             onClick={handleLogout}
             style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
           >
@@ -1244,28 +1367,28 @@ export default function App() {
 
         {/* Collapsible Developer Console logs */}
         <details style={{ marginTop: '4px' }}>
-          <summary style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', cursor: 'pointer', outline: 'none' }}>
+          <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
             Developer Tools
           </summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>GPS Engine Console logs</span>
+            <span className="clash-label" style={{ fontSize: '9px' }}>GPS Engine Console logs</span>
             <div style={{
-              background: '#09090e',
-              border: '1px solid var(--border-color)',
+              background: '#0B0B0B',
+              border: '1px solid var(--clash-border)',
               borderRadius: '12px',
               padding: '12px',
               height: '150px',
               overflowY: 'auto',
-              fontFamily: 'var(--font-mono)',
+              fontFamily: 'var(--clash-font-family)',
               fontSize: '10px',
-              color: '#39ff14',
+              color: 'white',
               display: 'flex',
               flexDirection: 'column-reverse',
               gap: '6px'
             }}>
               {consoleLogs.map((log, i) => (
                 <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                  <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
                 </div>
               ))}
             </div>
@@ -1273,9 +1396,9 @@ export default function App() {
         </details>
 
         {/* Cloud database active details */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-          <ShieldCheck size={16} className="strava-orange" />
-          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '500' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--clash-border)' }}>
+          <ShieldCheck size={16} style={{ color: '#FC4C02' }} />
+          <span className="clash-body" style={{ fontSize: '11px', fontWeight: '500' }}>
             Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
           </span>
         </div>
@@ -1375,26 +1498,26 @@ export default function App() {
                 overflowY: 'auto'
               }}>
                 {/* Header Title */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #2A2A2A', paddingBottom: '14px' }}>
-                  <h3 className="text-sm m-0" style={{ color: 'white', fontWeight: '800', letterSpacing: '1.5px', textTransform: 'uppercase' }}>Tactical Settings</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--clash-border)', paddingBottom: '14px' }}>
+                  <h3 className="clash-subtitle" style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '1px' }}>Tactical Settings</h3>
                   <button 
                     onClick={() => setShowSettingsDrawer(false)}
-                    className="strava-btn-secondary btn-sm"
-                    style={{ color: '#FC4C02', borderColor: '#FC4C02', background: 'rgba(252, 76, 2, 0.05)' }}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ color: '#FC4C02', borderColor: '#FC4C02' }}
                   >
                     Close
                   </button>
                 </div>
 
                 {/* Profile Header Block */}
-                <div className="strava-card" style={{ display: 'flex', flexDirection: 'column' }}>
+                <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                     <div style={{
                       width: '52px',
                       height: '52px',
                       borderRadius: '50%',
-                      background: 'rgba(252, 76, 2, 0.05)',
-                      border: '2.5px solid #FC4C02',
+                      background: '#0B0B0B',
+                      border: '2px solid #FC4C02',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -1406,29 +1529,29 @@ export default function App() {
                       {(currentUser.displayName || 'R')[0].toUpperCase()}
                     </div>
                     <div style={{ flex: 1 }}>
-                      <h4 className="text-lg m-0" style={{ color: 'white', fontWeight: '800' }}>{currentUser.displayName}</h4>
-                      <span className="text-xs" style={{ color: '#FC4C02', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      <h4 className="clash-title" style={{ margin: 0, fontSize: '18px' }}>{currentUser.displayName}</h4>
+                      <span className="clash-label" style={{ color: '#FC4C02', fontSize: '10px' }}>
                         {currentUser.clan || 'Udaipur Racers'}
                       </span>
                     </div>
                   </div>
 
                   {/* XP & Level progress */}
-                  <div style={{ borderTop: '1px solid #2A2A2A', paddingTop: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  <div style={{ borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--clash-text-secondary)', marginBottom: '4px' }}>
                       <span style={{ fontWeight: '800' }}>LEVEL {currentUser.level}</span>
-                      <span style={{ fontFamily: 'var(--font-mono)' }}>{currentUser.xp} XP</span>
+                      <span style={{ fontFamily: 'var(--clash-font-family)' }}>{currentUser.xp} XP</span>
                     </div>
-                    <div className="strava-progress-bar-bg" style={{ height: '6px' }}>
-                      <div className="strava-progress-bar-fill" style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%` }}></div>
+                    <div className="clash-progress-bar">
+                      <div className="clash-progress-bar-fill" style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%` }}></div>
                     </div>
                   </div>
 
                   {/* Coin balance */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid #2A2A2A', padding: '8px 12px', borderRadius: '10px' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>Coin Holdings</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0B0B0B', border: '1px solid var(--clash-border)', padding: '8px 12px', borderRadius: '10px' }}>
+                    <span className="clash-label" style={{ fontSize: '9px' }}>Coin Holdings</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Coins size={14} className="strava-orange" />
+                      <Coins size={14} style={{ color: '#FC4C02' }} />
                       <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{currentUser.coins}</span>
                     </div>
                   </div>
@@ -1436,26 +1559,26 @@ export default function App() {
 
                 {/* Settings Group: Location Source */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Running & GPS Configuration</span>
+                  <span className="clash-label" style={{ fontSize: '9px' }}>Running & GPS Configuration</span>
                   
-                  <div className="strava-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     {/* Toggle Selector */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Location Source Mode</label>
+                      <label className="clash-subtitle" style={{ fontSize: '12px' }}>Location Source Mode</label>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                         <button 
-                          className={trackingMode === 'gps' ? 'strava-btn-primary focus-ring' : 'strava-btn-secondary focus-ring'}
+                          className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
                           onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
                           disabled={runState.status !== 'idle'}
-                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
+                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
                         >
                           <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
                         </button>
                         <button 
-                          className={trackingMode === 'sim' ? 'strava-btn-primary focus-ring' : 'strava-btn-secondary focus-ring'}
+                          className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
                           onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
                           disabled={runState.status !== 'idle'}
-                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '10px' }}
+                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
                         >
                           <Radio size={12} /> Dev Sim
                         </button>
@@ -1464,8 +1587,8 @@ export default function App() {
 
                     {/* Loop selector */}
                     {trackingMode === 'sim' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid #2A2A2A', paddingTop: '12px' }}>
-                        <label style={{ fontSize: '11px', color: 'white', fontWeight: '700' }}>Mock Simulator Loop</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '12px' }}>
+                        <label className="clash-subtitle" style={{ fontSize: '12px' }}>Mock Simulator Loop</label>
                         <select 
                           value={simulationRouteKey}
                           onChange={e => setSimulationRouteKey(e.target.value)}
@@ -1484,28 +1607,28 @@ export default function App() {
 
                 {/* Collapsible System Diagnostics & Logs */}
                 <details style={{ marginTop: '4px' }}>
-                  <summary style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-secondary)', cursor: 'pointer', outline: 'none' }}>
+                  <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
                     Developer Tools
                   </summary>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Tactical Console Logs</span>
+                    <span className="clash-label" style={{ fontSize: '8px' }}>Tactical Console Logs</span>
                     <div style={{
-                      background: '#09090e',
-                      border: '1px solid #2A2A2A',
+                      background: '#0B0B0B',
+                      border: '1px solid var(--clash-border)',
                       borderRadius: '12px',
                       padding: '10px',
                       height: '150px',
                       overflowY: 'auto',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '9px',
-                      color: '#39ff14',
+                      fontFamily: 'var(--clash-font-family)',
+                      fontSize: '10px',
+                      color: 'white',
                       display: 'flex',
                       flexDirection: 'column-reverse',
                       gap: '4px'
                     }}>
                       {consoleLogs.map((log, i) => (
                         <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
-                          <span style={{ color: 'var(--text-muted)' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                          <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
                         </div>
                       ))}
                     </div>
@@ -1513,50 +1636,33 @@ export default function App() {
                 </details>
 
                 {/* Settings Group: Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid #2A2A2A', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px' }}>
                   <button 
-                    className="focus-ring" 
                     onClick={() => {
                       if (confirm("Are you sure you want to sign out?")) {
                         handleLogout();
                         setShowSettingsDrawer(false);
                       }
                     }}
-                    style={{
-                      background: 'rgba(252, 76, 2, 0.1)',
-                      border: '1.5px solid #FC4C02',
-                      color: 'white',
-                      padding: '12px',
-                      borderRadius: '12px',
-                      fontSize: '11px',
-                      fontWeight: '800',
-                      letterSpacing: '0.5px',
-                      textTransform: 'uppercase',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      transition: 'all 0.2s ease'
-                    }}
+                    className="clash-btn-secondary"
+                    style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px' }}
                   >
                     <LogOut size={13} style={{ color: '#FC4C02' }} /> Sign Out Account
                   </button>
                   
-                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
-                    RunClash v1.2.0 • Secured Database Sync
+                  <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
+                    RunClash v2.0.0 • Secured Database Sync
                   </div>
                 </div>
               </div>
             )}
 
-            {/* TAB: DASHBOARD (HOME) */}
-            <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none' }} className="strava-dashboard-container fade-in">
+             <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px', height: '100%', overflowY: 'auto' }} className="fade-in">
               
               {/* Greeting Header */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <div>
-                  <span className="strava-text-secondary" style={{ fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  <span className="clash-label" style={{ fontSize: '10px' }}>
                     {(() => {
                       const hr = new Date().getHours();
                       if (hr < 12) return 'Good Morning';
@@ -1564,58 +1670,57 @@ export default function App() {
                       return 'Good Evening';
                     })()}
                   </span>
-                  <h3 style={{ margin: '2px 0 0 0', fontSize: '24px', color: 'white', fontWeight: '800', letterSpacing: '-0.5px' }}>
+                  <h3 className="clash-title" style={{ margin: '2px 0 0 0', fontSize: '24px' }}>
                     {currentUser.displayName || 'Runner'}
                   </h3>
                 </div>
                 <div style={{
-                  background: 'rgba(252, 76, 2, 0.1)',
-                  border: '1px solid rgba(252, 76, 2, 0.25)',
+                  border: '1px solid #FC4C02',
                   padding: '4px 10px',
                   borderRadius: '12px',
-                  fontSize: '10px',
+                  fontSize: '9px',
                   fontWeight: '800',
                   color: '#FC4C02',
                   textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.8px'
                 }}>
                   {currentUser.clan || 'Udaipur Racers'}
                 </div>
               </div>
 
               {/* CTA Hero Card - Start Run */}
-              <div className="strava-card" style={{ gap: '14px', background: 'linear-gradient(135deg, #1d1d1d 0%, #151515 100%)' }}>
+              <div className="clash-card" style={{ gap: '14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <span className="strava-orange" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>Quick Start</span>
-                    <h4 style={{ margin: '4px 0 0 0', fontSize: '18px', color: 'white', fontWeight: '800' }}>Ready for your next loop?</h4>
+                    <span className="clash-label" style={{ color: '#FC4C02', fontSize: '10px' }}>Quick Start</span>
+                    <h4 className="clash-subtitle" style={{ margin: '4px 0 0 0' }}>Ready for your next loop?</h4>
                   </div>
-                  <Compass size={24} className="strava-orange" />
+                  <Compass size={24} style={{ color: '#FC4C02' }} />
                 </div>
-                <p className="strava-text-secondary" style={{ margin: 0, fontSize: '12px', lineHeight: '1.4' }}>
+                <p className="clash-body" style={{ margin: 0, fontSize: '12px' }}>
                   Step outside, close a loop with GPS tracking, and expand your crew's sector holdings.
                 </p>
-                <button className="strava-btn-primary" onClick={() => setActiveTab('map')}>
+                <button className="clash-btn-primary" onClick={() => setActiveTab('map')}>
                   Start Run
                 </button>
               </div>
 
               {/* Hero Card - Today's Real Activity */}
-              <div className="strava-card" style={{ gap: '12px' }}>
+              <div className="clash-card" style={{ gap: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Today's Activity</span>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? '#39ff14' : 'rgba(255,255,255,0.1)' }}></div>
+                  <span className="clash-label" style={{ fontSize: '10px' }}>Today's Activity</span>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: runState.status === 'tracking' ? '#FC4C02' : 'rgba(255,255,255,0.1)' }}></div>
                 </div>
                 
                 {runState.distance > 0 || runState.status === 'tracking' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-                      <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--font-sans)' }}>{runState.distance.toFixed(2)}</span>
-                      <span className="strava-text-secondary" style={{ fontSize: '14px', fontWeight: '700' }}>km</span>
+                      <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>{runState.distance.toFixed(2)}</span>
+                      <span className="clash-body" style={{ fontSize: '14px', fontWeight: '700' }}>km</span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
                       <div>
-                        <span className="strava-text-secondary" style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase' }}>Duration</span>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>Duration</span>
                         <div style={{ fontSize: '14px', fontWeight: '800', color: 'white', marginTop: '2px' }}>
                           {(() => {
                             const hrs = Math.floor(runState.duration / 3600);
@@ -1628,32 +1733,32 @@ export default function App() {
                         </div>
                       </div>
                       <div>
-                        <span className="strava-text-secondary" style={{ fontSize: '9px', fontWeight: '700', textTransform: 'uppercase' }}>Avg Pace</span>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>Avg Pace</span>
                         <div style={{ fontSize: '14px', fontWeight: '800', color: 'white', marginTop: '2px' }}>{runState.pace} /km</div>
                       </div>
                     </div>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', textAlign: 'center', gap: '8px' }}>
-                    <Compass size={24} className="strava-text-secondary" style={{ opacity: 0.4 }} />
-                    <div style={{ fontSize: '13px', fontWeight: '700', color: 'white' }}>No runs tracked today</div>
-                    <span className="strava-text-secondary" style={{ fontSize: '11px' }}>Recorded statistics from your active run will display here.</span>
+                    <Compass size={24} className="clash-body" style={{ opacity: 0.4 }} />
+                    <div className="clash-subtitle" style={{ fontSize: '13px' }}>No runs tracked today</div>
+                    <span className="clash-body" style={{ fontSize: '11px' }}>Recorded statistics from your active run will display here.</span>
                   </div>
                 )}
               </div>
 
               {/* Weekly Goal Status */}
-              <div className="strava-card" style={{ gap: '12px' }}>
-                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Weekly Progress</span>
+              <div className="clash-card" style={{ gap: '12px' }}>
+                <span className="clash-label" style={{ fontSize: '10px' }}>Weekly Progress</span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: '700' }}>
                     <span style={{ color: 'white' }}>Distance Goal</span>
-                    <span className="strava-text-secondary">0 / 15.0 km</span>
+                    <span className="clash-body">0 / 15.0 km</span>
                   </div>
-                  <div className="strava-progress-bar-bg">
-                    <div className="strava-progress-bar-fill" style={{ width: '0%' }}></div>
+                  <div className="clash-progress-bar">
+                    <div className="clash-progress-bar-fill" style={{ width: '0%' }}></div>
                   </div>
-                  <span className="strava-text-secondary" style={{ fontSize: '10px', fontStyle: 'italic', textAlign: 'center', marginTop: '4px' }}>
+                  <span className="clash-body" style={{ fontSize: '10px', fontStyle: 'italic', textAlign: 'center', marginTop: '4px' }}>
                     Weekly goals are not configured yet. Start a run to establish your target!
                   </span>
                 </div>
@@ -1663,57 +1768,57 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 
                 {/* Coins Stat Card */}
-                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
+                <div className="clash-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Coins size={14} className="strava-orange" />
-                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Coins</span>
+                    <Coins size={14} style={{ color: '#FC4C02' }} />
+                    <span className="clash-label" style={{ fontSize: '10px' }}>Coins</span>
                   </div>
-                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>{currentUser.coins}</h4>
-                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>Spend in Armory &rarr;</span>
+                  <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>{currentUser.coins}</h4>
+                  <span className="clash-body" style={{ fontSize: '9px' }}>Spend in Armory &rarr;</span>
                 </div>
 
                 {/* Level / XP Stat Card */}
-                <div className="strava-card" style={{ gap: '6px' }}>
+                <div className="clash-card" style={{ gap: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Zap size={14} className="strava-orange" />
-                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>XP Level</span>
+                    <Zap size={14} style={{ color: '#FC4C02' }} />
+                    <span className="clash-label" style={{ fontSize: '10px' }}>XP Level</span>
                   </div>
-                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>LVL {currentUser.level}</h4>
-                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>{currentUser.xp} total XP</span>
+                  <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>LVL {currentUser.level}</h4>
+                  <span className="clash-body" style={{ fontSize: '9px' }}>{currentUser.xp} total XP</span>
                 </div>
 
                 {/* Sectors Conquered Card */}
-                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
+                <div className="clash-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('conquests')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Target size={14} className="strava-orange" />
-                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Sectors</span>
+                    <Target size={14} style={{ color: '#FC4C02' }} />
+                    <span className="clash-label" style={{ fontSize: '10px' }}>Sectors</span>
                   </div>
-                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>
+                  <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>
                     {territories.filter(t => t.ownerId === currentUser.uid).length}
                   </h4>
-                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>View conquered loops &rarr;</span>
+                  <span className="clash-body" style={{ fontSize: '9px' }}>View conquered loops &rarr;</span>
                 </div>
 
                 {/* Standing / Rank Card */}
-                <div className="strava-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('clans')}>
+                <div className="clash-card" style={{ gap: '6px', cursor: 'pointer' }} onClick={() => setActiveTab('clans')}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Trophy size={14} className="strava-orange" />
-                    <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase' }}>Rank</span>
+                    <Trophy size={14} style={{ color: '#FC4C02' }} />
+                    <span className="clash-label" style={{ fontSize: '10px' }}>Rank</span>
                   </div>
-                  <h4 style={{ margin: 0, fontSize: '24px', color: 'white', fontWeight: '800' }}>
+                  <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>
                     {(() => {
                       const userRankIndex = leaderboard.findIndex(p => p.displayName === currentUser.displayName);
                       return userRankIndex !== -1 ? `#${userRankIndex + 1}` : '#5';
                     })()}
                   </h4>
-                  <span className="strava-text-secondary" style={{ fontSize: '9px' }}>View leaderboards &rarr;</span>
+                  <span className="clash-body" style={{ fontSize: '9px' }}>View leaderboards &rarr;</span>
                 </div>
 
               </div>
 
               {/* Current Territory */}
-              <div className="strava-card" style={{ gap: '10px' }}>
-                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Active Holding</span>
+              <div className="clash-card" style={{ gap: '10px' }}>
+                <span className="clash-label" style={{ fontSize: '10px' }}>Active Holding</span>
                 {(() => {
                   const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
                   const latest = userTerrs[userTerrs.length - 1];
@@ -1721,10 +1826,10 @@ export default function App() {
                     return (
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
-                          <div style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{latest.name}</div>
-                          <span className="strava-text-secondary" style={{ fontSize: '11px' }}>{latest.area} sq m</span>
+                          <div className="clash-subtitle" style={{ fontSize: '14px', color: 'white' }}>{latest.name}</div>
+                          <span className="clash-body" style={{ fontSize: '11px' }}>{latest.area} sq m</span>
                         </div>
-                        <span style={{ fontSize: '11px', color: '#FC4C02', fontWeight: '800', background: 'rgba(252, 76, 2, 0.1)', padding: '3px 8px', borderRadius: '10px' }}>
+                        <span style={{ fontSize: '10px', color: '#FC4C02', border: '1px solid #FC4C02', padding: '3px 8px', borderRadius: '10px', fontWeight: '800' }}>
                           {latest.decayHours}h Shield
                         </span>
                       </div>
@@ -1732,26 +1837,26 @@ export default function App() {
                   }
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0', textAlign: 'center', gap: '6px' }}>
-                      <Target size={18} className="strava-text-secondary" style={{ opacity: 0.4 }} />
-                      <div style={{ fontSize: '12px', fontWeight: '700', color: 'white' }}>No captured sectors</div>
-                      <span className="strava-text-secondary" style={{ fontSize: '10px' }}>Conquer loops to claim sectors.</span>
+                      <Target size={18} className="clash-body" style={{ opacity: 0.4 }} />
+                      <div className="clash-subtitle" style={{ fontSize: '12px' }}>No captured sectors</div>
+                      <span className="clash-body" style={{ fontSize: '10px' }}>Conquer loops to claim sectors.</span>
                     </div>
                   );
                 })()}
               </div>
 
               {/* Recent Activity / Captures */}
-              <div className="strava-card" style={{ gap: '10px' }}>
-                <span className="strava-text-secondary" style={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Recent Captures</span>
+              <div className="clash-card" style={{ gap: '10px' }}>
+                <span className="clash-label" style={{ fontSize: '10px' }}>Recent Captures</span>
                 {(() => {
                   const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
                   if (userTerrs.length > 0) {
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {userTerrs.slice(-2).reverse().map((terr, index) => (
-                          <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '8px 12px', borderRadius: '10px' }}>
+                          <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '8px 12px', borderRadius: '10px', border: '1px solid var(--clash-border)' }}>
                             <span style={{ fontSize: '12px', color: 'white', fontWeight: '700' }}>{terr.name}</span>
-                            <span className="strava-orange" style={{ fontSize: '11px', fontWeight: '700', fontFamily: 'var(--font-mono)' }}>{terr.area} sq m</span>
+                            <span style={{ fontSize: '11px', fontWeight: '700', color: '#FC4C02', fontFamily: 'var(--clash-font-family)' }}>{terr.area} sq m</span>
                           </div>
                         ))}
                       </div>
@@ -1759,8 +1864,8 @@ export default function App() {
                   }
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0', textAlign: 'center', gap: '6px' }}>
-                      <Compass size={18} className="strava-text-secondary" style={{ opacity: 0.4 }} />
-                      <div style={{ fontSize: '12px', fontWeight: '700', color: 'white' }}>No recent activities</div>
+                      <Compass size={18} className="clash-body" style={{ opacity: 0.4 }} />
+                      <div className="clash-subtitle" style={{ fontSize: '12px' }}>No recent activities</div>
                     </div>
                   );
                 })()}
@@ -1774,136 +1879,153 @@ export default function App() {
               {/* Fullscreen Map Hero */}
               <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
 
-              {/* Floating top HUD */}
-              <div style={{
-                position: 'absolute',
-                top: '16px',
-                left: '16px',
-                right: '16px',
-                background: '#151515',
-                border: '1px solid #2A2A2A',
-                borderRadius: '20px',
-                padding: '8px 12px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                zIndex: 999,
-                boxShadow: 'var(--clash-shadow-md)'
-              }}>
-                {/* Profile Avatar circle */}
+              {/* Floating top Command Header */}
+              <div 
+                className="clash-glass-panel animate-fade-in-down"
+                style={{
+                  position: 'absolute',
+                  top: '16px',
+                  left: '16px',
+                  right: '16px',
+                  borderRadius: '24px',
+                  padding: '10px 12px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  zIndex: 999,
+                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+                  gap: '6px'
+                }}
+              >
+                {/* LEFT: Profile & Clan Info */}
                 <div 
                   onClick={() => setShowSettingsDrawer(true)}
-                  style={{
-                    width: '40px',
-                    height: '40px',
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0 }}
+                >
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     background: '#FC4C02',
-                    color: 'white',
+                    border: '1.5px solid rgba(255, 255, 255, 0.2)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: '13px',
+                    fontSize: '12px',
                     fontWeight: '800',
-                    cursor: 'pointer',
-                    border: '2px solid white',
-                    boxShadow: 'var(--clash-shadow-sm)',
-                    transition: 'transform 0.15s ease',
+                    color: 'white',
                     flexShrink: 0
                   }}
-                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
-                  title="Open settings"
-                >
-                  {(currentUser.displayName || 'R')[0].toUpperCase()}
+                  className="clash-btn-press"
+                  >
+                    {(currentUser.displayName || 'R')[0].toUpperCase()}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flexShrink: 0 }}>
+                    <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', lineHeight: 1 }}>
+                      {currentUser.displayName}
+                    </span>
+                    <span style={{ fontSize: '7px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {currentUser.clan || 'Udaipur Racers'}
+                    </span>
+                  </div>
                 </div>
 
-                {/* Coin Balance Chip */}
+                {/* CENTER: Coin Counter */}
                 <div style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid #2A2A2A',
-                  height: '40px',
-                  padding: '0 12px',
-                  borderRadius: '20px',
+                  background: 'rgba(0, 0, 0, 0.25)',
+                  border: '1px solid rgba(255, 255, 255, 0.05)',
+                  height: '30px',
+                  padding: '0 8px',
+                  borderRadius: '15px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px'
+                  gap: '4px',
+                  flexShrink: 0
                 }}>
-                  <Coins size={14} style={{ color: '#FC4C02' }} />
-                  <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
+                  <Coins size={11} style={{ color: '#FC4C02' }} />
+                  <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
                     {currentUser.coins}
                   </span>
                 </div>
 
-                {/* GPS Status Chip */}
-                <div style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid #2A2A2A',
-                  height: '40px',
-                  padding: '0 12px',
-                  borderRadius: '20px',
-                  fontSize: '11px',
-                  fontWeight: '800',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  color: 'white'
-                }}>
-                  {(() => {
-                    if (trackingMode === 'sim') {
-                      return (
-                        <>
-                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }}></span>
-                          <span>Sim Stride</span>
-                        </>
-                      );
-                    }
-                    if (runState.gpsAccuracy === null) {
-                      return (
-                        <>
-                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#f1c40f', display: 'inline-block' }}></span>
-                          <span>Searching</span>
-                        </>
-                      );
-                    }
-                    if (runState.gpsAccuracy < 30) {
-                      return (
-                        <>
-                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71', display: 'inline-block' }}></span>
-                          <span>GPS Ready</span>
-                        </>
-                      );
-                    }
-                    return (
-                      <>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#e74c3c', display: 'inline-block' }}></span>
-                        <span>GPS Lost</span>
-                      </>
-                    );
-                  })()}
-                </div>
+                {/* RIGHT: Level, GPS Status & Settings */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  {/* Level Badge */}
+                  <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.2)', padding: '3px 6px', borderRadius: '8px', flexShrink: 0 }}>
+                    LVL {currentUser.level}
+                  </span>
 
-                {/* Settings Gear Button */}
-                <button 
-                  onClick={() => setShowSettingsDrawer(true)}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid #2A2A2A',
-                    color: 'white',
-                    width: '40px',
-                    height: '40px',
-                    borderRadius: '50%',
+                  {/* GPS Status Indicator */}
+                  <div style={{
+                    background: 'rgba(0, 0, 0, 0.25)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    height: '30px',
+                    padding: '0 8px',
+                    borderRadius: '15px',
+                    fontSize: '9px',
+                    fontWeight: '800',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    transition: 'transform 0.15s ease'
-                  }}
-                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
-                  title="Tactical settings"
-                >
-                  <Settings size={15} />
-                </button>
+                    gap: '4px',
+                    color: 'white',
+                    flexShrink: 0
+                  }}>
+                    {(() => {
+                      if (trackingMode === 'sim') {
+                        return (
+                          <>
+                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }} className="gps-pulse"></span>
+                            <span style={{ fontSize: '9px' }}>Sim</span>
+                          </>
+                        );
+                      }
+                      if (runState.gpsAccuracy === null) {
+                        return (
+                          <>
+                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#888888', display: 'inline-block' }}></span>
+                            <span style={{ fontSize: '9px' }}>GPS</span>
+                          </>
+                        );
+                      }
+                      if (runState.gpsAccuracy < 30) {
+                        return (
+                          <>
+                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} className="gps-pulse"></span>
+                            <span style={{ fontSize: '9px' }}>GPS</span>
+                          </>
+                        );
+                      }
+                      return (
+                        <>
+                          <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#EF4444', display: 'inline-block' }}></span>
+                          <span style={{ fontSize: '9px' }}>Lost</span>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Settings Button */}
+                  <button 
+                    onClick={() => setShowSettingsDrawer(true)}
+                    style={{
+                      background: 'rgba(0, 0, 0, 0.25)',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      color: 'white',
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}
+                    className="clash-btn-press"
+                    title="Tactical settings"
+                  >
+                    <Settings size={12} style={{ color: '#FC4C02' }} />
+                  </button>
+                </div>
               </div>
 
               {/* Accuracy floating indicator */}
@@ -1919,7 +2041,7 @@ export default function App() {
                   fontSize: '9px',
                   zIndex: 999,
                   border: '1px solid #2A2A2A',
-                  color: runState.gpsAccuracy < 15 ? '#2ecc71' : '#f1c40f',
+                  color: 'white',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
@@ -1928,7 +2050,7 @@ export default function App() {
                   textTransform: 'uppercase',
                   boxShadow: 'var(--clash-shadow-sm)'
                 }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? '#2ecc71' : '#f1c40f' }}></div>
+                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: runState.gpsAccuracy < 15 ? '#FC4C02' : '#A8A8A8' }}></div>
                   GPS Accuracy: {Math.round(runState.gpsAccuracy)}m
                 </div>
               )}
@@ -1941,7 +2063,7 @@ export default function App() {
                 right: '16px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '8px',
+                gap: '10px',
                 zIndex: 999
               }}>
                 {/* Zoom In */}
@@ -1950,23 +2072,21 @@ export default function App() {
                     if (mapInstanceRef.current) mapInstanceRef.current.zoomIn();
                   }}
                   style={{
-                    width: '42px',
-                    height: '42px',
+                    width: '44px',
+                    height: '44px',
                     borderRadius: '50%',
                     border: '1px solid #2A2A2A',
-                    color: 'white',
+                    color: '#FC4C02',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     background: '#151515',
-                    boxShadow: 'var(--clash-shadow-md)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
                     cursor: 'pointer',
-                    fontSize: '18px',
-                    fontWeight: '800',
-                    transition: 'transform 0.15s ease'
+                    fontSize: '20px',
+                    fontWeight: '800'
                   }}
-                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  className="clash-btn-press"
                   title="Zoom In"
                 >
                   +
@@ -1978,23 +2098,21 @@ export default function App() {
                     if (mapInstanceRef.current) mapInstanceRef.current.zoomOut();
                   }}
                   style={{
-                    width: '42px',
-                    height: '42px',
+                    width: '44px',
+                    height: '44px',
                     borderRadius: '50%',
                     border: '1px solid #2A2A2A',
-                    color: 'white',
+                    color: '#FC4C02',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     background: '#151515',
-                    boxShadow: 'var(--clash-shadow-md)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
                     cursor: 'pointer',
-                    fontSize: '18px',
-                    fontWeight: '800',
-                    transition: 'transform 0.15s ease'
+                    fontSize: '20px',
+                    fontWeight: '800'
                   }}
-                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  className="clash-btn-press"
                   title="Zoom Out"
                 >
                   -
@@ -2004,21 +2122,19 @@ export default function App() {
                 <button 
                   onClick={recenterMap}
                   style={{
-                    width: '42px',
-                    height: '42px',
+                    width: '44px',
+                    height: '44px',
                     borderRadius: '50%',
                     border: '1px solid #2A2A2A',
-                    color: 'white',
+                    color: '#FC4C02',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     background: '#151515',
-                    boxShadow: 'var(--clash-shadow-md)',
-                    cursor: 'pointer',
-                    transition: 'transform 0.15s ease'
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    cursor: 'pointer'
                   }}
-                  onMouseDown={e => e.currentTarget.style.transform = 'scale(0.92)'}
-                  onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  className="clash-btn-press"
                   title="Recenter GPS"
                 >
                   <Navigation size={15} style={{ transform: 'rotate(45deg)', color: '#FC4C02' }} />
@@ -2026,229 +2142,420 @@ export default function App() {
               </div>
 
               {/* Draggable bottom sheet / Startup Action Deck */}
-              {runState.status === 'idle' && (
-                <div 
-                  className="clash-bottom-sheet"
-                  style={{
-                    position: 'absolute',
-                    bottom: '16px',
-                    left: '16px',
-                    right: '16px',
-                    zIndex: 999,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px',
-                    maxHeight: isBottomSheetExpanded ? '440px' : '110px',
-                    overflow: 'hidden',
-                    transition: 'max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-                  }}
-                >
-                  {/* Pull Tab Handle */}
+              {runState.status === 'idle' && (() => {
+                let runnerLatLng = null;
+                if (runnerMarkerRef.current) {
+                  runnerLatLng = runnerMarkerRef.current.getLatLng();
+                } else if (mapInstanceRef.current) {
+                  runnerLatLng = mapInstanceRef.current.getCenter();
+                }
+
+                // If a territory is selected, calculate distance to it
+                let targetDist = 'Dynamic';
+                let difficulty = 'Medium';
+                if (renderedTerritory && runnerLatLng) {
+                  const firstCoord = renderedTerritory.coords[0];
+                  const dist = getGeodeticDistance(runnerLatLng.lat, runnerLatLng.lng, firstCoord[0], firstCoord[1]);
+                  targetDist = `${dist.toFixed(2)} km`;
+                  difficulty = renderedTerritory.rate >= 10 ? 'Hard' : (renderedTerritory.id === 't2' ? 'Medium' : 'Easy');
+                }
+
+                // Header status badge pill calculations
+                let pillText = 'Abandoned';
+                let pillColor = '#888888';
+                let pillBg = 'rgba(136, 136, 136, 0.1)';
+                let primaryActionLabel = 'Capture Territory';
+
+                if (renderedTerritory) {
+                  const isOwner = renderedTerritory.ownerId === currentUser.uid;
+                  const isTeammate = renderedTerritory.clan === currentUser.clan && !isOwner;
+                  const isEnemy = renderedTerritory.clan && renderedTerritory.clan !== currentUser.clan && renderedTerritory.ownerName !== 'Unclaimed';
+                  
+                  if (renderedTerritory.ownerName === 'Unclaimed') {
+                    pillText = 'Neutral';
+                    pillColor = '#EAB308'; // Orange
+                    pillBg = 'rgba(234, 179, 8, 0.15)';
+                    primaryActionLabel = 'Capture Territory';
+                  } else if (isOwner) {
+                    if (renderedTerritory.decayHours > 24) {
+                      pillText = 'Protected';
+                      pillColor = '#10B981'; // Green
+                      pillBg = 'rgba(16, 185, 129, 0.15)';
+                    } else {
+                      pillText = 'Friendly';
+                      pillColor = '#10B981'; // Green
+                      pillBg = 'rgba(16, 185, 129, 0.15)';
+                    }
+                    primaryActionLabel = 'Defend Territory';
+                  } else if (isTeammate) {
+                    pillText = 'Clan';
+                    pillColor = '#3B82F6'; // Blue
+                    pillBg = 'rgba(59, 130, 246, 0.15)';
+                    primaryActionLabel = 'Defend Territory';
+                  } else if (isEnemy) {
+                    if (renderedTerritory.decayHours > 40) {
+                      pillText = 'Contested';
+                      pillColor = '#EF4444'; // Red
+                      pillBg = 'rgba(239, 68, 68, 0.15)';
+                      primaryActionLabel = 'Continue Capture';
+                    } else {
+                      pillText = 'Enemy';
+                      pillColor = '#EF4444'; // Red
+                      pillBg = 'rgba(239, 68, 68, 0.15)';
+                      primaryActionLabel = 'Attack Sector';
+                    }
+                  }
+                }
+
+                return (
                   <div 
-                    onClick={() => setIsBottomSheetExpanded(prev => !prev)}
+                    className="clash-bottom-sheet animate-slide-in-up"
                     style={{
-                      width: '40px',
-                      height: '4px',
-                      background: '#2D2D2D',
-                      borderRadius: '2px',
-                      margin: '0 auto 4px auto',
-                      cursor: 'pointer'
+                      position: 'absolute',
+                      bottom: '16px',
+                      left: '16px',
+                      right: '16px',
+                      zIndex: 999,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      maxHeight: isBottomSheetExpanded && renderedTerritory ? '480px' : '120px',
+                      overflow: 'hidden',
+                      borderRadius: '28px',
+                      background: '#151515',
+                      border: '1px solid #2A2A2A',
+                      padding: '16px 20px',
+                      boxShadow: '0 -8px 32px rgba(0, 0, 0, 0.4)',
+                      transition: 'max-height 250ms cubic-bezier(0.4, 0, 0.2, 1)'
                     }}
-                  ></div>
-
-                  {!isBottomSheetExpanded ? (
-                    /* Collapsed Panel View */
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '60px' }}>
+                  >
+                    {/* Pull Tab Handle */}
+                    {renderedTerritory && (
                       <div 
-                        onClick={() => setIsBottomSheetExpanded(true)}
-                        style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer', gap: '2px' }}
+                        onClick={() => setIsBottomSheetExpanded(prev => !prev)}
+                        style={{
+                          width: '40px',
+                          height: '4px',
+                          background: '#2D2D2D',
+                          borderRadius: '2px',
+                          margin: '0 auto 4px auto',
+                          cursor: 'pointer'
+                        }}
+                      ></div>
+                    )}
+
+                    {/* Empty State */}
+                    {!renderedTerritory ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', height: '80px', justifyContent: 'center' }}>
+                        <div style={{
+                          width: '44px',
+                          height: '44px',
+                          borderRadius: '50%',
+                          background: 'rgba(252, 76, 2, 0.08)',
+                          border: '1px solid rgba(252, 76, 2, 0.2)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <Compass size={20} className="intel-badge-pulse" style={{ color: '#FC4C02' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
+                          <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '800', color: 'white' }}>No Sector Selected</h4>
+                          <p style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                            Tap any nearby territory to inspect it.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Inspected Territory Intelligence Card */
+                      <div 
+                        className="intel-content-transition"
+                        style={{ 
+                          display: 'flex', 
+                          flexDirection: 'column', 
+                          gap: '12px',
+                          opacity: isInspectingTransition ? 0 : 1
+                        }}
                       >
-                        <span className="clash-label">Selected Sector</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span className="clash-subtitle" style={{ fontSize: '14px' }}>
-                            {trackingMode === 'gps' ? 'Outside Real GPS' : SIMULATION_ROUTES[simulationRouteKey].name}
-                          </span>
-                          <ChevronUp size={14} style={{ color: '#FC4C02' }} />
-                        </div>
-                        <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
-                          {trackingMode === 'gps' ? 'Dynamic Stride • Ready' : `${SIMULATION_ROUTES[simulationRouteKey].distance} • Medium`}
-                        </span>
-                      </div>
-
-                      <button 
-                        onClick={startTracking}
-                        className="clash-btn-primary"
-                        style={{ height: '48px', padding: '0 24px' }}
-                      >
-                        START RUN
-                      </button>
-                    </div>
-                  ) : (
-                    /* Expanded Configuration Panel View */
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 className="clash-subtitle" style={{ margin: 0, fontSize: '16px' }}>Configure Run Explorer</h3>
-                        <button 
-                          onClick={() => setIsBottomSheetExpanded(false)}
-                          style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', cursor: 'pointer' }}
-                        >
-                          <ChevronDown size={20} />
-                        </button>
-                      </div>
-
-                      {/* Tracker switcher control */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <span className="clash-label" style={{ fontSize: '9px' }}>Tracking Technology</span>
-                        <div style={{ display: 'flex', background: '#0B0B0B', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
-                          <button 
-                            onClick={() => setTrackingMode('sim')}
-                            style={{
-                              flex: 1,
-                              background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
-                              color: 'white',
-                              border: 'none',
-                              padding: '8px 0',
-                              borderRadius: '10px',
-                              fontSize: '11px',
-                              fontWeight: '800',
-                              cursor: 'pointer',
-                              transition: 'background 0.2s'
-                            }}
-                          >
-                            Dev Simulator
-                          </button>
-                          <button 
-                            onClick={() => setTrackingMode('gps')}
-                            style={{
-                              flex: 1,
-                              background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
-                              color: 'white',
-                              border: 'none',
-                              padding: '8px 0',
-                              borderRadius: '10px',
-                              fontSize: '11px',
-                              fontWeight: '800',
-                              cursor: 'pointer',
-                              transition: 'background 0.2s'
-                            }}
-                          >
-                            Real GPS Stride
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Simulation route selector dropdown */}
-                      {trackingMode === 'sim' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span className="clash-label" style={{ fontSize: '9px' }}>Simulation Route Key</span>
-                          <select 
-                            value={simulationRouteKey}
-                            onChange={(e) => setSimulationRouteKey(e.target.value)}
-                            style={{
-                              background: '#0B0B0B',
-                              border: '1px solid #2A2A2A',
-                              color: 'white',
-                              padding: '10px',
-                              borderRadius: '12px',
-                              fontSize: '12px',
-                              fontWeight: '700',
-                              width: '100%',
-                              outline: 'none',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            {Object.entries(SIMULATION_ROUTES).map(([key, val]) => (
-                              <option key={key} value={key}>{val.name} ({val.distance})</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Details Grid */}
-                      {(() => {
-                        let runnerLatLng = null;
-                        if (runnerMarkerRef.current) {
-                          runnerLatLng = runnerMarkerRef.current.getLatLng();
-                        } else if (mapInstanceRef.current) {
-                          runnerLatLng = mapInstanceRef.current.getCenter();
-                        }
-
-                        let nearest = null;
-                        let minDist = Infinity;
-                        if (runnerLatLng && territories.length > 0) {
-                          territories.forEach(terr => {
-                            if (!terr.coords || terr.coords.length === 0) return;
-                            const firstCoord = terr.coords[0];
-                            const dist = getGeodeticDistance(runnerLatLng.lat, runnerLatLng.lng, firstCoord[0], firstCoord[1]);
-                            if (dist < minDist) {
-                              minDist = dist;
-                              nearest = terr;
-                            }
-                          });
-                        }
-
-                        const hasNearest = nearest && minDist <= 1.5;
-
-                        return (
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#0B0B0B', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
-                            <div>
-                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Sector Owner</span>
-                              <span style={{ fontSize: '11px', fontWeight: '700', color: 'white' }}>
-                                {hasNearest ? nearest.ownerName : 'Unclaimed'}
-                              </span>
+                        {/* Collapsed Header View */}
+                        {!isBottomSheetExpanded ? (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '80px' }}>
+                            <div 
+                              onClick={() => setIsBottomSheetExpanded(true)}
+                              style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer', gap: '4px', width: '55%' }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: pillColor, display: 'inline-block' }} className="intel-badge-pulse"></span>
+                                <span className="clash-subtitle" style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', margin: 0 }}>
+                                  {renderedTerritory.name}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{
+                                  padding: '2px 6px',
+                                  borderRadius: '6px',
+                                  fontSize: '7.5px',
+                                  fontWeight: '800',
+                                  background: pillBg,
+                                  color: pillColor,
+                                  textTransform: 'uppercase'
+                                }}>
+                                  {pillText}
+                                </span>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
+                                  {difficulty.toUpperCase()} • {targetDist}
+                                </span>
+                              </div>
                             </div>
-                            <div>
-                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Shield Status</span>
-                              <span style={{ fontSize: '11px', fontWeight: '700', color: hasNearest && nearest.decayHours > 0 ? '#2ecc71' : '#e74c3c' }}>
-                                {hasNearest ? (nearest.decayHours > 0 ? `${nearest.decayHours}h remaining` : 'Decayed') : 'No Shield'}
-                              </span>
+
+                            <button 
+                              onClick={startTracking}
+                              className="clash-btn-primary clash-btn-press"
+                              style={{ 
+                                width: '40%', 
+                                height: '44px', 
+                                borderRadius: '22px', 
+                                border: 'none', 
+                                background: '#FC4C02', 
+                                color: 'white', 
+                                fontWeight: '800', 
+                                fontSize: '11px',
+                                letterSpacing: '0.5px',
+                                boxShadow: '0 6px 16px rgba(252, 76, 2, 0.25)' 
+                              }}
+                            >
+                              {primaryActionLabel.toUpperCase()}
+                            </button>
+                          </div>
+                        ) : (
+                          /* Expanded Panel Details */
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span className="clash-label" style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>TERRITORY INTELLIGENCE</span>
+                              <button 
+                                onClick={() => setIsBottomSheetExpanded(false)}
+                                style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                                className="clash-btn-press"
+                              >
+                                <ChevronDown size={20} />
+                              </button>
                             </div>
-                            <div>
-                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Target Distance</span>
-                              <span style={{ fontSize: '11px', fontWeight: '700', color: 'white' }}>
-                                {trackingMode === 'gps' ? 'Dynamic' : SIMULATION_ROUTES[simulationRouteKey].distance}
-                              </span>
+
+                            {/* Geometric Preview & Header */}
+                            <div style={{ display: 'flex', gap: '14px', alignItems: 'center', background: '#0B0B0D', padding: '12px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
+                              {/* Relative SVG Polygon Preview */}
+                              <div style={{
+                                width: '72px',
+                                height: '72px',
+                                borderRadius: '12px',
+                                background: '#151515',
+                                border: '1px solid #2A2A2A',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                                overflow: 'hidden'
+                              }}>
+                                {(() => {
+                                  const coords = renderedTerritory.coords;
+                                  if (!coords || coords.length === 0) return null;
+                                  const lats = coords.map(c => c[0]);
+                                  const lngs = coords.map(c => c[1]);
+                                  const minLat = Math.min(...lats);
+                                  const maxLat = Math.max(...lats);
+                                  const minLng = Math.min(...lngs);
+                                  const maxLng = Math.max(...lngs);
+                                  
+                                  const latRange = maxLat - minLat || 0.0001;
+                                  const lngRange = maxLng - minLng || 0.0001;
+                                  
+                                  const points = coords.map(c => {
+                                    const x = 6 + ((c[1] - minLng) / lngRange) * 60;
+                                    const y = 66 - ((c[0] - minLat) / latRange) * 60;
+                                    return `${x.toFixed(1)},${y.toFixed(1)}`;
+                                  }).join(' ');
+
+                                  return (
+                                    <svg width="72" height="72" viewBox="0 0 72 72">
+                                      <polygon 
+                                        points={points} 
+                                        fill={pillColor} 
+                                        fillOpacity="0.15" 
+                                        stroke={pillColor} 
+                                        strokeWidth="2" 
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Title and Pill */}
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: pillColor, display: 'inline-block' }} className="intel-badge-pulse"></span>
+                                  <span style={{ fontSize: '8px', color: '#FC4C02', fontWeight: '800', letterSpacing: '0.5px', textTransform: 'uppercase' }}>SECTOR PROFILE</span>
+                                </div>
+                                <h4 style={{ margin: 0, fontSize: '15px', color: 'white', fontWeight: '800', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {renderedTerritory.name}
+                                </h4>
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                  <span style={{
+                                    padding: '2px 8px',
+                                    borderRadius: '8px',
+                                    fontSize: '8px',
+                                    fontWeight: '800',
+                                    background: pillBg,
+                                    color: pillColor,
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.3px',
+                                    border: `1.5px solid ${pillColor}10`
+                                  }}
+                                  className="intel-badge-pulse"
+                                  >
+                                    {pillText}
+                                  </span>
+                                  <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                                    {renderedTerritory.area}
+                                  </span>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Difficulty</span>
-                              <span style={{ fontSize: '11px', fontWeight: '700', color: '#f1c40f' }}>
-                                {trackingMode === 'gps' ? 'Custom' : simulationRouteKey === 'lake' ? 'Hard' : 'Medium'}
-                              </span>
+
+                            {/* 2-Column Info Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', background: '#0B0B0D', padding: '14px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Owner</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {renderedTerritory.ownerName}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Reward Coins</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {renderedTerritory.rate ? `+${renderedTerritory.rate} Coins/Hr` : '50 Coins'}
+                                </span>
+                              </div>
+                              
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Distance</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {targetDist}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Capture Progress</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {renderedTerritory.ownerId === currentUser.uid ? '100%' : '0%'}
+                                </span>
+                              </div>
+
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Difficulty</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {difficulty}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Estimated Time</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {trackingMode === 'sim' ? '12 min' : 'Dynamic'}
+                                </span>
+                              </div>
+
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Reward XP</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: '#FC4C02', fontWeight: '800' }}>
+                                  120 XP
+                                </span>
+                              </div>
+                              <div>
+                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Simulation Key</span>
+                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                  {renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument')}
+                                </span>
+                              </div>
                             </div>
-                            <div style={{ gridColumn: 'span 2' }}>
-                              <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Estimated Conquest Rewards</span>
-                              <span style={{ fontSize: '11px', fontWeight: '700', color: '#FC4C02' }}>
-                                {hasNearest ? `+${nearest.rate || 5} Coins/Hr & +150 XP` : '+50 Coins & +150 XP on completion'}
-                              </span>
+
+                            {/* Dev Switcher Controls (Kept for simulator config capability) */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <span className="clash-label" style={{ fontSize: '8px' }}>Tracker Configuration</span>
+                              <div style={{ display: 'flex', background: '#0B0B0D', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
+                                <button 
+                                  onClick={() => setTrackingMode('sim')}
+                                  style={{
+                                    flex: 1,
+                                    background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '6px 0',
+                                    borderRadius: '10px',
+                                    fontSize: '10px',
+                                    fontWeight: '800',
+                                    cursor: 'pointer'
+                                  }}
+                                  className="clash-btn-press"
+                                >
+                                  Dev Simulator
+                                </button>
+                                <button 
+                                  onClick={() => setTrackingMode('gps')}
+                                  style={{
+                                    flex: 1,
+                                    background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '6px 0',
+                                    borderRadius: '10px',
+                                    fontSize: '10px',
+                                    fontWeight: '800',
+                                    cursor: 'pointer'
+                                  }}
+                                  className="clash-btn-press"
+                                >
+                                  Real GPS Stride
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Actions */}
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '2px' }}>
+                              <button 
+                                onClick={() => {
+                                  if (mapInstanceRef.current && renderedTerritory.coords?.length > 0) {
+                                    mapInstanceRef.current.flyTo(renderedTerritory.coords[0], 15);
+                                    addLog(`System: Navigating viewport to ${renderedTerritory.name}.`);
+                                  }
+                                }}
+                                className="clash-btn-secondary clash-btn-press"
+                                style={{ height: '44px', flex: 1, borderRadius: '22px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#151515', border: '1px solid #2A2A2A', color: 'white', fontWeight: '800' }}
+                              >
+                                Navigate
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  // Auto-set the correct route key if using simulator
+                                  if (trackingMode === 'sim') {
+                                    const key = renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument');
+                                    setSimulationRouteKey(key);
+                                  }
+                                  setIsBottomSheetExpanded(false);
+                                  startTracking();
+                                }}
+                                className="clash-btn-primary clash-btn-press"
+                                style={{ height: '44px', flex: 1.5, borderRadius: '22px', fontSize: '11px', boxShadow: '0 8px 16px rgba(252, 76, 2, 0.25)', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
+                              >
+                                {primaryActionLabel.toUpperCase()}
+                              </button>
                             </div>
                           </div>
-                        );
-                      })()}
-
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <button 
-                          onClick={() => alert("Route planning active! Map out your sector loop bounds.")}
-                          className="clash-btn-secondary"
-                          style={{ height: '48px', flex: 1 }}
-                        >
-                          Plan Route
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setIsBottomSheetExpanded(false);
-                            startTracking();
-                          }}
-                          className="clash-btn-primary"
-                          style={{ height: '48px', flex: 1.5 }}
-                        >
-                          START RUN NOW
-                        </button>
+                        )}
                       </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Active Run HUD (Live Stride stats overlay) */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (
@@ -2325,44 +2632,44 @@ export default function App() {
               {/* Controlled Sectors */}
               <div>
                 <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
-                  <Target size={15} className="text-neon-blue" /> Controlled Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).length})
+                  <Target size={15} style={{ color: '#FC4C02' }} /> Controlled Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).length})
                 </h3>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).length === 0 ? (
-                    <div className="card-cyber card-cyber-static" style={{ borderStyle: 'dashed', padding: '32px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                      <Compass size={32} className="text-neon-pink glow-active-pulse" style={{ margin: '0 auto 12px auto' }} />
-                      <h4 className="text-base m-0" style={{ color: 'white', fontWeight: '800', marginBottom: '6px' }}>NO ACTIVE SECTORS DETECTED</h4>
-                      <p className="text-sm m-0" style={{ lineHeight: '1.4', marginBottom: '16px' }}>
+                    <div className="clash-card" style={{ borderStyle: 'dashed', padding: '32px', textAlign: 'center' }}>
+                      <Compass size={32} style={{ color: '#FC4C02', margin: '0 auto 12px auto' }} />
+                      <h4 className="clash-subtitle" style={{ margin: '0 0 6px 0' }}>NO ACTIVE SECTORS DETECTED</h4>
+                      <p className="clash-body" style={{ margin: '0 0 16px 0' }}>
                         Step outside, start your GPS run, and close a path loop to establish Udaipur crew dominance.
                       </p>
-                      <button className="btn-neon focus-ring btn-sm" onClick={() => setActiveTab('map')}>
+                      <button className="clash-btn-primary btn-sm" onClick={() => setActiveTab('map')}>
                         Launch Tactical Map
                       </button>
                     </div>
                   ) : (
                     territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).map(terr => {
-                      const clanColor = terr.clan === 'Udaipur Racers' ? 'var(--neon-blue)' : terr.clan === 'GITS Runners' ? 'var(--neon-pink)' : '#ffffff';
+                      const clanColor = terr.clan === 'Udaipur Racers' ? '#FC4C02' : terr.clan === 'GITS Runners' ? '#FFFFFF' : '#555555';
                       const maxDecay = terr.maxDecayHours || 72;
                       const currentDecay = terr.decayHours || 72;
                       const percentage = Math.max(0, Math.min(100, (currentDecay / maxDecay) * 100));
                       
                       return (
-                        <div key={terr.id} className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', borderLeft: `3.5px solid ${clanColor}` }}>
+                        <div key={terr.id} className="clash-card p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', borderLeft: `4px solid ${clanColor}` }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <h4 className="text-base m-0" style={{ color: 'white', fontWeight: '800' }}>{terr.name}</h4>
-                                <span className="text-xs" style={{ background: 'rgba(0, 229, 255, 0.08)', border: '1px solid var(--neon-blue)', padding: '2px 6px', borderRadius: '8px', color: 'var(--neon-blue)', fontWeight: '800', textTransform: 'uppercase' }}>SECURED</span>
+                                <h4 className="clash-subtitle" style={{ margin: '0' }}>{terr.name}</h4>
+                                <span className="clash-label" style={{ background: 'rgba(252, 76, 2, 0.05)', border: '1px solid #FC4C02', padding: '2px 6px', borderRadius: '8px', color: '#FC4C02', fontSize: '8px' }}>SECURED</span>
                               </div>
-                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                              <span className="clash-body" style={{ fontSize: '11px' }}>
                                 Area: {terr.area}
                               </span>
                             </div>
                             <button 
                               onClick={() => useShield(terr.id)}
-                              className="btn-secondary focus-ring btn-sm"
-                              style={{ borderColor: 'var(--neon-blue)', color: 'var(--neon-blue)', background: 'rgba(0, 229, 255, 0.04)' }}
+                              className="clash-btn-secondary btn-sm"
+                              style={{ borderColor: '#FC4C02', color: '#FC4C02' }}
                             >
                               <Shield size={11} /> Fortify
                             </button>
@@ -2370,12 +2677,12 @@ export default function App() {
 
                           {/* Rewards details */}
                           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 251, 0, 0.06)', border: '1px solid rgba(255,251,0,0.12)', padding: '2px 8px', borderRadius: '12px' }}>
-                              <Coins size={10} className="text-neon-yellow" />
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--clash-border)', padding: '2px 8px', borderRadius: '12px' }}>
+                              <Coins size={10} style={{ color: '#FC4C02' }} />
                               <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>+{terr.rate || 5} COINS/HR</span>
                             </div>
-                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(157, 78, 221, 0.06)', border: '1px solid rgba(157,78,221,0.12)', padding: '2px 8px', borderRadius: '12px' }}>
-                              <Award size={10} className="text-neon-purple" />
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--clash-border)', padding: '2px 8px', borderRadius: '12px' }}>
+                              <Award size={10} style={{ color: 'white' }} />
                               <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>+150 XP CAPTURE</span>
                             </div>
                           </div>
@@ -2383,11 +2690,11 @@ export default function App() {
                           {/* Shield integrity slider */}
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', marginBottom: '4px' }}>
-                              <span style={{ color: 'var(--text-secondary)' }}>Shield integrity</span>
+                              <span className="clash-body">Shield integrity</span>
                               <span style={{ color: clanColor, fontWeight: '800' }}>{currentDecay}h remaining</span>
                             </div>
-                            <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
-                              <div style={{ width: `${percentage}%`, height: '100%', background: `linear-gradient(90deg, ${clanColor} 0%, var(--neon-pink) 100%)`, borderRadius: '3px', transition: 'width 0.4s ease' }}></div>
+                            <div className="clash-progress-bar">
+                              <div className="clash-progress-bar-fill" style={{ width: `${percentage}%`, backgroundColor: clanColor }}></div>
                             </div>
                           </div>
                         </div>
@@ -2400,25 +2707,25 @@ export default function App() {
               {/* Historical / Expired holdings */}
               {territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).length > 0 && (
                 <div>
-                  <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px', color: 'var(--text-secondary)' }}>
-                    <RefreshCw size={14} className="text-neon-pink" /> Lost & Expired Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).length})
+                  <h3 className="clash-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                    <RefreshCw size={14} style={{ color: '#FC4C02' }} /> Lost & Expired Sectors ({territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).length})
                   </h3>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false).map(terr => (
-                      <div key={terr.id} className="card-cyber card-cyber-static p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', opacity: 0.65, borderLeft: '3.5px solid var(--text-muted)' }}>
+                      <div key={terr.id} className="clash-card p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', opacity: 0.65, borderLeft: '4px solid #555555' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <h4 className="text-base m-0" style={{ color: 'var(--text-secondary)', fontWeight: '800' }}>{terr.name}</h4>
-                              <span className="text-xs" style={{ background: 'rgba(255, 0, 127, 0.08)', border: '1px solid var(--neon-pink)', padding: '2px 6px', borderRadius: '8px', color: 'var(--neon-pink)', fontWeight: '800', textTransform: 'uppercase' }}>DECAYED</span>
+                              <h4 className="clash-subtitle" style={{ margin: '0' }}>{terr.name}</h4>
+                              <span className="clash-label" style={{ border: '1px solid #555555', padding: '2px 6px', borderRadius: '8px', color: '#9CA3AF', fontSize: '8px' }}>DECAYED</span>
                             </div>
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Lost area: {terr.area}</span>
+                            <span className="clash-body" style={{ fontSize: '10px' }}>Lost area: {terr.area}</span>
                           </div>
                           <button 
                             onClick={() => setActiveTab('map')}
-                            className="btn-secondary focus-ring btn-sm"
-                            style={{ borderColor: 'var(--neon-pink)', color: 'var(--neon-pink)', background: 'rgba(255, 0, 127, 0.04)' }}
+                            className="clash-btn-secondary btn-sm"
+                            style={{ borderColor: '#FC4C02', color: '#FC4C02' }}
                           >
                             Reclaim
                           </button>
@@ -2432,285 +2739,765 @@ export default function App() {
               {/* Power-up Shop */}
               <div>
                 <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '14px' }}>
-                  <Coins size={15} className="text-neon-yellow" /> Power-Up Armory
+                  <Coins size={15} style={{ color: '#FC4C02' }} /> Power-Up Armory
                 </h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div className="card-cyber card-cyber-interactive" onClick={() => buyItem('shields', shopCosts.shield)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center' }}>
-                    <Shield size={24} className="text-neon-blue" style={{ filter: 'drop-shadow(0 0 6px rgba(0, 229, 255, 0.3))' }} />
-                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', marginTop: '2px' }}>Shield (24h)</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Inventory: {inventory.shields}</span>
+                  <div className="clash-card" onClick={() => buyItem('shields', shopCosts.shield)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center', cursor: 'pointer' }}>
+                    <Shield size={24} style={{ color: '#FC4C02' }} />
+                    <span className="clash-subtitle" style={{ fontSize: '12px', marginTop: '2px' }}>Shield (24h)</span>
+                    <span className="clash-body" style={{ fontSize: '10px' }}>Inventory: {inventory.shields}</span>
                     <button 
-                      className="btn-secondary btn-sm focus-ring"
+                      className="clash-btn-secondary btn-sm"
                       style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
-                      <Coins size={10} className="text-neon-yellow" /> {shopCosts.shield}
+                      <Coins size={10} style={{ color: '#FC4C02' }} /> {shopCosts.shield}
                     </button>
                   </div>
 
-                  <div className="card-cyber card-cyber-interactive" onClick={() => buyItem('boots', shopCosts.boots)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center' }}>
-                    <Zap size={24} className="text-neon-pink" style={{ filter: 'drop-shadow(0 0 6px rgba(255, 0, 127, 0.3))' }} />
-                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', marginTop: '2px' }}>Speed Boots</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Inventory: {inventory.boots}</span>
+                  <div className="clash-card" onClick={() => buyItem('boots', shopCosts.boots)} style={{ padding: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', textAlign: 'center', cursor: 'pointer' }}>
+                    <Zap size={24} style={{ color: '#FC4C02' }} />
+                    <span className="clash-subtitle" style={{ fontSize: '12px', marginTop: '2px' }}>Speed Boots</span>
+                    <span className="clash-body" style={{ fontSize: '10px' }}>Inventory: {inventory.boots}</span>
                     <button 
-                      className="btn-secondary btn-sm focus-ring"
+                      className="clash-btn-secondary btn-sm"
                       style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
-                      <Coins size={10} className="text-neon-yellow" /> {shopCosts.boots}
+                      <Coins size={10} style={{ color: '#FC4C02' }} /> {shopCosts.boots}
                     </button>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* TAB: CLANS */}
-            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '18px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
+            {/* TAB: SOCIAL (CLANS & FRIENDS) */}
+            <div style={{ display: activeTab === 'clans' ? 'flex' : 'none', flexDirection: 'column', gap: '14px', padding: '16px', height: '100%', overflowY: 'auto' }} className="fade-in">
               
-              {/* Crew Header Banner */}
-              <div className="card-cyber card-cyber-static p-4 gap-3" style={{ borderLeft: `4px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{
-                    width: '46px',
-                    height: '46px',
-                    borderRadius: '12px',
-                    background: currentUser.clan === 'GITS Runners' ? 'rgba(255, 0, 127, 0.08)' : 'rgba(0, 229, 255, 0.08)',
-                    border: `1.5px solid ${currentUser.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: currentUser.clan === 'GITS Runners' ? '0 0 12px rgba(255, 0, 127, 0.15)' : '0 0 12px rgba(0, 229, 255, 0.15)'
-                  }}>
-                    <Users size={22} className={currentUser.clan === 'GITS Runners' ? 'text-neon-pink' : 'text-neon-blue'} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: '9px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.8px' }}>Active Tactical Crew</span>
-                    <h3 className="text-lg m-0" style={{ color: 'white', fontWeight: '800' }}>{currentUser.clan || 'Udaipur Racers'}</h3>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <span className="text-xs" style={{ background: 'rgba(255, 251, 0, 0.08)', border: '1px solid var(--neon-yellow)', padding: '3px 8px', borderRadius: '10px', color: 'var(--neon-yellow)', fontWeight: '800' }}>
-                      DOMINANT
-                    </span>
-                  </div>
-                </div>
+              {/* Social Sub-Tab header toggle */}
+              <div style={{ display: 'flex', background: '#0B0B0D', borderRadius: '14px', padding: '3px', border: '1px solid #2A2A2A', marginBottom: '4px', flexShrink: 0 }}>
+                <button 
+                  onClick={() => setSocialSubTab('crew')}
+                  style={{
+                    flex: 1,
+                    background: socialSubTab === 'crew' ? '#FC4C02' : 'transparent',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 0',
+                    borderRadius: '11px',
+                    fontSize: '11px',
+                    fontWeight: '800',
+                    cursor: 'pointer'
+                  }}
+                  className="clash-btn-press"
+                >
+                  Crew Arena
+                </button>
+                <button 
+                  onClick={() => setSocialSubTab('network')}
+                  style={{
+                    flex: 1,
+                    background: socialSubTab === 'network' ? '#FC4C02' : 'transparent',
+                    color: 'white',
+                    border: 'none',
+                    padding: '8px 0',
+                    borderRadius: '11px',
+                    fontSize: '11px',
+                    fontWeight: '800',
+                    cursor: 'pointer'
+                  }}
+                  className="clash-btn-press"
+                >
+                  Friends Network
+                </button>
               </div>
 
-              {/* Clan Standings */}
-              <div>
-                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
-                  <Trophy size={14} className="text-neon-yellow" /> Crew Dominance Standings
-                </h3>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {getClanStandings().map((c, index) => {
-                    const color = c.name === 'Udaipur Racers' ? 'var(--neon-blue)' : c.name === 'GITS Runners' ? 'var(--neon-pink)' : '#ffffff';
-                    return (
-                      <div key={c.name} className="card-cyber card-cyber-static p-3 gap-2" style={{ background: `${color}06`, borderColor: `${color}20` }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '800', marginBottom: '2px' }}>
-                          <span style={{ color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ color: 'var(--text-secondary)', fontWeight: 'bold' }}>#{index + 1}</span> {c.name}
-                          </span>
-                          <span style={{ color: 'white' }}>{c.percentage}% DOMAIN</span>
-                        </div>
-                        <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.04)', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ width: `${c.percentage}%`, height: '100%', background: color, borderRadius: '3px', transition: 'width 0.4s ease' }}></div>
-                        </div>
+              {socialSubTab === 'crew' ? (
+                /* SUB-TAB: CREW (ORIGINAL CLAN VIEW) */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }} className="fade-in">
+                  {/* Crew Header Banner */}
+                  <div className="clash-card p-4 gap-3" style={{ borderLeft: `4px solid ${currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      <div style={{
+                        width: '46px',
+                        height: '46px',
+                        borderRadius: '12px',
+                        background: '#0B0B0B',
+                        border: `1.5px solid ${currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <Users size={22} style={{ color: currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02' }} />
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
+                      <div style={{ flex: 1 }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>Active Tactical Crew</span>
+                        <h3 className="clash-subtitle" style={{ margin: '0' }}>{currentUser.clan || 'Udaipur Racers'}</h3>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span className="clash-label" style={{ border: '1px solid #FC4C02', color: '#FC4C02', padding: '3px 8px', borderRadius: '10px', fontSize: '9px' }}>
+                          DOMINANT
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Leaderboard Section */}
-              <div>
-                <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
-                  <Award size={14} className="text-neon-pink" /> Elite Runners Leaderboard
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
-                  {(() => {
-                    const displayLeaderboard = [...leaderboard];
-                    if (currentUser) {
-                      const userInBoard = displayLeaderboard.some(p => p.displayName === currentUser.displayName);
-                      if (!userInBoard) {
-                        displayLeaderboard.push({
-                          displayName: currentUser.displayName,
-                          clan: currentUser.clan || 'Udaipur Racers',
-                          level: currentUser.level || 1,
-                          xp: currentUser.xp || 0
-                        });
-                      }
-                    }
-                    displayLeaderboard.sort((a, b) => b.xp - a.xp);
+                  {/* Clan Standings */}
+                  <div>
+                    <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
+                      <Trophy size={14} style={{ color: '#FC4C02' }} /> Crew Dominance Standings
+                    </h3>
 
-                    if (displayLeaderboard.length === 0) {
-                      return (
-                        <div className="card-cyber card-cyber-static p-4 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
-                          No active tactical runners synced.
-                        </div>
-                      );
-                    }
-
-                    return displayLeaderboard.map((player, idx) => {
-                      const isSelf = player.displayName === currentUser?.displayName;
-                      
-                      // Rank visual coloring
-                      let rankBorder = 'var(--border-color)';
-                      let rankColor = 'var(--text-secondary)';
-                      let badgeIcon = `#${idx + 1}`;
-                      if (idx === 0) {
-                        rankBorder = 'var(--neon-yellow)'; // Gold
-                        rankColor = 'var(--neon-yellow)';
-                        badgeIcon = '👑';
-                      } else if (idx === 1) {
-                        rankBorder = 'rgba(255,255,255,0.4)'; // Silver
-                        rankColor = '#ffffff';
-                        badgeIcon = '🥈';
-                      } else if (idx === 2) {
-                        rankBorder = 'rgba(217, 119, 6, 0.5)'; // Bronze
-                        rankColor = 'var(--neon-pink)';
-                        badgeIcon = '🥉';
-                      }
-
-                      return (
-                        <div key={idx} className="card-cyber card-cyber-static" style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '10px 14px',
-                          borderLeft: `4px solid ${isSelf ? 'var(--neon-blue)' : rankBorder}`,
-                          boxShadow: isSelf ? '0 0 10px rgba(0, 229, 255, 0.1)' : 'none',
-                          background: isSelf ? 'rgba(0, 229, 255, 0.04)' : 'rgba(9, 9, 20, 0.4)'
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <span style={{ fontWeight: '800', color: rankColor, fontSize: '13px', width: '20px', textAlign: 'center' }}>
-                              {badgeIcon}
-                            </span>
-                            
-                            {/* Avatar */}
-                            <div style={{
-                              width: '28px',
-                              height: '28px',
-                              borderRadius: '50%',
-                              background: player.clan === 'GITS Runners' ? 'rgba(255, 0, 127, 0.1)' : 'rgba(0, 229, 255, 0.1)',
-                              border: `1.5px solid ${player.clan === 'GITS Runners' ? 'var(--neon-pink)' : 'var(--neon-blue)'}`,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: '11px',
-                              fontWeight: '800',
-                              color: 'white'
-                            }}>
-                              {(player.displayName || 'G')[0].toUpperCase()}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {getClanStandings().map((c, index) => {
+                        const color = c.name === 'Udaipur Racers' ? '#FC4C02' : c.name === 'GITS Runners' ? '#FFFFFF' : '#555555';
+                        return (
+                          <div key={c.name} className="clash-card p-3 gap-2" style={{ borderColor: `${color}40` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '800', marginBottom: '2px' }}>
+                              <span style={{ color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--clash-text-secondary)', fontWeight: 'bold' }}>#{index + 1}</span> {c.name}
+                              </span>
+                              <span style={{ color: 'white' }}>{c.percentage}% DOMAIN</span>
                             </div>
-
-                            <div>
-                              <span style={{ fontWeight: '800', color: isSelf ? 'var(--neon-blue)' : 'white' }}>
-                                {player.displayName} {isSelf && <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>(You)</span>}
-                              </span>
-                              <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '8px', fontWeight: '800', textTransform: 'uppercase' }}>
-                                {player.clan}
-                              </span>
+                            <div className="clash-progress-bar">
+                              <div className="clash-progress-bar-fill" style={{ width: `${c.percentage}%`, backgroundColor: color }}></div>
                             </div>
                           </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Leaderboard Section */}
+                  <div>
+                    <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
+                      <Award size={14} style={{ color: '#FC4C02' }} /> Elite Runners Leaderboard
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                      {(() => {
+                        const displayLeaderboard = [...leaderboard];
+                        if (currentUser) {
+                          const userInBoard = displayLeaderboard.some(p => p.displayName === currentUser.displayName);
+                          if (!userInBoard) {
+                            displayLeaderboard.push({
+                              displayName: currentUser.displayName,
+                              clan: currentUser.clan || 'Udaipur Racers',
+                              level: currentUser.level || 1,
+                              xp: currentUser.xp || 0
+                            });
+                          }
+                        }
+                        displayLeaderboard.sort((a, b) => b.xp - a.xp);
+
+                        if (displayLeaderboard.length === 0) {
+                          return (
+                            <div className="clash-card p-4 text-center">
+                              No active tactical runners synced.
+                            </div>
+                          );
+                        }
+
+                        return displayLeaderboard.map((player, idx) => {
+                          const isSelf = player.displayName === currentUser?.displayName;
                           
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>LVL {player.level}</span>
-                            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--neon-pink)', fontWeight: '800', fontSize: '12px' }}>
-                              {player.xp.toLocaleString()} XP
+                          let rankBorder = 'var(--clash-border)';
+                          let rankColor = 'var(--clash-text-secondary)';
+                          let badgeIcon = `#${idx + 1}`;
+                          if (idx === 0) {
+                            rankBorder = '#FC4C02';
+                            rankColor = '#FC4C02';
+                            badgeIcon = '👑';
+                          } else if (idx === 1) {
+                            rankBorder = '#FFFFFF';
+                            rankColor = '#FFFFFF';
+                            badgeIcon = '🥈';
+                          } else if (idx === 2) {
+                            rankBorder = '#A8A8A8';
+                            rankColor = '#A8A8A8';
+                            badgeIcon = '🥉';
+                          }
+
+                          return (
+                            <div 
+                              key={idx} 
+                              className="clash-card clash-btn-press" 
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '10px 14px',
+                                borderLeft: `4px solid ${isSelf ? '#FC4C02' : rankBorder}`,
+                                background: isSelf ? 'rgba(252, 76, 2, 0.05)' : 'var(--clash-card)',
+                                cursor: 'pointer'
+                              }}
+                              onClick={() => {
+                                const found = INITIAL_PROFILES.find(p => p.displayName === player.displayName) || {
+                                  id: 'user_self',
+                                  displayName: player.displayName,
+                                  clan: player.clan,
+                                  level: player.level,
+                                  xp: player.xp,
+                                  distance: '12.4 km',
+                                  territories: territories.filter(t => t.ownerId === currentUser.uid).length,
+                                  bio: 'Strategic operative ready to claim territories.',
+                                  friendsCount: friendsList.length,
+                                  postsCount: 3,
+                                  online: true
+                                };
+                                setSelectedProfileUser(found);
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <span style={{ fontWeight: '800', color: rankColor, fontSize: '13px', width: '20px', textAlign: 'center' }}>
+                                  {badgeIcon}
+                                </span>
+                                
+                                <div style={{
+                                  width: '28px',
+                                  height: '28px',
+                                  borderRadius: '50%',
+                                  background: '#0B0B0B',
+                                  border: `1.5px solid ${player.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}`,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '11px',
+                                  fontWeight: '800',
+                                  color: 'white'
+                                }}>
+                                  {(player.displayName || 'G')[0].toUpperCase()}
+                                </div>
+
+                                <div>
+                                  <span style={{ fontWeight: '800', color: isSelf ? '#FC4C02' : 'white' }}>
+                                    {player.displayName} {isSelf && <span className="clash-body" style={{ fontSize: '9px' }}>(You)</span>}
+                                  </span>
+                                  <span className="clash-label" style={{ fontSize: '8px', marginLeft: '8px' }}>
+                                    {player.clan}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', fontWeight: 'bold' }}>LVL {player.level}</span>
+                                <span style={{ fontFamily: 'var(--clash-font-family)', color: '#FC4C02', fontWeight: '800', fontSize: '12px' }}>
+                                  {player.xp.toLocaleString()} XP
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Clan Chat */}
+                  <div className="clash-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', minHeight: '230px', padding: '14px' }}>
+                    <span className="clash-label" style={{ borderBottom: '1px solid var(--clash-border)', paddingBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <MessageSquare size={13} style={{ color: '#FC4C02' }} /> Crew Comm Channel
+                    </span>
+     
+                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', padding: '4px 0' }}>
+                      {clanMessages.map((msg) => {
+                        const isSelf = msg.sender.includes('You') || msg.sender === currentUser.displayName;
+                        return (
+                          <div 
+                            key={msg.id} 
+                            style={{
+                              alignSelf: isSelf ? 'flex-end' : 'flex-start',
+                              maxWidth: '85%',
+                              padding: '10px 14px',
+                              borderRadius: '16px',
+                              fontSize: '12px',
+                              lineHeight: '1.45',
+                              background: isSelf ? 'rgba(252, 76, 2, 0.05)' : '#0B0B0B',
+                              border: `1px solid ${isSelf ? '#FC4C02' : 'var(--clash-border)'}`,
+                              color: 'white'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
+                              <span 
+                                onClick={() => {
+                                  if (!isSelf) {
+                                    const found = INITIAL_PROFILES.find(p => p.displayName === msg.sender) || {
+                                      id: 'mock_chat_' + msg.sender,
+                                      displayName: msg.sender,
+                                      clan: currentUser.clan,
+                                      level: 5,
+                                      xp: 1800,
+                                      distance: '24.5 km',
+                                      territories: 1,
+                                      bio: 'Active crew operator.',
+                                      friendsCount: 6,
+                                      postsCount: 1,
+                                      online: true
+                                    };
+                                    setSelectedProfileUser(found);
+                                  }
+                                }}
+                                style={{ fontSize: '9px', fontWeight: '800', color: isSelf ? '#FC4C02' : '#FFFFFF', cursor: isSelf ? 'default' : 'pointer' }}
+                                className={isSelf ? '' : 'clash-btn-press'}
+                              >
+                                {msg.sender}
+                              </span>
+                              <span className="clash-body" style={{ fontSize: '8px' }}>{msg.time}</span>
+                            </div>
+                            <p style={{ margin: '0', fontSize: '11px', color: 'white', fontWeight: '500' }}>{msg.text}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+     
+                    <form onSubmit={handleClanSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
+                      <input 
+                        type="text" 
+                        value={clanInput}
+                        onChange={(e) => setClanInput(e.target.value)}
+                        placeholder="Message crew..."
+                        className="cyber-input"
+                        style={{ padding: '8px 12px', fontSize: '12px' }}
+                      />
+                      <button type="submit" style={{ background: '#FC4C02', border: 'none', color: 'white', borderRadius: '10px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'transform 0.1s ease' }}>
+                        <Send size={12} />
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ) : (
+                /* SUB-TAB: FRIENDS NETWORK */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }} className="fade-in">
+                  
+                  {/* Notification feed widget */}
+                  {socialNotifications.length > 0 && (
+                    <div className="clash-card p-3 gap-2" style={{ borderLeft: '3px solid #FC4C02' }}>
+                      <span className="clash-label" style={{ fontSize: '9px', display: 'flex', alignItems: 'center', gap: '6px', color: '#FC4C02' }}>
+                        <AlertCircle size={11} /> Social Activity Log
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '90px', overflowY: 'auto' }}>
+                        {socialNotifications.map(notif => (
+                          <div key={notif.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', paddingBottom: '4px', borderBottom: '1px solid #222222' }}>
+                            <span style={{ color: 'white' }}>
+                              <b>{notif.senderName}</b> {notif.type === 'friend_request' ? 'sent you a friend request.' : notif.type === 'friend_accepted' ? 'accepted your request!' : 'started following you.'}
+                            </span>
+                            <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)' }}>{notif.timestamp}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pending requests incoming block */}
+                  {friendRequestsReceived.length > 0 && (
+                    <div className="clash-card p-3 gap-2" style={{ borderLeft: '4px solid #FC4C02', display: 'flex', flexDirection: 'column' }}>
+                      <span className="clash-label" style={{ fontSize: '9px', display: 'flex', alignItems: 'center', gap: '6px', color: '#FC4C02' }}>
+                        <AlertCircle size={11} /> Pending Incoming Requests ({friendRequestsReceived.length})
+                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {friendRequestsReceived.map(reqId => {
+                          const sender = INITIAL_PROFILES.find(p => p.id === reqId) || { displayName: 'Sam', clan: 'GITS Runners', level: 10 };
+                          return (
+                            <div key={reqId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0B0B0D', padding: '8px 12px', borderRadius: '12px', border: '1px solid #2A2A2A' }}>
+                              <div 
+                                onClick={() => setSelectedProfileUser(sender)}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+                              >
+                                <div style={{
+                                  width: '28px',
+                                  height: '28px',
+                                  borderRadius: '50%',
+                                  background: '#FC4C02',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontSize: '11px',
+                                  fontWeight: '800',
+                                  color: 'white'
+                                }}>
+                                  {sender.displayName[0].toUpperCase()}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>{sender.displayName}</span>
+                                  <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)' }}>LVL {sender.level} • {sender.clan}</span>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button 
+                                  onClick={() => rejectFriendRequest(reqId)}
+                                  style={{ background: '#222222', border: '1px solid #333333', color: 'white', fontSize: '9px', fontWeight: '800', padding: '4px 8px', borderRadius: '8px', cursor: 'pointer' }}
+                                  className="clash-btn-press"
+                                >
+                                  REJECT
+                                </button>
+                                <button 
+                                  onClick={() => acceptFriendRequest(reqId)}
+                                  style={{ background: '#FC4C02', border: 'none', color: 'white', fontSize: '9px', fontWeight: '800', padding: '4px 8px', borderRadius: '8px', cursor: 'pointer' }}
+                                  className="clash-btn-press"
+                                >
+                                  ACCEPT
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Profile block (self) */}
+                  <div className="clash-card p-4 gap-3">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      <div style={{
+                        width: '48px',
+                        height: '48px',
+                        borderRadius: '50%',
+                        background: '#FC4C02',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '18px',
+                        fontWeight: '800',
+                        color: 'white'
+                      }}>
+                        {(currentUser.displayName || 'G')[0].toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <h4 className="clash-title" style={{ margin: 0, fontSize: '16px' }}>{currentUser.displayName}</h4>
+                          <span style={{ fontSize: '8px', fontWeight: '800', color: '#FC4C02', background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.2)', padding: '2px 6px', borderRadius: '6px' }}>
+                            LVL {currentUser.level}
+                          </span>
+                        </div>
+                        <span className="clash-label" style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                          {currentUser.clan || 'Udaipur Racers'}
+                        </span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setEditDisplayName(currentUser.displayName);
+                          setEditBio(userBio);
+                          setIsEditingProfile(true);
+                        }}
+                        className="clash-btn-secondary clash-btn-press"
+                        style={{ padding: '6px 12px', fontSize: '9px', height: '28px', borderRadius: '14px', fontWeight: '800' }}
+                      >
+                        EDIT PROFILE
+                      </button>
+                    </div>
+
+                    {isEditingProfile ? (
+                      <div style={{ background: '#0B0B0D', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A', display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                        <div>
+                          <span className="clash-label" style={{ fontSize: '8px', marginBottom: '4px', display: 'block' }}>Display Name</span>
+                          <input 
+                            type="text" 
+                            value={editDisplayName} 
+                            onChange={(e) => setEditDisplayName(e.target.value)} 
+                            className="cyber-input" 
+                            style={{ padding: '6px 10px', fontSize: '11px' }} 
+                          />
+                        </div>
+                        <div>
+                          <span className="clash-label" style={{ fontSize: '8px', marginBottom: '4px', display: 'block' }}>Bio</span>
+                          <textarea 
+                            value={editBio} 
+                            onChange={(e) => setEditBio(e.target.value)} 
+                            className="cyber-input" 
+                            style={{ padding: '6px 10px', fontSize: '11px', height: '50px', resize: 'none' }} 
+                          />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+                          <button 
+                            onClick={() => setIsEditingProfile(false)} 
+                            style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', fontSize: '10px', fontWeight: '800', cursor: 'pointer' }}
+                          >
+                            CANCEL
+                          </button>
+                          <button 
+                            onClick={() => {
+                              if (editDisplayName.trim()) {
+                                setCurrentUser(prev => ({ ...prev, displayName: editDisplayName.trim() }));
+                              }
+                              setUserBio(editBio.trim());
+                              setIsEditingProfile(false);
+                              addLog("Social: Profile updated successfully.");
+                            }} 
+                            style={{ background: '#FC4C02', border: 'none', color: 'white', fontSize: '10px', fontWeight: '800', padding: '4px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                          >
+                            SAVE CHANGES
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="clash-body" style={{ margin: '4px 0 0 0', fontSize: '11px', fontStyle: 'italic', color: 'var(--clash-text-secondary)' }}>
+                          "{userBio}"
+                        </p>
+                        
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '6px', borderTop: '1px solid #2A2A2A', paddingTop: '10px', textAlign: 'center' }}>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '7.5px' }}>Territories</span>
+                            <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', display: 'block', fontWeight: '800' }}>
+                              {territories.filter(t => t.ownerId === currentUser.uid).length}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '7.5px' }}>Friends</span>
+                            <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', display: 'block', fontWeight: '800' }}>
+                              {friendsList.length}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '7.5px' }}>Followers</span>
+                            <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', display: 'block', fontWeight: '800' }}>
+                              {followersList.length}
                             </span>
                           </div>
                         </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
+                      </>
+                    )}
+                  </div>
 
-              {/* Clan Chat */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(5, 5, 9, 0.4)', border: '1.5px solid var(--border-color)', borderRadius: '18px', padding: '14px', minHeight: '230px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', borderBottom: '1.5px solid var(--border-color)', paddingBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  <MessageSquare size={13} className="text-neon-blue" /> Crew Comm Channel
-                </span>
- 
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', padding: '4px 0' }}>
-                  {clanMessages.map((msg) => {
-                    const isSelf = msg.sender.includes('You');
-                    return (
-                      <div key={msg.id} className={isSelf ? 'chat-bubble chat-bubble-user' : 'chat-bubble chat-bubble-coach'} style={{ alignSelf: isSelf ? 'flex-end' : 'flex-start' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
-                          <span style={{ fontSize: '9px', fontWeight: '800', color: isSelf ? 'var(--neon-blue)' : 'var(--neon-pink)' }}>{msg.sender}</span>
-                          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>{msg.time}</span>
+                  {/* Friends List section */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        <Users size={14} style={{ color: '#FC4C02' }} /> Friends ({friendsList.length})
+                      </h3>
+                      <input 
+                        type="text" 
+                        value={friendsSearchQuery} 
+                        onChange={(e) => setFriendsSearchQuery(e.target.value)} 
+                        placeholder="Search friends..." 
+                        className="cyber-input" 
+                        style={{ width: '130px', padding: '4px 8px', fontSize: '10px', height: '24px' }} 
+                      />
+                    </div>
+
+                    {(() => {
+                      const filteredFriends = friendsList.filter(id => {
+                        const profile = INITIAL_PROFILES.find(p => p.id === id);
+                        return profile && profile.displayName.toLowerCase().includes(friendsSearchQuery.toLowerCase());
+                      });
+
+                      if (filteredFriends.length === 0) {
+                        return (
+                          <div className="clash-card p-4 text-center clash-body" style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                            No friends matched your search.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {filteredFriends.map(friendId => {
+                            const friend = INITIAL_PROFILES.find(p => p.id === friendId);
+                            return (
+                              <div 
+                                key={friendId} 
+                                className="clash-card p-3 clash-btn-press" 
+                                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                                onClick={() => setSelectedProfileUser(friend)}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <div style={{ position: 'relative' }}>
+                                    <div style={{
+                                      width: '32px',
+                                      height: '32px',
+                                      borderRadius: '50%',
+                                      background: '#FC4C02',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: '13px',
+                                      fontWeight: '800',
+                                      color: 'white'
+                                    }}>
+                                      {friend.displayName[0].toUpperCase()}
+                                    </div>
+                                    <span style={{
+                                      position: 'absolute',
+                                      bottom: 0,
+                                      right: 0,
+                                      width: '8px',
+                                      height: '8px',
+                                      borderRadius: '50%',
+                                      background: friend.online ? '#10B981' : '#888888',
+                                      border: '1.5px solid #151515'
+                                    }}></span>
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white' }}>{friend.displayName}</span>
+                                    <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>LVL {friend.level} • {friend.clan}</span>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontSize: '8px', color: friend.online ? '#10B981' : 'var(--clash-text-secondary)', fontWeight: '800', textTransform: 'uppercase' }}>
+                                    {friend.online ? 'Online' : 'Offline'}
+                                  </span>
+                                  <ChevronUp size={16} style={{ transform: 'rotate(90deg)', color: 'var(--clash-text-secondary)' }} />
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <p style={{ margin: '0', fontSize: '11px', color: 'white', fontWeight: '500' }}>{msg.text}</p>
-                      </div>
-                    );
-                  })}
+                      );
+                    })()}
+                  </div>
+
+                  {/* Discover Section */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        <Sparkles size={14} style={{ color: '#FC4C02' }} /> Discover Udaipur Runners
+                      </h3>
+                      <input 
+                        type="text" 
+                        value={discoverSearchQuery} 
+                        onChange={(e) => setDiscoverSearchQuery(e.target.value)} 
+                        placeholder="Search network..." 
+                        className="cyber-input" 
+                        style={{ width: '130px', padding: '4px 8px', fontSize: '10px', height: '24px' }} 
+                      />
+                    </div>
+
+                    {(() => {
+                      const nonFriends = INITIAL_PROFILES.filter(p => !friendsList.includes(p.id));
+                      const filteredDiscover = nonFriends.filter(p => p.displayName.toLowerCase().includes(discoverSearchQuery.toLowerCase()));
+
+                      if (filteredDiscover.length === 0) {
+                        return (
+                          <div className="clash-card p-4 text-center clash-body" style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                            All active runners are already in your network!
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {filteredDiscover.map(p => {
+                            const isSent = friendRequestsSent.includes(p.id);
+                            const isReceived = friendRequestsReceived.includes(p.id);
+                            return (
+                              <div 
+                                key={p.id} 
+                                className="clash-card p-3" 
+                                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                              >
+                                <div 
+                                  style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', flex: 1 }}
+                                  onClick={() => setSelectedProfileUser(p)}
+                                >
+                                  <div style={{
+                                    width: '32px',
+                                    height: '32px',
+                                    borderRadius: '50%',
+                                    background: '#222222',
+                                    border: '1px solid #333333',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '13px',
+                                    fontWeight: '800',
+                                    color: 'white'
+                                  }}>
+                                    {p.displayName[0].toUpperCase()}
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white' }}>{p.displayName}</span>
+                                    <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>LVL {p.level} • {p.clan}</span>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  {isSent ? (
+                                    <button 
+                                      disabled
+                                      style={{ background: 'transparent', border: '1px solid #333333', color: 'var(--clash-text-secondary)', fontSize: '8.5px', fontWeight: '800', padding: '6px 12px', borderRadius: '12px' }}
+                                    >
+                                      PENDING
+                                    </button>
+                                  ) : isReceived ? (
+                                    <button 
+                                      onClick={() => acceptFriendRequest(p.id)}
+                                      style={{ background: '#FC4C02', border: 'none', color: 'white', fontSize: '8.5px', fontWeight: '800', padding: '6px 12px', borderRadius: '12px', cursor: 'pointer' }}
+                                      className="clash-btn-press"
+                                    >
+                                      ACCEPT
+                                    </button>
+                                  ) : (
+                                    <button 
+                                      onClick={() => sendFriendRequest(p.id)}
+                                      style={{ background: 'transparent', border: '1px solid #FC4C02', color: '#FC4C02', fontSize: '8.5px', fontWeight: '800', padding: '6px 12px', borderRadius: '12px', cursor: 'pointer' }}
+                                      className="clash-btn-press"
+                                    >
+                                      ADD FRIEND
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                 </div>
- 
-                <form onSubmit={handleClanSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1.5px solid var(--border-color)', paddingTop: '10px' }}>
-                  <input 
-                    type="text" 
-                    value={clanInput}
-                    onChange={(e) => setClanInput(e.target.value)}
-                    placeholder="Message crew..."
-                    className="cyber-input"
-                    style={{ padding: '8px 12px', fontSize: '12px' }}
-                  />
-                  <button type="submit" style={{ background: 'var(--neon-blue)', border: 'none', color: 'black', borderRadius: '10px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', boxShadow: 'var(--glow-blue)', transition: 'transform 0.1s ease' }}>
-                    <Send size={12} />
-                  </button>
-                </form>
-              </div>
+              )}
             </div>
 
             {/* TAB: AI COACH */}
             <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', gap: '14px', padding: '16px', height: '100%' }} className="fade-in">
               
               {/* Coach Header Banner */}
-              <div className="card-cyber card-cyber-static p-3" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid var(--neon-purple)' }}>
+              <div className="clash-card p-3" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #FC4C02' }}>
                 <div style={{
                   width: '40px',
                   height: '40px',
                   borderRadius: '50%',
-                  background: 'rgba(157, 78, 221, 0.08)',
-                  border: '1.5px solid var(--neon-purple)',
+                  background: '#0B0B0B',
+                  border: '1.5px solid #FC4C02',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 0 10px rgba(157, 78, 221, 0.15)'
+                  justifyContent: 'center'
                 }}>
-                  <Sparkles size={18} className="text-neon-purple glow-active-pulse" />
+                  <Sparkles size={18} style={{ color: '#FC4C02' }} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <h4 className="text-sm m-0" style={{ color: 'white', fontWeight: '800' }}>Synergy AI Coach</h4>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--neon-green)', filter: 'drop-shadow(0 0 3px var(--neon-green))' }}></span>
+                    <h4 className="clash-subtitle" style={{ margin: '0', fontSize: '14px' }}>Synergy AI Coach</h4>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02' }}></span>
                   </div>
-                  <p className="text-xs m-0" style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  <p className="clash-body" style={{ margin: '2px 0 0 0', fontSize: '11px' }}>
                     Tactical Route Assistant • Online
                   </p>
                 </div>
               </div>
 
               {/* Chat Thread Panel */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(5, 5, 9, 0.4)', border: '1.5px solid var(--border-color)', borderRadius: '18px', padding: '14px', minHeight: '230px' }}>
+              <div className="clash-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', minHeight: '230px', padding: '14px' }}>
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px 0' }}>
                   {coachMessages.map((msg) => {
                     const isCoach = msg.sender === 'coach';
                     return (
                       <div 
                         key={msg.id} 
-                        className={isCoach ? 'chat-bubble chat-bubble-coach' : 'chat-bubble chat-bubble-user'} 
                         style={{ 
                           alignSelf: isCoach ? 'flex-start' : 'flex-end',
-                          border: isCoach ? '1.5px solid var(--neon-purple)' : '1.5px solid var(--neon-blue)',
-                          boxShadow: isCoach ? '0 0 8px rgba(157, 78, 221, 0.05)' : '0 0 8px rgba(0, 229, 255, 0.05)'
+                          maxWidth: '85%',
+                          padding: '10px 14px',
+                          borderRadius: '16px',
+                          fontSize: '12px',
+                          lineHeight: '1.45',
+                          background: isCoach ? '#0B0B0B' : 'rgba(252, 76, 2, 0.05)',
+                          border: `1px solid ${isCoach ? 'var(--clash-border)' : '#FC4C02'}`,
+                          color: 'white'
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '9px', fontWeight: '800', color: isCoach ? 'var(--neon-purple)' : 'var(--neon-blue)' }}>
+                          <span style={{ fontSize: '9px', fontWeight: '800', color: isCoach ? '#FC4C02' : '#FFFFFF' }}>
                             {isCoach ? '🛡️ Coach' : 'You'}
                           </span>
-                          <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>{msg.time}</span>
+                          <span className="clash-body" style={{ fontSize: '8px' }}>{msg.time}</span>
                         </div>
                         <p style={{ margin: '0', fontSize: '11px', color: 'white', lineHeight: '1.45', fontWeight: '500' }}>{msg.text}</p>
                       </div>
@@ -2719,39 +3506,39 @@ export default function App() {
                 </div>
 
                 {/* Quick Action Suggestion Chips */}
-                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', borderTop: '1px solid rgba(255,255,255,0.02)', paddingTop: '8px', scrollbarWidth: 'none' }}>
+                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '8px', scrollbarWidth: 'none' }}>
                   <button 
                     onClick={() => handleCoachSendMessage(null, "routes")}
-                    className="btn-secondary focus-ring btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
                   >
                     Plan route
                   </button>
                   <button 
                     onClick={() => handleCoachSendMessage(null, "pace")}
-                    className="btn-secondary focus-ring btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
                   >
                     Check pace
                   </button>
                   <button 
                     onClick={() => handleCoachSendMessage(null, "gps")}
-                    className="btn-secondary focus-ring btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
                   >
                     How to run GPS?
                   </button>
                   <button 
                     onClick={() => handleCoachSendMessage(null, "hello")}
-                    className="btn-secondary focus-ring btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', border: '1px solid rgba(157, 78, 221, 0.25)', color: 'var(--neon-purple)', padding: '4px 10px' }}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
                   >
                     Calibrate
                   </button>
                 </div>
 
                 {/* Input Area */}
-                <form onSubmit={handleCoachSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1.5px solid var(--border-color)', paddingTop: '10px', alignItems: 'center' }}>
+                <form onSubmit={handleCoachSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px', alignItems: 'center' }}>
                   <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
                     <input 
                       type="text" 
@@ -2765,13 +3552,13 @@ export default function App() {
                     <button 
                       type="button"
                       onClick={() => alert("Voice assistant module loading...")}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', position: 'absolute', right: '10px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
+                      style={{ background: 'none', border: 'none', color: 'var(--clash-text-secondary)', position: 'absolute', right: '10px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
                       title="Voice Input (Coming Soon)"
                     >
-                      <Settings size={12} className="text-neon-purple" style={{ opacity: 0.6 }} />
+                      <Settings size={12} style={{ color: '#FC4C02', opacity: 0.6 }} />
                     </button>
                   </div>
-                  <button type="submit" className="focus-ring" style={{ background: 'var(--neon-purple)', border: 'none', color: 'white', borderRadius: '10px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--glow-purple)', transition: 'transform 0.1s ease', flexShrink: 0 }}>
+                  <button type="submit" style={{ background: '#FC4C02', border: 'none', color: 'white', borderRadius: '10px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.1s ease', flexShrink: 0 }}>
                     <Send size={12} />
                   </button>
                 </form>
@@ -2783,9 +3570,8 @@ export default function App() {
           {/* Navigation Bar */}
           <div style={{
             height: '60px',
-            borderTop: '1.5px solid var(--border-color)',
-            background: 'rgba(10, 10, 20, 0.95)',
-            backdropFilter: 'blur(10px)',
+            borderTop: '1px solid var(--clash-border)',
+            background: '#151515',
             display: 'grid',
             gridTemplateColumns: 'repeat(5, 1fr)',
             zIndex: 100
@@ -2793,7 +3579,7 @@ export default function App() {
             <button 
               onClick={() => setActiveTab('dashboard')}
               className={`tab-btn ${activeTab === 'dashboard' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'dashboard' ? 'var(--neon-pink)' : 'var(--text-secondary)' }}
+              style={{ color: activeTab === 'dashboard' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
               <Home size={18} />
               <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Home</span>
@@ -2802,7 +3588,7 @@ export default function App() {
             <button 
               onClick={() => setActiveTab('map')}
               className={`tab-btn ${activeTab === 'map' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'map' ? 'var(--neon-pink)' : 'var(--text-secondary)' }}
+              style={{ color: activeTab === 'map' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
               <Compass size={18} />
               <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Map</span>
@@ -2811,7 +3597,7 @@ export default function App() {
             <button 
               onClick={() => setActiveTab('conquests')}
               className={`tab-btn ${activeTab === 'conquests' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'conquests' ? 'var(--neon-blue)' : 'var(--text-secondary)' }}
+              style={{ color: activeTab === 'conquests' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
               <Shield size={18} />
               <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Conquests</span>
@@ -2820,25 +3606,250 @@ export default function App() {
             <button 
               onClick={() => setActiveTab('clans')}
               className={`tab-btn ${activeTab === 'clans' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'clans' ? 'var(--neon-yellow)' : 'var(--text-secondary)' }}
+              style={{ color: activeTab === 'clans' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
               <Users size={18} />
-              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Clans</span>
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Social</span>
             </button>
-
+ 
             <button 
               onClick={() => setActiveTab('coach')}
               className={`tab-btn ${activeTab === 'coach' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'coach' ? 'var(--neon-purple)' : 'var(--text-secondary)' }}
+              style={{ color: activeTab === 'coach' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
               <Sparkles size={18} />
               <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Coach</span>
             </button>
           </div>
+ 
+          {/* Public Profile Modal */}
+          {selectedProfileUser && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(11, 11, 13, 0.85)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 9999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px'
+              }}
+              onClick={() => setSelectedProfileUser(null)}
+            >
+              <div 
+                style={{
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
+                  borderRadius: '28px',
+                  width: '100%',
+                  maxWidth: '360px',
+                  padding: '24px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  position: 'relative',
+                  boxShadow: '0 16px 48px rgba(0, 0, 0, 0.5)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '56px',
+                    height: '56px',
+                    borderRadius: '50%',
+                    background: '#FC4C02',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '22px',
+                    fontWeight: '800',
+                    color: 'white',
+                    border: '2px solid rgba(255, 255, 255, 0.15)'
+                  }}>
+                    {selectedProfileUser.displayName[0].toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: 'white' }}>
+                        {selectedProfileUser.displayName}
+                      </h3>
+                      {selectedProfileUser.online && (
+                        <span 
+                          style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: '#10B981',
+                            display: 'inline-block'
+                          }}
+                          className="intel-badge-pulse"
+                          title="Online"
+                        ></span>
+                      )}
+                    </div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {selectedProfileUser.clan}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Bio */}
+                <div style={{ background: '#0B0B0D', padding: '12px 14px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
+                  <span className="clash-label" style={{ fontSize: '8px', marginBottom: '4px', display: 'block' }}>BIO</span>
+                  <p style={{ margin: 0, fontSize: '11px', color: 'white', fontStyle: 'italic', lineHeight: '1.4' }}>
+                    "{selectedProfileUser.bio || 'Operative has not set a bio yet.'}"
+                  </p>
+                </div>
+
+                {/* Two-Column Stats Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', background: '#0B0B0D', padding: '14px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Level</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
+                      LVL {selectedProfileUser.level}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Distance</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
+                      {selectedProfileUser.distance || '0.0 km'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Sectors Owned</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
+                      {selectedProfileUser.territories || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Experience Points</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: '#FC4C02', fontWeight: '800' }}>
+                      {selectedProfileUser.xp ? selectedProfileUser.xp.toLocaleString() : '0'} XP
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Friends Network</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
+                      {selectedProfileUser.friendsCount || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Conquest Posts</span>
+                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
+                      {selectedProfileUser.postsCount || 0}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Connection Action Buttons */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {(() => {
+                    const isFriend = friendsList.includes(selectedProfileUser.id);
+                    const isSent = friendRequestsSent.includes(selectedProfileUser.id);
+                    const isReceived = friendRequestsReceived.includes(selectedProfileUser.id);
+
+                    if (isFriend) {
+                      return (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            onClick={() => {
+                              removeFriend(selectedProfileUser.id);
+                              setSelectedProfileUser(null);
+                            }}
+                            className="clash-btn-secondary clash-btn-press"
+                            style={{ height: '42px', flex: 1, borderRadius: '21px', fontSize: '11px', background: '#151515', border: '1px solid #2A2A2A', color: '#EF4444', fontWeight: '800' }}
+                          >
+                            REMOVE FRIEND
+                          </button>
+                          <button 
+                            onClick={() => {
+                              alert(`Tactical chat channel with ${selectedProfileUser.displayName} loading...`);
+                              setSelectedProfileUser(null);
+                            }}
+                            className="clash-btn-primary clash-btn-press"
+                            style={{ height: '42px', flex: 1.2, borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
+                          >
+                            MESSAGE
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    if (isSent) {
+                      return (
+                        <button 
+                          disabled
+                          style={{ height: '42px', width: '100%', borderRadius: '21px', fontSize: '11px', background: '#0B0B0D', border: '1px solid #2A2A2A', color: 'var(--clash-text-secondary)', fontWeight: '800' }}
+                        >
+                          FRIEND REQUEST SENT
+                        </button>
+                      );
+                    }
+
+                    if (isReceived) {
+                      return (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            onClick={() => {
+                              rejectFriendRequest(selectedProfileUser.id);
+                              setSelectedProfileUser(null);
+                            }}
+                            className="clash-btn-secondary clash-btn-press"
+                            style={{ height: '42px', flex: 1, borderRadius: '21px', fontSize: '11px', color: 'white', background: '#151515', border: '1px solid #2A2A2A', fontWeight: '800' }}
+                          >
+                            REJECT
+                          </button>
+                          <button 
+                            onClick={() => {
+                              acceptFriendRequest(selectedProfileUser.id);
+                              setSelectedProfileUser(null);
+                            }}
+                            className="clash-btn-primary clash-btn-press"
+                            style={{ height: '42px', flex: 1.2, borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
+                          >
+                            ACCEPT REQUEST
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <button 
+                        onClick={() => {
+                          sendFriendRequest(selectedProfileUser.id);
+                          setSelectedProfileUser(null);
+                        }}
+                        className="clash-btn-primary clash-btn-press"
+                        style={{ height: '42px', width: '100%', borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
+                      >
+                        ADD TO SQUAD
+                      </button>
+                    );
+                  })()}
+
+                  <button 
+                    onClick={() => setSelectedProfileUser(null)}
+                    className="clash-btn-secondary clash-btn-press"
+                    style={{ height: '40px', width: '100%', borderRadius: '20px', fontSize: '11px', color: 'var(--clash-text-secondary)', border: 'none', background: 'transparent', fontWeight: '800' }}
+                  >
+                    CLOSE PROFILE
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
         </div>
       </div>
-
+ 
     </div>
   );
 }

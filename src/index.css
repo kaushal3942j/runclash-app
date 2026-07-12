@@ -12,12 +12,12 @@
   /* Neons - Redefined to Orange Accent */
   --neon-pink: #FC4C02;
   --neon-blue: #FC4C02;
-  --neon-green: #2ecc71; /* Flat green status */
+  --neon-green: #FC4C02;
   --neon-yellow: #FC4C02;
   --neon-purple: #FC4C02;
   
-  /* Gradients */
-  --grad-primary: linear-gradient(135deg, #FC4C02 0%, #ff6b00 100%);
+  /* Gradients - Redefined to Flat */
+  --grad-primary: #FC4C02;
   --grad-cyber: #FC4C02;
   --grad-green-blue: #FC4C02;
   --grad-gold: #FC4C02;
@@ -60,8 +60,8 @@
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 20px;
-  --radius-xl: 20px;
+  --radius-lg: 24px;
+  --radius-xl: 24px;
   --radius-full: 9999px;
 
   /* Fonts */
@@ -174,7 +174,7 @@ body {
   cursor: pointer;
   transition: all 0.3s ease;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ff007f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23FC4C02' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 14px center;
   background-size: 16px;
@@ -761,13 +761,13 @@ body {
   --clash-text-primary: #FFFFFF;
   --clash-text-secondary: #9CA3AF;
   
-  /* Dynamic Territory Faction Colors */
-  --clash-color-mine: #2ecc71;       /* Mine -> Green */
-  --clash-color-friendly: #3498db;   /* Friendly Clan -> Blue */
-  --clash-color-rival: #9b59b6;      /* Rival Clan -> Purple */
-  --clash-color-enemy: #e74c3c;      /* Enemy -> Red */
-  --clash-color-neutral: #f1c40f;    /* Neutral -> Yellow */
-  --clash-color-expired: #888888;    /* Expired -> Gray */
+  /* Dynamic Territory Faction Colors (Standardized flat black/gray/orange/white) */
+  --clash-color-mine: #FC4C02;       /* Mine -> Orange */
+  --clash-color-friendly: #FFFFFF;   /* Friendly Clan -> White */
+  --clash-color-rival: #555555;      /* Rival Clan -> Medium Gray */
+  --clash-color-enemy: #2A2A2A;      /* Enemy -> Dark Gray */
+  --clash-color-neutral: #A8A8A8;    /* Neutral -> Light Gray */
+  --clash-color-expired: #2A2A2A;    /* Expired -> Dark Gray */
 
   /* Spacing Scale (8pt System) */
   --clash-space-4: 4px;
@@ -779,10 +779,10 @@ body {
   --clash-space-48: 48px;
   --clash-space-64: 64px;
 
-  /* Corner Radii */
+  /* Corner Radii - 24px Card Rounded corners */
   --clash-radius-button: 16px;
-  --clash-radius-card: 20px;
-  --clash-radius-bottom-sheet: 28px;
+  --clash-radius-card: 24px;
+  --clash-radius-bottom-sheet: 24px;
   --clash-radius-circular: 50%;
 
   /* Fluid Typography Scale (Outfit with Inter fallback) */
@@ -1103,5 +1103,88 @@ body {
 .clash-transition-scale {
   transition: transform var(--clash-duration-normal) var(--clash-ease);
 }
+
+/* Tactical HUD Redesign Animations */
+@keyframes pulse-orange {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(252, 76, 2, 0.6);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(252, 76, 2, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(252, 76, 2, 0);
+  }
+}
+
+.gps-pulse {
+  animation: pulse-orange 1.8s infinite ease-in-out;
+}
+
+@keyframes fade-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-down {
+  animation: fade-in-down 250ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes slide-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-in-up {
+  animation: slide-in-up 250ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Glassmorphism Tactical Header */
+.clash-glass-panel {
+  background: rgba(21, 21, 21, 0.75) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Button Press Animation */
+.clash-btn-press {
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms var(--clash-ease) !important;
+}
+.clash-btn-press:active {
+  transform: scale(0.95) !important;
+}
+
+/* Dynamic Territory Intelligence Animations */
+@keyframes badge-pulse {
+  0% { opacity: 0.7; }
+  50% { opacity: 1; }
+  100% { opacity: 0.7; }
+}
+
+.intel-badge-pulse {
+  animation: badge-pulse 2s infinite ease-in-out;
+}
+
+.intel-content-transition {
+  transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+
 
 

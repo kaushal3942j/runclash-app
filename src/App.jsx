@@ -4,11 +4,12 @@ import {
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass, 
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
   Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home,
-  ChevronUp, ChevronDown
+  ChevronUp, ChevronDown, Clock, Check
 } from 'lucide-react';
 import { 
   isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
-  syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError
+  syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
+  saveCompletedRun
 } from './supabase';
 
 // Predefined Simulation Routes for Udaipur (Developer Mode)
@@ -92,9 +93,11 @@ export default function App() {
     decoys: 0
   });
 
-  // GPS Mode Toggles
-  const [trackingMode, setTrackingMode] = useState('sim'); // 'sim' (Developer Mode) or 'gps' (Real Run)
+  // GPS Mode Toggles & Debug Flag
+  const DEBUG_MODE = localStorage.getItem('clash_debug') === 'true';
+  const [trackingMode, setTrackingMode] = useState(DEBUG_MODE ? 'sim' : 'gps'); // Default to 'gps' in production
   const [simulationRouteKey, setSimulationRouteKey] = useState('lake');
+  const [isSearchingGps, setIsSearchingGps] = useState(false);
   
   // Tracking Run State
   const [runState, setRunState] = useState({
@@ -103,8 +106,16 @@ export default function App() {
     distance: 0,
     duration: 0,
     pace: '--:--',
-    gpsAccuracy: null
+    gpsAccuracy: null,
+    speed: 0,
+    avgSpeed: 0,
+    avgPace: '--:--',
+    calories: 0,
+    isAutoPaused: false
   });
+
+  const [completedRunData, setCompletedRunData] = useState(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
 
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
@@ -232,6 +243,11 @@ export default function App() {
 
   const wakeLockRef = useRef(null);
 
+  // Run Timing & Auto-Pause Refs
+  const startTimeRef = useRef(null);
+  const endTimeRef = useRef(null);
+  const lowSpeedDurationRef = useRef(0);
+
   // Anti-Cheat References
   const cheatMetricsRef = useRef({ speedSpikes: 0, repeatedJumps: 0, unrealisticAcceleration: 0 });
   const lastPointTimeRef = useRef(null);
@@ -332,6 +348,25 @@ export default function App() {
       fetchLeaderboard();
     }
   }, [activeTab]);
+
+  // Center map on user location when entering Map tab in GPS mode
+  useEffect(() => {
+    if (activeTab === 'map' && trackingMode === 'gps' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.setView([lat, lng], 15.5);
+          }
+        },
+        (error) => {
+          console.warn("[GPS] Initial tab-load locate failed:", error.message);
+        },
+        { enableHighAccuracy: false, timeout: 60000, maximumAge: 60000 }
+      );
+    }
+  }, [activeTab, trackingMode]);
 
   // Sync user profile stats on changes
   useEffect(() => {
@@ -529,14 +564,15 @@ export default function App() {
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
-    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: tracking\nwatchId: null`);
-    console.log(`[GPS Engine] Start Tracking invoked. Active trackingMode: "${trackingMode}"`);
-    addLog(`GPS: Calibrating tracking device in [${trackingMode === 'gps' ? 'Real GPS' : 'Developer Simulator'}] mode...`);
     requestWakeLock();
 
-    // Safety check: verify no simulator interval exists while trackingMode === 'gps'
-    if (trackingMode === 'gps' && simIntervalRef.current) {
-      console.warn(`[GPS Engine] Warning: active simulator interval ${simIntervalRef.current} detected in Real GPS mode. Force clearing.`);
+    // Reset timing reference timestamps
+    startTimeRef.current = new Date();
+    endTimeRef.current = null;
+    lowSpeedDurationRef.current = 0;
+
+    // Safety check: verify no simulator interval exists
+    if (simIntervalRef.current) {
       clearInterval(simIntervalRef.current);
       simIntervalRef.current = null;
     }
@@ -550,210 +586,363 @@ export default function App() {
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
 
-    setRunState({
-      status: 'tracking',
-      path: [],
-      distance: 0,
-      duration: 0,
-      pace: '--:--',
-      gpsAccuracy: null
-    });
-
-    // Start Clock timer
-    timerIntervalRef.current = setInterval(() => {
-      setRunState(prev => {
-        if (prev.status === 'paused') return prev;
-        const newDuration = prev.duration + 1;
-        const paceStr = calculatePaceStr(newDuration, prev.distance);
-        return {
-          ...prev,
-          duration: newDuration,
-          pace: paceStr
-        };
-      });
-    }, 1000);
-
-    // Initial Path Polyline
-    if (mapInstanceRef.current) {
-      polylineRef.current = L.polyline([], {
-        color: '#FC4C02',
-        weight: 4
-      }).addTo(mapInstanceRef.current);
-
-      const runnerIcon = L.divIcon({
-        className: 'custom-runner-icon',
-        html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
-        iconSize: [16, 16]
-      });
-      runnerMarkerRef.current = L.marker([24.5950, 73.6800], { icon: runnerIcon }).addTo(mapInstanceRef.current);
-    }
-
     if (trackingMode === 'gps') {
-      // REAL GEOLOCATION TRACKING
       if (!navigator.geolocation) {
         alert("Geolocation is not supported by your browser!");
-        stopTracking();
         return;
       }
 
-      addLog("GPS: Geolocation watch active. Requesting high accuracy position...");
-      const watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          if (runStateRef.current.status === 'paused') return;
+      setIsSearchingGps(true);
+      addLog("GPS: Calibrating tracking device... Searching for GPS satellites...");
 
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           const accuracy = position.coords.accuracy;
-          const timestamp = position.timestamp || Date.now();
 
-          console.log(`[GPS]\nlatitude: ${lat}\nlongitude: ${lng}\naccuracy: ${accuracy}m\ntimestamp: ${timestamp}`);
-          console.log(`[GPS Engine] Coord received from navigator.geolocation.watchPosition(). Lat: ${lat}, Lng: ${lng}, trackingMode: "${trackingMode}", timestamp: ${timestamp}`);
+          addLog(`GPS: Lock acquired. Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)} (Accuracy: ${Math.round(accuracy)}m).`);
 
-          setRunState(prev => {
-            if (prev.status === 'paused') return prev;
+          // Center the map on user position
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.setView([lat, lng], 15.5);
+          }
 
-            // Filter poor accuracy coordinates (>25 meters accuracy discarded)
-            if (accuracy > 25) {
-              addLog(`GPS: Poor signal accuracy (${Math.round(accuracy)}m). Discarding point.`);
-              return { ...prev, gpsAccuracy: accuracy };
-            }
+          // Initial Path Polyline
+          if (mapInstanceRef.current) {
+            polylineRef.current = L.polyline([[lat, lng]], {
+              color: '#FC4C02',
+              weight: 4
+            }).addTo(mapInstanceRef.current);
 
-            const newPoint = [lat, lng];
-            const nowTime = Date.now();
-            
-            // Calculate distance
-            let incrementalDist = 0;
-            if (prev.path.length > 0) {
-              const lastPoint = prev.path[prev.path.length - 1];
-              incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], lat, lng);
-            }
+            const runnerIcon = L.divIcon({
+              className: 'custom-runner-icon',
+              html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+              iconSize: [16, 16]
+            });
+            runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+          }
 
-            // GPS Drift Filtering: if displacement is less than 2 meters (0.002 km), ignore it
-            if (prev.path.length > 0 && incrementalDist < 0.002) {
-              return { ...prev, gpsAccuracy: accuracy };
-            }
-
-            // Anti-Cheat: Analyze speed & acceleration between successive ticks
-            let instantSpeed = 0;
-            if (lastPointTimeRef.current !== null && prev.path.length > 0) {
-              const dt = (nowTime - lastPointTimeRef.current) / 1000; // seconds
-              if (dt > 0.1) {
-                const distMeters = incrementalDist * 1000;
-                instantSpeed = distMeters / dt; // m/s
-                const acceleration = Math.abs(instantSpeed - lastSpeedRef.current) / dt; // m/s²
-
-                // 1. Filter instant GPS spikes (> 12 m/s) - discard point to keep path clean
-                if (instantSpeed > 12.0) {
-                  cheatMetricsRef.current.speedSpikes += 1;
-                  addLog(`GPS: Discarding GPS speed spike (${instantSpeed.toFixed(1)} m/s).`);
-                  return { ...prev, gpsAccuracy: accuracy };
-                }
-
-                // 2. Track repeated jumps (> 6 m/s)
-                if (instantSpeed > 6.0) {
-                  cheatMetricsRef.current.repeatedJumps += 1;
-                }
-
-                // 3. Track unrealistic acceleration (> 4 m/s²)
-                if (acceleration > 4.0) {
-                  cheatMetricsRef.current.unrealisticAcceleration += 1;
-                }
-
-                lastSpeedRef.current = instantSpeed;
-              }
-            }
-
-            lastPointTimeRef.current = nowTime;
-
-            const updatedPath = [...prev.path, newPoint];
-            const updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
-
-            // Log pace telemetry
-            const distanceMeters = updatedDistance * 1000;
-            const elapsedSeconds = prev.duration;
-            const currentPace = calculatePaceStr(elapsedSeconds, updatedDistance);
-            console.log(`[PACE]\ndistanceMeters: ${distanceMeters.toFixed(1)}\nelapsedSeconds: ${elapsedSeconds}\nspeed: ${instantSpeed.toFixed(2)} m/s\npace: ${currentPace}`);
-
-            // Update Map visual
-            if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
-            if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
-            if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
-
-            // Real self-intersection check
-            if (updatedPath.length >= 5 && updatedDistance > 0.05) {
-              const intersectIdx = checkPathSelfIntersection(updatedPath);
-              if (intersectIdx !== null) {
-                // Closed loop detected! Trigger completion.
-                setTimeout(() => {
-                  finishRealRun(updatedPath.slice(intersectIdx));
-                }, 200);
-              }
-            }
-
-            return {
-              ...prev,
-              path: updatedPath,
-              distance: updatedDistance,
-              gpsAccuracy: accuracy
-            };
+          setRunState({
+            status: 'tracking',
+            path: [[lat, lng]],
+            distance: 0,
+            duration: 0,
+            pace: '--:--',
+            gpsAccuracy: accuracy,
+            speed: 0,
+            avgSpeed: 0,
+            avgPace: '--:--',
+            calories: 0,
+            isAutoPaused: false
           });
+
+          // Start Clock timer
+          timerIntervalRef.current = setInterval(() => {
+            // Stationary fallback check: if no coordinate is received for > 8s, trigger auto-pause
+            if (lastPointTimeRef.current !== null) {
+              const timeSinceLastPoint = (Date.now() - lastPointTimeRef.current) / 1000;
+              if (timeSinceLastPoint > 8 && !runStateRef.current.isAutoPaused) {
+                setRunState(prev => {
+                  if (prev.isAutoPaused) return prev;
+                  addLog("GPS: Auto-paused (no movement detected).");
+                  return { ...prev, isAutoPaused: true, speed: 0 };
+                });
+              }
+            }
+
+            setRunState(prev => {
+              if (prev.status === 'paused' || prev.isAutoPaused) return prev;
+              const newDuration = prev.duration + 1;
+              const avgSpeed = prev.distance > 0 ? (prev.distance * 3600) / newDuration : 0;
+              const avgPaceStr = calculatePaceStr(newDuration, prev.distance);
+              return {
+                ...prev,
+                duration: newDuration,
+                avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+                avgPace: avgPaceStr
+              };
+            });
+          }, 1000);
+
+          lastPointTimeRef.current = Date.now();
+          setIsSearchingGps(false);
+
+          // Now start watchPosition tracking
+          const watchId = navigator.geolocation.watchPosition(
+            (watchPos) => {
+              if (runStateRef.current.status === 'paused') return;
+
+              const wLat = watchPos.coords.latitude;
+              const wLng = watchPos.coords.longitude;
+              const wAccuracy = watchPos.coords.accuracy;
+              const wTimestamp = watchPos.timestamp || Date.now();
+
+              console.log(`[GPS]\nlatitude: ${wLat}\nlongitude: ${wLng}\naccuracy: ${wAccuracy}m\ntimestamp: ${wTimestamp}`);
+              
+              setRunState(prev => {
+                if (prev.status === 'paused') return prev;
+
+                // 1. Accuracy criteria
+                if (wAccuracy > 25) {
+                  addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
+                  return { ...prev, gpsAccuracy: wAccuracy };
+                }
+
+                const newPoint = [wLat, wLng];
+                const nowTime = Date.now();
+                
+                let incrementalDist = 0;
+                if (prev.path.length > 0) {
+                  const lastPoint = prev.path[prev.path.length - 1];
+                  incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], wLat, wLng);
+                }
+
+                // 2. Ignore GPS Jitter (drift under 2 meters)
+                if (prev.path.length > 0 && incrementalDist < 0.002) {
+                  return { ...prev, gpsAccuracy: wAccuracy };
+                }
+
+                // 3. Compute speed & acceleration metrics
+                let dt = 0;
+                let instantSpeedMS = 0;
+                if (lastPointTimeRef.current !== null) {
+                  dt = (nowTime - lastPointTimeRef.current) / 1000;
+                }
+
+                if (dt > 0.1) {
+                  const distMeters = incrementalDist * 1000;
+                  instantSpeedMS = distMeters / dt;
+                  const wAcceleration = Math.abs(instantSpeedMS - lastSpeedRef.current) / dt;
+
+                  // 4. Anti-Cheat spike validation (> 12 m/s / 43 km/h discarded)
+                  if (instantSpeedMS > 12.0) {
+                    cheatMetricsRef.current.speedSpikes += 1;
+                    addLog(`GPS: Discarding GPS speed spike (${(instantSpeedMS * 3.6).toFixed(1)} km/h).`);
+                    return { ...prev, gpsAccuracy: wAccuracy };
+                  }
+
+                  if (instantSpeedMS > 6.0) {
+                    cheatMetricsRef.current.repeatedJumps += 1;
+                  }
+
+                  if (wAcceleration > 4.0) {
+                    cheatMetricsRef.current.unrealisticAcceleration += 1;
+                  }
+
+                  lastSpeedRef.current = instantSpeedMS;
+                }
+
+                // 5. Automatic Pause & Resume detection
+                let nextAutoPaused = prev.isAutoPaused;
+                if (instantSpeedMS < 0.5) {
+                  // Increment stationary low speed timer
+                  lowSpeedDurationRef.current += dt || 1.5;
+                  if (lowSpeedDurationRef.current >= 6 && !prev.isAutoPaused) {
+                    nextAutoPaused = true;
+                    addLog("GPS: Auto-paused (runner stopped).");
+                  }
+                } else if (instantSpeedMS >= 0.8) {
+                  // Reset stationary timer and auto-resume
+                  lowSpeedDurationRef.current = 0;
+                  if (prev.isAutoPaused) {
+                    nextAutoPaused = false;
+                    addLog("GPS: Auto-resumed (runner restarted).");
+                  }
+                }
+
+                lastPointTimeRef.current = nowTime;
+
+                // Format current speed & pace
+                const speedKmH = instantSpeedMS * 3.6;
+                let currentPaceStr = '--:--';
+                if (instantSpeedMS >= 0.3) {
+                  const paceDec = 60 / speedKmH;
+                  const pMins = Math.floor(paceDec);
+                  const pSecs = Math.floor((paceDec - pMins) * 60);
+                  if (pMins <= 30) {
+                    currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
+                  }
+                }
+
+                // If auto-paused, do NOT accumulate distance or path coordinates
+                let updatedPath = prev.path;
+                let updatedDistance = prev.distance;
+                if (!nextAutoPaused) {
+                  updatedPath = [...prev.path, newPoint];
+                  updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
+                }
+
+                const totalDuration = prev.duration || 1;
+                const avgSpeed = (updatedDistance * 3600) / totalDuration;
+                const avgPaceStr = calculatePaceStr(totalDuration, updatedDistance);
+                const caloriesEst = Math.round(updatedDistance * 75 * 1.03);
+
+                if (polylineRef.current && !nextAutoPaused) polylineRef.current.setLatLngs(updatedPath);
+                if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+                if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
+
+                // Self-intersection check
+                if (updatedPath.length >= 5 && updatedDistance > 0.05) {
+                  const intersectIdx = checkPathSelfIntersection(updatedPath);
+                  if (intersectIdx !== null) {
+                    setTimeout(() => {
+                      finishRealRun(updatedPath.slice(intersectIdx));
+                    }, 200);
+                  }
+                }
+
+                return {
+                  ...prev,
+                  path: updatedPath,
+                  distance: updatedDistance,
+                  gpsAccuracy: wAccuracy,
+                  speed: parseFloat(speedKmH.toFixed(1)),
+                  avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+                  avgPace: avgPaceStr,
+                  calories: caloriesEst,
+                  pace: currentPaceStr,
+                  isAutoPaused: nextAutoPaused
+                };
+              });
+            },
+            (watchErr) => {
+              console.error("GPS Watch Error", watchErr);
+              addLog(`GPS Warning: 
+${watchErr.message} (retrying)`);
+            },
+            { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+          );
+
+          watchIdRef.current = watchId;
         },
         (error) => {
-          console.error("GPS Error", error);
-          addLog(`GPS Warning: ${error.message} (retrying)`);
+          setIsSearchingGps(false);
+          console.error("GPS Initial Error", error);
+          alert(`GPS Signal Acquisition Failed: ${error.message}. Please stand in an open area and try again.`);
         },
-        { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
-      watchIdRef.current = watchId;
-      console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: tracking\nwatchId: ${watchId}`);
     } else {
-      // PRELOADED DEVELOPER SIMULATOR
+      // DEVELOPER SIMULATION MODE
+      addLog("GPS Sim: Initializing developer simulator walk...");
       const route = SIMULATION_ROUTES[simulationRouteKey];
+      const startPoint = route.points[0];
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.setView(startPoint, 15.5);
+
+        polylineRef.current = L.polyline([startPoint], {
+          color: '#FC4C02',
+          weight: 4
+        }).addTo(mapInstanceRef.current);
+
+        const runnerIcon = L.divIcon({
+          className: 'custom-runner-icon',
+          html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+          iconSize: [16, 16]
+            });
+        runnerMarkerRef.current = L.marker(startPoint, { icon: runnerIcon }).addTo(mapInstanceRef.current);
+      }
+
+      setRunState({
+        status: 'tracking',
+        path: [startPoint],
+        distance: 0,
+        duration: 0,
+        pace: '05:00',
+        gpsAccuracy: 3,
+        speed: 12.0,
+        avgSpeed: 12.0,
+        avgPace: '05:00',
+        calories: 0,
+        isAutoPaused: false
+      });
+
+      // Start Clock timer
+      timerIntervalRef.current = setInterval(() => {
+        setRunState(prev => {
+          if (prev.status === 'paused' || prev.isAutoPaused) return prev;
+          const newDuration = prev.duration + 1;
+          const avgSpeed = prev.distance > 0 ? (prev.distance * 3600) / newDuration : 0;
+          const avgPaceStr = calculatePaceStr(newDuration, prev.distance);
+          return {
+            ...prev,
+            duration: newDuration,
+            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+            avgPace: avgPaceStr
+          };
+        });
+      }, 1000);
+
       addLog(`GPS Sim: Starting developer walk on loop: ${route.name}`);
       let idx = 0;
+      lastPointTimeRef.current = Date.now();
 
       const intervalId = setInterval(() => {
         if (runStateRef.current.status === 'paused') return;
 
         if (idx >= route.points.length) {
-          console.log(`[GPS Engine] Simulator interval cleared (finished). Interval ID: ${simIntervalRef.current}`);
-          addLog(`GPS: Simulator interval cleared (finished).`);
-          clearInterval(simIntervalRef.current);
+          clearInterval(intervalId);
           simIntervalRef.current = null;
-          finishRealRun(route.points);
+          addLog("GPS: Simulator path completed.");
           return;
         }
 
         const point = route.points[idx];
         const timestamp = Date.now();
-        console.log(`[GPS]\nlatitude: ${point[0]}\nlongitude: ${point[1]}\naccuracy: 0m (simulated)\ntimestamp: ${timestamp}`);
-        console.log(`[GPS Engine] Coord received from Simulator interval. Lat: ${point[0]}, Lng: ${point[1]}, trackingMode: "${trackingMode}", timestamp: ${timestamp}`);
 
         setRunState(prev => {
           if (prev.status === 'paused') return prev;
-          const updatedPath = [...prev.path, point];
-          let stepDist = 0;
+
+          let incrementalDist = 0;
           if (prev.path.length > 0) {
             const lastPoint = prev.path[prev.path.length - 1];
-            stepDist = getGeodeticDistance(lastPoint[0], lastPoint[1], point[0], point[1]);
+            incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], point[0], point[1]);
           }
-          const updatedDistance = parseFloat((prev.distance + stepDist).toFixed(2));
 
-          // Log pace telemetry
-          const distanceMeters = updatedDistance * 1000;
-          const elapsedSeconds = prev.duration;
-          const currentSpeed = (stepDist * 1000) / 1.5;
-          const currentPace = calculatePaceStr(elapsedSeconds, updatedDistance);
-          console.log(`[PACE]\ndistanceMeters: ${distanceMeters.toFixed(1)}\nelapsedSeconds: ${elapsedSeconds}\nspeed: ${currentSpeed.toFixed(2)} m/s\npace: ${currentPace}`);
+          const updatedPath = [...prev.path, point];
+          const updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
 
           if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
           if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(point);
           if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(point);
 
+          if (updatedPath.length >= 5 && updatedDistance > 0.05) {
+            const intersectIdx = checkPathSelfIntersection(updatedPath);
+            if (intersectIdx !== null) {
+              clearInterval(intervalId);
+              simIntervalRef.current = null;
+              setTimeout(() => {
+                finishRealRun(updatedPath.slice(intersectIdx));
+              }, 200);
+            }
+          }
+
+          const totalDuration = prev.duration || 1;
+          const avgSpeed = (updatedDistance * 3600) / totalDuration;
+          const avgPaceStr = calculatePaceStr(totalDuration, updatedDistance);
+          const caloriesEst = Math.round(updatedDistance * 75 * 1.03);
+
+          const currentSpeedSim = 12.5 + (Math.random() * 2 - 1);
+          let currentPaceStr = '04:48';
+          if (currentSpeedSim > 0.5) {
+            const paceDec = 60 / currentSpeedSim;
+            const pMins = Math.floor(paceDec);
+            const pSecs = Math.floor((paceDec - pMins) * 60);
+            currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
+          }
+
           return {
             ...prev,
             path: updatedPath,
-            distance: updatedDistance
+            distance: updatedDistance,
+            speed: parseFloat(currentSpeedSim.toFixed(1)),
+            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+            avgPace: avgPaceStr,
+            calories: caloriesEst,
+            pace: currentPaceStr,
+            gpsAccuracy: 3
           };
         });
 
@@ -761,13 +950,14 @@ export default function App() {
       }, 1500);
 
       simIntervalRef.current = intervalId;
-      console.log(`[GPS Engine] Simulator interval created. Interval ID: ${intervalId}, trackingMode: "${trackingMode}"`);
-      addLog(`GPS: Simulator interval created with ID: ${intervalId}`);
     }
   };
 
   const stopTracking = (reason = "Explicit User Request") => {
-    if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+    if (watchIdRef.current) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
     if (simIntervalRef.current) {
       console.log(`[GPS Engine] Simulator interval cleared (stop). Interval ID: ${simIntervalRef.current}`);
       addLog("GPS: Simulator interval cleared.");
@@ -777,7 +967,29 @@ export default function App() {
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
-    console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null\nterminationReason: ${reason}`);
+    // If the run has significant distance, show the summary modal instead of resetting immediately!
+    if (reason === "Explicit User Request" && runState.distance >= 0.01) {
+      const runSummary = {
+        userId: currentUser.uid,
+        path: runState.path,
+        distance: runState.distance,
+        duration: runState.duration,
+        pace: runState.avgPace !== '--:--' ? runState.avgPace : runState.pace,
+        speed: runState.avgSpeed || parseFloat((runState.distance > 0 ? (runState.distance * 3600) / runState.duration : 0).toFixed(1)),
+        calories: runState.calories || Math.round(runState.distance * 75 * 1.03),
+        startTime: startTimeRef.current ? startTimeRef.current.toISOString() : new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        summaryStatistics: {
+          maxSpeed: Math.round(cheatMetricsRef.current.maxSpeed || 0),
+          averageAccuracy: runState.gpsAccuracy,
+          originalTrackingMode: trackingMode
+        }
+      };
+      setCompletedRunData(runSummary);
+      setShowSummaryModal(true);
+      addLog("System: Run completed. Summary modal opened.");
+      return;
+    }
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
@@ -788,9 +1000,14 @@ export default function App() {
       distance: 0,
       duration: 0,
       pace: '--:--',
-      gpsAccuracy: null
+      gpsAccuracy: null,
+      speed: 0,
+      avgSpeed: 0,
+      avgPace: '--:--',
+      calories: 0,
+      isAutoPaused: false
     });
-    addLog("System: Run tracking halted.");
+    addLog(`System: Run tracking halted. Reason: ${reason}`);
   };
 
   const recenterMap = () => {
@@ -894,6 +1111,25 @@ export default function App() {
       coords: loopCoordinates
     };
 
+    // Save Completed Run History
+    const runSummary = {
+      userId: currentUser.uid,
+      path: loopCoordinates,
+      distance: runState.distance,
+      duration: runState.duration,
+      pace: runState.avgPace !== '--:--' ? runState.avgPace : runState.pace,
+      speed: runState.avgSpeed,
+      calories: runState.calories,
+      startTime: startTimeRef.current ? startTimeRef.current.toISOString() : new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      summaryStatistics: {
+        conqueredTerritoryName: sectorName,
+        originalTrackingMode: trackingMode
+      }
+    };
+    await saveCompletedRun(runSummary);
+    addLog(`System: Run history successfully saved.`);
+
     // Save to Database (Firestore / LocalStorage)
     await saveNewTerritory(newTerritory);
     addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
@@ -928,7 +1164,12 @@ export default function App() {
       distance: 0,
       duration: 0,
       pace: '--:--',
-      gpsAccuracy: null
+      gpsAccuracy: null,
+      speed: 0,
+      avgSpeed: 0,
+      avgPace: '--:--',
+      calories: 0,
+      isAutoPaused: false
     });
 
     // Notify Coach Chat
@@ -1288,130 +1529,189 @@ export default function App() {
       </div>
     );
   }
-
   // ACTIVE GAMEPLAY DASHBOARD
   return (
-    <div className="sim-container fade-in">
-      
-      {/* SIMULATOR / CONFIGURATION CONTROL PANEL */}
-      <div className="clash-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
-        <div>
-          <span className="clash-label" style={{ color: '#FC4C02', fontSize: '11px', letterSpacing: '2.5px' }}>Configuration Control</span>
-          <h2 className="clash-title" style={{ margin: '6px 0 0 0', fontSize: '28px', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
-          <p className="clash-body" style={{ fontSize: '13px', marginTop: '8px' }}>
-            Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
-          </p>
-        </div>
-
-        {/* Tracking Mode selection */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <label className="clash-label" style={{ fontSize: '10px' }}>Location Source Mode</label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <button 
-              className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-              onClick={() => setTrackingMode('gps')}
-              disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
-            >
-              <Navigation size={13} style={{ transform: 'rotate(45deg)' }} /> Real GPS
-            </button>
-            <button 
-              className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-              onClick={() => setTrackingMode('sim')}
-              disabled={runState.status !== 'idle'}
-              style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
-            >
-              <Radio size={13} /> Developer Sim
-            </button>
+    <div 
+      className="sim-container fade-in"
+      style={!DEBUG_MODE ? { display: 'flex', justifyContent: 'center', padding: '24px 0', minHeight: '100vh', alignItems: 'center' } : {}}
+    >
+      {DEBUG_MODE && (
+        /* SIMULATOR / CONFIGURATION CONTROL PANEL */
+        <div className="clash-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
+          <div>
+            <span className="clash-label" style={{ color: '#FC4C02', fontSize: '11px', letterSpacing: '2.5px' }}>Configuration Control</span>
+            <h2 className="clash-title" style={{ margin: '6px 0 0 0', fontSize: '28px', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
+            <p className="clash-body" style={{ fontSize: '13px', marginTop: '8px' }}>
+              Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
+            </p>
           </div>
-        </div>
 
-        {/* Predefined Simulator selection (Only shown if mode is sim) */}
-        {trackingMode === 'sim' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label className="clash-label" style={{ fontSize: '10px' }}>Mock Simulator Loop</label>
-            <select 
-              value={simulationRouteKey}
-              onChange={e => setSimulationRouteKey(e.target.value)}
-              disabled={runState.status !== 'idle'}
-              className="cyber-select"
-            >
-              <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-              <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-              <option value="monument">Udaipur Castle Park (1.4 km)</option>
-              <option value="micro">Micro Loop (Too Small Test)</option>
-            </select>
-          </div>
-        )}
-
-        {/* Control execution buttons */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          {runState.status === 'idle' ? (
-            <button className="clash-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
-              <Play size={13} /> Start Tracking
-            </button>
-          ) : (
-            <button className="clash-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
-              <Square size={13} /> Stop Run
-            </button>
-          )}
-
-          <button 
-            className="clash-btn-secondary"
-            onClick={handleLogout}
-            style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
-          >
-            <LogOut size={13} /> Sign Out
-          </button>
-        </div>
-
-        {/* Collapsible Developer Console logs */}
-        <details style={{ marginTop: '4px' }}>
-          <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
-            Developer Tools
-          </summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-            <span className="clash-label" style={{ fontSize: '9px' }}>GPS Engine Console logs</span>
-            <div style={{
-              background: '#0B0B0B',
-              border: '1px solid var(--clash-border)',
-              borderRadius: '12px',
-              padding: '12px',
-              height: '150px',
-              overflowY: 'auto',
-              fontFamily: 'var(--clash-font-family)',
-              fontSize: '10px',
-              color: 'white',
-              display: 'flex',
-              flexDirection: 'column-reverse',
-              gap: '6px'
-            }}>
-              {consoleLogs.map((log, i) => (
-                <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
-                  <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
-                </div>
-              ))}
+          {/* Tracking Mode selection */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <label className="clash-label" style={{ fontSize: '10px' }}>Location Source Mode</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <button 
+                className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                onClick={() => setTrackingMode('gps')}
+                disabled={runState.status !== 'idle'}
+                style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
+              >
+                <Navigation size={13} style={{ transform: 'rotate(45deg)' }} /> Real GPS
+              </button>
+              <button 
+                className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                onClick={() => setTrackingMode('sim')}
+                disabled={runState.status !== 'idle'}
+                style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
+              >
+                <Radio size={13} /> Developer Sim
+              </button>
             </div>
           </div>
-        </details>
 
-        {/* Cloud database active details */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--clash-border)' }}>
-          <ShieldCheck size={16} style={{ color: '#FC4C02' }} />
-          <span className="clash-body" style={{ fontSize: '11px', fontWeight: '500' }}>
-            Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
-          </span>
+          {/* Predefined Simulator selection (Only shown if mode is sim) */}
+          {trackingMode === 'sim' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label className="clash-label" style={{ fontSize: '10px' }}>Mock Simulator Loop</label>
+              <select 
+                value={simulationRouteKey}
+                onChange={e => setSimulationRouteKey(e.target.value)}
+                disabled={runState.status !== 'idle'}
+                className="cyber-select"
+              >
+                <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
+                <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
+                <option value="monument">Udaipur Castle Park (1.4 km)</option>
+                <option value="micro">Micro Loop (Too Small Test)</option>
+              </select>
+            </div>
+          )}
+
+          {/* Control execution buttons */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            {runState.status === 'idle' ? (
+              <button className="clash-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
+                <Play size={13} /> Start Tracking
+              </button>
+            ) : (
+              <button className="clash-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
+                <Square size={13} /> Stop Run
+              </button>
+            )}
+
+            <button 
+              className="clash-btn-secondary"
+              onClick={handleLogout}
+              style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
+            >
+              <LogOut size={13} /> Sign Out
+            </button>
+          </div>
+
+          {/* Collapsible Developer Console logs */}
+          <details style={{ marginTop: '4px' }}>
+            <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
+              Developer Tools
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+              <span className="clash-label" style={{ fontSize: '9px' }}>GPS Engine Console logs</span>
+              <div style={{
+                background: '#0B0B0B',
+                border: '1px solid var(--clash-border)',
+                borderRadius: '12px',
+                padding: '12px',
+                height: '150px',
+                overflowY: 'auto',
+                fontFamily: 'var(--clash-font-family)',
+                fontSize: '10px',
+                color: 'white',
+                display: 'flex',
+                flexDirection: 'column-reverse',
+                gap: '6px'
+              }}>
+                {consoleLogs.map((log, i) => (
+                  <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
+                    <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </details>
+
+          {/* Cloud database active details */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--clash-border)' }}>
+            <ShieldCheck size={16} style={{ color: '#FC4C02' }} />
+            <span className="clash-body" style={{ fontSize: '11px', fontWeight: '500' }}>
+              Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
+            </span>
+          </div>
         </div>
-      </div>
-
-      {/* MOBILE DEVICE FRAME SIMULATION */}
+      )}      {/* MOBILE DEVICE FRAME SIMULATION */}
       <div className="phone-frame">
         <div className="phone-notch">
           <div className="phone-camera"></div>
         </div>
 
         <div className="app-screen">
-          
+          {isSearchingGps && (
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: '#0B0B0D',
+              zIndex: 10000,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '24px'
+            }} className="fade-in">
+              <div style={{ position: 'relative', width: '80px', height: '80px' }}>
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  border: '3px solid rgba(252, 76, 2, 0.2)',
+                  borderRadius: '50%'
+                }}></div>
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  border: '3px solid #FC4C02',
+                  borderRadius: '50%',
+                  animation: 'gps-pulse 1.5s infinite ease-in-out'
+                }} className="gps-pulse"></div>
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Compass size={32} style={{ color: '#FC4C02' }} className="intel-badge-pulse" />
+                </div>
+              </div>
+              <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '8px', padding: '0 20px' }}>
+                <h3 className="clash-title" style={{ margin: 0, fontSize: '18px', color: 'white', fontWeight: '800', letterSpacing: '1px' }}>
+                  LOCKING GPS
+                </h3>
+                <p className="clash-body" style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                  Acquiring tactical satellite lock. Please keep a clear view of the sky...
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Header */}
           <div style={{
             padding: '16px',
@@ -1481,6 +1781,171 @@ export default function App() {
           {/* Active Tab Screen Content */}
           <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column' }}>
             
+            {/* COMPLETED RUN SUMMARY MODAL */}
+            {showSummaryModal && completedRunData && (
+              <div 
+                className="fade-in" 
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0, 0, 0, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  zIndex: 20000,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '20px'
+                }}
+              >
+                <div 
+                  className="clash-card scale-in"
+                  style={{
+                    width: '100%',
+                    maxWidth: '340px',
+                    background: '#0B0B0D',
+                    border: '1px solid var(--clash-border)',
+                    borderRadius: '24px',
+                    padding: '24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '20px',
+                    boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
+                  }}
+                >
+                  <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '50%',
+                      background: 'rgba(252, 76, 2, 0.1)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto 8px auto'
+                    }}>
+                      <Trophy size={24} style={{ color: '#FC4C02' }} />
+                    </div>
+                    <h3 className="clash-title" style={{ fontSize: '18px', color: 'white', margin: 0 }}>RUN COMPLETED</h3>
+                    <span className="clash-label" style={{ fontSize: '9px' }}>Tactical Mission Logged</span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div>
+                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Distance</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.distance} <span style={{ fontSize: '10px' }}>KM</span></span>
+                    </div>
+                    <div>
+                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Duration</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                        {Math.floor(completedRunData.duration / 60)}:{(completedRunData.duration % 60).toString().padStart(2, '0')}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Avg Pace</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.pace}</span>
+                    </div>
+                    <div>
+                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Avg Speed</span>
+                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.speed} <span style={{ fontSize: '10px' }}>km/h</span></span>
+                    </div>
+                    <div style={{ gridColumn: 'span 2', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <span className="clash-label" style={{ fontSize: '8px', display: 'block' }}>Energy Burn</span>
+                        <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{completedRunData.calories} <span style={{ fontSize: '9px', fontWeight: 'normal', color: 'var(--clash-text-secondary)' }}>KCAL</span></span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(252,76,2,0.1)', padding: '4px 8px', borderRadius: '8px', border: '1px solid rgba(252,76,2,0.2)' }}>
+                        <Coins size={12} style={{ color: '#FC4C02' }} />
+                        <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>+{Math.ceil(completedRunData.distance * 20) + 10}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <button 
+                      onClick={async () => {
+                        addLog("System: Saving run record to database...");
+                        const res = await saveCompletedRun(completedRunData);
+                        if (res.success) {
+                          addLog("System: Run successfully synced and saved.");
+                        } else {
+                          addLog("GPS Warning: Run saved locally (sync deferred).");
+                        }
+                        
+                        // Reward coins and XP
+                        const coinReward = Math.ceil(completedRunData.distance * 20) + 10;
+                        const xpReward = Math.ceil(completedRunData.distance * 100) + 50;
+                        setCurrentUser(prev => {
+                          const newXp = prev.xp + xpReward;
+                          const leveledUp = newXp >= prev.nextLevelXp;
+                          return {
+                            ...prev,
+                            coins: prev.coins + coinReward,
+                            xp: leveledUp ? newXp - prev.nextLevelXp : newXp,
+                            level: leveledUp ? prev.level + 1 : prev.level,
+                            nextLevelXp: leveledUp ? prev.nextLevelXp + 500 : prev.nextLevelXp
+                          };
+                        });
+
+                        // Clear maps layer
+                        if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+                        if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+                        setRunState({
+                          status: 'idle',
+                          path: [],
+                          distance: 0,
+                          duration: 0,
+                          pace: '--:--',
+                          gpsAccuracy: null,
+                          speed: 0,
+                          avgSpeed: 0,
+                          avgPace: '--:--',
+                          calories: 0,
+                          isAutoPaused: false
+                        });
+
+                        setShowSummaryModal(false);
+                      }}
+                      className="clash-btn-primary"
+                      style={{ height: '48px', width: '100%', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: '800' }}
+                    >
+                      <CheckCircle size={16} /> SAVE & CLAIM
+                    </button>
+                    <button 
+                      onClick={() => {
+                        if (confirm("Are you sure you want to discard this run summary? The logged data will be permanently deleted.")) {
+                          if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+                          if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+                          setRunState({
+                            status: 'idle',
+                            path: [],
+                            distance: 0,
+                            duration: 0,
+                            pace: '--:--',
+                            gpsAccuracy: null,
+                            speed: 0,
+                            avgSpeed: 0,
+                            avgPace: '--:--',
+                            calories: 0,
+                            isAutoPaused: false
+                          });
+                          setShowSummaryModal(false);
+                        }
+                      }}
+                      className="clash-btn-secondary"
+                      style={{ height: '44px', width: '100%', borderRadius: '22px', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)', fontWeight: '800' }}
+                    >
+                      DISCARD RECORD
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* SETTINGS DRAWER OVERLAY */}
             {showSettingsDrawer && (
               <div className="fade-in settings-drawer-mobile" style={{
@@ -1547,7 +2012,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Coin balance */}
+                  {/* Coin holdings */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0B0B0B', border: '1px solid var(--clash-border)', padding: '8px 12px', borderRadius: '10px' }}>
                     <span className="clash-label" style={{ fontSize: '9px' }}>Coin Holdings</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1557,86 +2022,83 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Settings Group: Location Source */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <span className="clash-label" style={{ fontSize: '9px' }}>Running & GPS Configuration</span>
-                  
-                  <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {/* Toggle Selector */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label className="clash-subtitle" style={{ fontSize: '12px' }}>Location Source Mode</label>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                        <button 
-                          className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                          onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
-                          disabled={runState.status !== 'idle'}
-                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
-                        >
-                          <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
-                        </button>
-                        <button 
-                          className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                          onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
-                          disabled={runState.status !== 'idle'}
-                          style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
-                        >
-                          <Radio size={12} /> Dev Sim
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Loop selector */}
-                    {trackingMode === 'sim' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '12px' }}>
-                        <label className="clash-subtitle" style={{ fontSize: '12px' }}>Mock Simulator Loop</label>
-                        <select 
-                          value={simulationRouteKey}
-                          onChange={e => setSimulationRouteKey(e.target.value)}
-                          disabled={runState.status !== 'idle'}
-                          className="cyber-select focus-ring"
-                          style={{ fontSize: '11px' }}
-                        >
-                          <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-                          <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-                          <option value="monument">Udaipur Castle Park (1.4 km)</option>
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Collapsible System Diagnostics & Logs */}
-                <details style={{ marginTop: '4px' }}>
-                  <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
-                    Developer Tools
-                  </summary>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
-                    <span className="clash-label" style={{ fontSize: '8px' }}>Tactical Console Logs</span>
-                    <div style={{
-                      background: '#0B0B0B',
-                      border: '1px solid var(--clash-border)',
-                      borderRadius: '12px',
-                      padding: '10px',
-                      height: '150px',
-                      overflowY: 'auto',
-                      fontFamily: 'var(--clash-font-family)',
-                      fontSize: '10px',
-                      color: 'white',
-                      display: 'flex',
-                      flexDirection: 'column-reverse',
-                      gap: '4px'
-                    }}>
-                      {consoleLogs.map((log, i) => (
-                        <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
-                          <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                {DEBUG_MODE && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+                    <span className="clash-label" style={{ fontSize: '9px' }}>Running & GPS Configuration</span>
+                    <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label className="clash-subtitle" style={{ fontSize: '12px' }}>Location Source Mode</label>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                          <button 
+                            className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                            onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
+                            disabled={runState.status !== 'idle'}
+                            style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
+                          >
+                            <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
+                          </button>
+                          <button 
+                            className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                            onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
+                            disabled={runState.status !== 'idle'}
+                            style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
+                          >
+                            <Radio size={12} /> Dev Sim
+                          </button>
                         </div>
-                      ))}
+                      </div>
+                      {trackingMode === 'sim' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '12px' }}>
+                          <label className="clash-subtitle" style={{ fontSize: '12px' }}>Mock Simulator Loop</label>
+                          <select 
+                            value={simulationRouteKey}
+                            onChange={e => setSimulationRouteKey(e.target.value)}
+                            disabled={runState.status !== 'idle'}
+                            className="cyber-select focus-ring"
+                            style={{ fontSize: '11px' }}
+                          >
+                            <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
+                            <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
+                            <option value="monument">Udaipur Castle Park (1.4 km)</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </details>
+                )}
 
-                {/* Settings Group: Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px' }}>
+                {DEBUG_MODE && (
+                  <details style={{ marginTop: '12px' }}>
+                    <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
+                      Developer Tools
+                    </summary>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                      <span className="clash-label" style={{ fontSize: '8px' }}>Tactical Console Logs</span>
+                      <div style={{
+                        background: '#0B0B0B',
+                        border: '1px solid var(--clash-border)',
+                        borderRadius: '12px',
+                        padding: '10px',
+                        height: '150px',
+                        overflowY: 'auto',
+                        fontFamily: 'var(--clash-font-family)',
+                        fontSize: '10px',
+                        color: 'white',
+                        display: 'flex',
+                        flexDirection: 'column-reverse',
+                        gap: '4px'
+                      }}>
+                        {consoleLogs.map((log, i) => (
+                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
+                            <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px', marginTop: '16px' }}>
                   <button 
                     onClick={() => {
                       if (confirm("Are you sure you want to sign out?")) {
@@ -1649,7 +2111,7 @@ export default function App() {
                   >
                     <LogOut size={13} style={{ color: '#FC4C02' }} /> Sign Out Account
                   </button>
-                  
+
                   <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
                     RunClash v2.0.0 • Secured Database Sync
                   </div>
@@ -1657,7 +2119,7 @@ export default function App() {
               </div>
             )}
 
-             <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px', height: '100%', overflowY: 'auto' }} className="fade-in">
+            <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px', height: '100%', overflowY: 'auto' }} className="fade-in">
               
               {/* Greeting Header */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -2470,54 +2932,57 @@ export default function App() {
                                   120 XP
                                 </span>
                               </div>
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Simulation Key</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument')}
-                                </span>
-                              </div>
+                              {DEBUG_MODE && (
+                                <div>
+                                  <span className="clash-label" style={{ fontSize: '7.5px' }}>Simulation Key</span>
+                                  <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
+                                    {renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument')}
+                                  </span>
+                                </div>
+                              )}
                             </div>
 
-                            {/* Dev Switcher Controls (Kept for simulator config capability) */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              <span className="clash-label" style={{ fontSize: '8px' }}>Tracker Configuration</span>
-                              <div style={{ display: 'flex', background: '#0B0B0D', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
-                                <button 
-                                  onClick={() => setTrackingMode('sim')}
-                                  style={{
-                                    flex: 1,
-                                    background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
-                                    color: 'white',
-                                    border: 'none',
-                                    padding: '6px 0',
-                                    borderRadius: '10px',
-                                    fontSize: '10px',
-                                    fontWeight: '800',
-                                    cursor: 'pointer'
-                                  }}
-                                  className="clash-btn-press"
-                                >
-                                  Dev Simulator
-                                </button>
-                                <button 
-                                  onClick={() => setTrackingMode('gps')}
-                                  style={{
-                                    flex: 1,
-                                    background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
-                                    color: 'white',
-                                    border: 'none',
-                                    padding: '6px 0',
-                                    borderRadius: '10px',
-                                    fontSize: '10px',
-                                    fontWeight: '800',
-                                    cursor: 'pointer'
-                                  }}
-                                  className="clash-btn-press"
-                                >
-                                  Real GPS Stride
-                                </button>
+                            {DEBUG_MODE && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', marginBottom: '8px' }}>
+                                <span className="clash-label" style={{ fontSize: '8px' }}>Tracker Configuration</span>
+                                <div style={{ display: 'flex', background: '#0B0B0D', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
+                                  <button 
+                                    onClick={() => setTrackingMode('sim')}
+                                    style={{
+                                      flex: 1,
+                                      background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
+                                      color: 'white',
+                                      border: 'none',
+                                      padding: '6px 0',
+                                      borderRadius: '10px',
+                                      fontSize: '10px',
+                                      fontWeight: '800',
+                                      cursor: 'pointer'
+                                    }}
+                                    className="clash-btn-press"
+                                  >
+                                    Dev Simulator
+                                  </button>
+                                  <button 
+                                    onClick={() => setTrackingMode('gps')}
+                                    style={{
+                                      flex: 1,
+                                      background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
+                                      color: 'white',
+                                      border: 'none',
+                                      padding: '6px 0',
+                                      borderRadius: '10px',
+                                      fontSize: '10px',
+                                      fontWeight: '800',
+                                      cursor: 'pointer'
+                                    }}
+                                    className="clash-btn-press"
+                                  >
+                                    Real GPS Stride
+                                  </button>
+                                </div>
                               </div>
-                            </div>
+                            )}
 
                             {/* Actions */}
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '2px' }}>
@@ -2584,25 +3049,52 @@ export default function App() {
                         animation: 'pulse 1.5s infinite'
                       }}></span>
                     </div>
-                    <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02' }}>
+                    <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {runState.isAutoPaused && (
+                        <span style={{
+                          background: 'rgba(252, 76, 2, 0.1)',
+                          border: '1px solid #FC4C02',
+                          color: '#FC4C02',
+                          padding: '2px 6px',
+                          borderRadius: '6px',
+                          fontSize: '8px',
+                          fontWeight: '800'
+                        }}>
+                          AUTO-PAUSED
+                        </span>
+                      )}
                       {runState.status === 'tracking' ? 'Recording' : 'Paused'}
                     </span>
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', background: '#0B0B0B', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A', textAlign: 'center' }}>
                     <div>
-                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '10px' }}>KM</span></span>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
                     </div>
                     <div>
-                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
                         {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
                       </span>
                     </div>
                     <div>
-                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Energy</span>
+                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.calories} <span style={{ fontSize: '8px' }}>KCAL</span></span>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>GPS Lock</span>
+                      <span style={{ fontSize: '12px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 10 ? '#4CAF50' : '#FC4C02', textTransform: 'uppercase' }}>
+                        {runState.gpsAccuracy ? `${Math.round(runState.gpsAccuracy)}m` : 'Locking'}
+                      </span>
                     </div>
                   </div>
 
@@ -2615,7 +3107,7 @@ export default function App() {
                       {runState.status === 'tracking' ? 'Pause' : 'Resume'}
                     </button>
                     <button 
-                      onClick={stopTracking}
+                      onClick={() => stopTracking("Explicit User Request")}
                       className="clash-btn-primary"
                       style={{ height: '44px', flex: 1.2 }}
                     >

@@ -581,3 +581,52 @@ export const reportError = async (message, stack = '', component = '', metadata 
     }
   }
 };
+
+export const saveCompletedRun = async (runData) => {
+  const isLocalGuest = !runData.userId || runData.userId.startsWith('local_');
+  if (useSupabase && !isLocalGuest) {
+    try {
+      const dbRun = {
+        user_id: runData.userId,
+        gps_path: runData.path,
+        distance: runData.distance,
+        duration: runData.duration,
+        pace: runData.pace,
+        speed: runData.speed,
+        calories: runData.calories,
+        start_time: runData.startTime,
+        end_time: runData.endTime,
+        summary_statistics: runData.summaryStatistics
+      };
+
+      const { data, error } = await supabase
+        .from('runs')
+        .insert(dbRun);
+
+      console.log(`[SUPABASE]\\noperation: INSERT\\ntable: runs\\nuser: \${runData.userId}\\nstatus: \${error ? \`error: \${error.message}\` : 'success'}`);
+
+      if (error) throw error;
+      return { success: true, data };
+    } catch (err) {
+      console.warn("Supabase insert run failed, saving locally as fallback:", err.message);
+    }
+  }
+
+  // Fallback to local storage
+  try {
+    const localRunsKey = 'runclash_runs';
+    const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
+    const localRun = {
+      id: `run_local_\${Date.now()}`,
+      ...runData,
+      createdAt: new Date().toISOString()
+    };
+    existingRuns.push(localRun);
+    localStorage.setItem(localRunsKey, JSON.stringify(existingRuns));
+    console.log("Local Database: Run successfully saved locally.");
+    return { success: true, local: true, data: localRun };
+  } catch (err) {
+    console.error("Local database save run failed:", err);
+    return { success: false, error: err.message };
+  }
+};

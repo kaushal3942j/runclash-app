@@ -175,9 +175,35 @@ begin
 
   return new;
 end;
-$$ language plpgsql;
+$ language plpgsql;
 
 drop trigger if exists on_territory_insert_takeover on public.territories;
 create trigger on_territory_insert_takeover
   after insert on public.territories
   for each row execute procedure public.handle_territory_takeovers();
+
+-- 10. Create Runs Table for Run History
+create table if not exists public.runs (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references public.profiles(id) on delete cascade,
+  gps_path jsonb not null,
+  distance numeric not null,
+  duration integer not null,
+  pace text not null,
+  speed numeric not null,
+  calories numeric not null,
+  start_time timestamp with time zone not null,
+  end_time timestamp with time zone not null,
+  summary_statistics jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Enable RLS for runs
+alter table public.runs enable row level security;
+
+-- Policies for runs
+drop policy if exists "Users can view their own runs" on public.runs;
+create policy "Users can view their own runs" on public.runs for select using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert their own runs" on public.runs;
+create policy "Users can insert their own runs" on public.runs for insert with check (auth.uid() = user_id);

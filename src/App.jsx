@@ -134,15 +134,101 @@ export default function App() {
   const [isInspectingTransition, setIsInspectingTransition] = useState(false);
   const [renderedTerritory, setRenderedTerritory] = useState(null);
 
+  // GPS Lock state and Guidance Line variables
+  const [isGpsReady, setIsGpsReady] = useState(false);
+  const [initialGpsLockCoords, setInitialGpsLockCoords] = useState(null);
+  const [guidanceLineCoords, setGuidanceLineCoords] = useState(null);
+  
+  const guidancePolylineRef = useRef(null);
+
   useEffect(() => {
     setIsInspectingTransition(true);
     const timer = setTimeout(() => {
       const found = territories.find(t => t.id === selectedTerritoryId);
       setRenderedTerritory(found || null);
+      if (!found) {
+        setGuidanceLineCoords(null);
+      }
       setIsInspectingTransition(false);
     }, 150); // Matches .intel-content-transition 150ms delay
     return () => clearTimeout(timer);
   }, [selectedTerritoryId, territories]);
+
+  // Initial GPS Lock and map centring
+  useEffect(() => {
+    if (activeTab === 'map') {
+      if (trackingMode === 'sim') {
+        setIsGpsReady(true);
+        return;
+      }
+      setIsGpsReady(false);
+      
+      const retrieveInitialLock = () => {
+        if (!navigator.geolocation) {
+          setIsGpsReady(true);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            setIsGpsReady(true);
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            setInitialGpsLockCoords([lat, lng]);
+            if (mapInstanceRef.current) {
+              mapInstanceRef.current.setView([lat, lng], 15.5);
+              
+              if (runnerMarkerRef.current) {
+                runnerMarkerRef.current.setLatLng([lat, lng]);
+              } else {
+                const runnerIcon = L.divIcon({
+                  className: 'custom-runner-icon',
+                  html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+                  iconSize: [16, 16]
+                });
+                runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+              }
+            }
+          },
+          (error) => {
+            console.warn("[GPS] Initial lock failed:", error.message);
+            setIsGpsReady(true); // Fallback to allow starting run
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      };
+      retrieveInitialLock();
+    }
+  }, [activeTab, trackingMode]);
+
+  // Guidance Line Rendering Effect
+  useEffect(() => {
+    if (mapInstanceRef.current) {
+      if (guidancePolylineRef.current) {
+        mapInstanceRef.current.removeLayer(guidancePolylineRef.current);
+        guidancePolylineRef.current = null;
+      }
+      if (guidanceLineCoords) {
+        guidancePolylineRef.current = L.polyline(guidanceLineCoords, {
+          color: '#FC4C02',
+          weight: 3,
+          dashArray: '5, 8'
+        }).addTo(mapInstanceRef.current);
+      }
+    }
+  }, [guidanceLineCoords]);
+
+  const handleNavigateTerritory = () => {
+    if (mapInstanceRef.current && renderedTerritory && renderedTerritory.coords?.length > 0) {
+      const startLoc = runnerMarkerRef.current 
+        ? runnerMarkerRef.current.getLatLng() 
+        : mapInstanceRef.current.getCenter();
+      const endLoc = renderedTerritory.coords[0];
+      
+      setGuidanceLineCoords([[startLoc.lat, startLoc.lng], [endLoc[0], endLoc[1]]]);
+      mapInstanceRef.current.flyTo(endLoc, 15.5);
+      addLog(`System: Navigating to ${renderedTerritory.name}. Temporary guidance path active.`);
+    }
+  };
 
   // ==========================================
   // SPRINT 3: SOCIAL FOUNDATION STATE & HOOKS
@@ -611,6 +697,12 @@ export default function App() {
     startTimeRef.current = new Date();
     endTimeRef.current = null;
     lowSpeedDurationRef.current = 0;
+
+    // Auto-configure route key if territory is selected and simulating
+    if (trackingMode === 'sim' && renderedTerritory) {
+      const key = renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument');
+      setSimulationRouteKey(key);
+    }
 
     // Safety check: verify no simulator interval exists
     if (simIntervalRef.current) {
@@ -2792,8 +2884,8 @@ ${watchErr.message} (retrying)`);
                 </button>
               </div>
 
-              {/* Draggable bottom sheet / Startup Action Deck */}
-              {runState.status === 'idle' && (() => {
+              {/* Territory Intelligence Card Overlay (Visible above Ready to Run Card) */}
+              {runState.status === 'idle' && renderedTerritory && (() => {
                 let runnerLatLng = null;
                 if (runnerMarkerRef.current) {
                   runnerLatLng = runnerMarkerRef.current.getLatLng();
@@ -2801,21 +2893,18 @@ ${watchErr.message} (retrying)`);
                   runnerLatLng = mapInstanceRef.current.getCenter();
                 }
 
-                // If a territory is selected, calculate distance to it
                 let targetDist = 'Dynamic';
                 let difficulty = 'Medium';
-                if (renderedTerritory && runnerLatLng) {
+                if (runnerLatLng) {
                   const firstCoord = renderedTerritory.coords[0];
                   const dist = getGeodeticDistance(runnerLatLng.lat, runnerLatLng.lng, firstCoord[0], firstCoord[1]);
                   targetDist = `${dist.toFixed(2)} km`;
                   difficulty = renderedTerritory.rate >= 10 ? 'Hard' : (renderedTerritory.id === 't2' ? 'Medium' : 'Easy');
                 }
 
-                // Header status badge pill calculations
                 let pillText = 'Abandoned';
                 let pillColor = '#888888';
                 let pillBg = 'rgba(136, 136, 136, 0.1)';
-                let primaryActionLabel = 'Capture Territory';
 
                 if (renderedTerritory) {
                   const isOwner = renderedTerritory.ownerId === currentUser.uid;
@@ -2824,37 +2913,20 @@ ${watchErr.message} (retrying)`);
                   
                   if (renderedTerritory.ownerName === 'Unclaimed') {
                     pillText = 'Neutral';
-                    pillColor = '#EAB308'; // Orange
+                    pillColor = '#EAB308';
                     pillBg = 'rgba(234, 179, 8, 0.15)';
-                    primaryActionLabel = 'Capture Territory';
                   } else if (isOwner) {
-                    if (renderedTerritory.decayHours > 24) {
-                      pillText = 'Protected';
-                      pillColor = '#10B981'; // Green
-                      pillBg = 'rgba(16, 185, 129, 0.15)';
-                    } else {
-                      pillText = 'Friendly';
-                      pillColor = '#10B981'; // Green
-                      pillBg = 'rgba(16, 185, 129, 0.15)';
-                    }
-                    primaryActionLabel = 'Defend Territory';
+                    pillText = renderedTerritory.decayHours > 24 ? 'Protected' : 'Friendly';
+                    pillColor = '#10B981';
+                    pillBg = 'rgba(16, 185, 129, 0.15)';
                   } else if (isTeammate) {
                     pillText = 'Clan';
-                    pillColor = '#3B82F6'; // Blue
+                    pillColor = '#3B82F6';
                     pillBg = 'rgba(59, 130, 246, 0.15)';
-                    primaryActionLabel = 'Defend Territory';
                   } else if (isEnemy) {
-                    if (renderedTerritory.decayHours > 40) {
-                      pillText = 'Contested';
-                      pillColor = '#EF4444'; // Red
-                      pillBg = 'rgba(239, 68, 68, 0.15)';
-                      primaryActionLabel = 'Continue Capture';
-                    } else {
-                      pillText = 'Enemy';
-                      pillColor = '#EF4444'; // Red
-                      pillBg = 'rgba(239, 68, 68, 0.15)';
-                      primaryActionLabel = 'Attack Sector';
-                    }
+                    pillText = renderedTerritory.decayHours > 40 ? 'Contested' : 'Enemy';
+                    pillColor = '#EF4444';
+                    pillBg = 'rgba(239, 68, 68, 0.15)';
                   }
                 }
 
@@ -2863,16 +2935,16 @@ ${watchErr.message} (retrying)`);
                     className="clash-bottom-sheet animate-slide-in-up"
                     style={{
                       position: 'absolute',
-                      bottom: '16px',
+                      bottom: '150px',
                       left: '16px',
                       right: '16px',
-                      zIndex: 999,
+                      zIndex: 998,
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '12px',
-                      maxHeight: isBottomSheetExpanded && renderedTerritory ? '480px' : '120px',
-                      overflow: 'hidden',
-                      borderRadius: '28px',
+                      maxHeight: isBottomSheetExpanded ? '340px' : '135px',
+                      overflowY: 'auto',
+                      borderRadius: '24px',
                       background: '#151515',
                       border: '1px solid #2A2A2A',
                       padding: '16px 20px',
@@ -2880,336 +2952,225 @@ ${watchErr.message} (retrying)`);
                       transition: 'max-height 250ms cubic-bezier(0.4, 0, 0.2, 1)'
                     }}
                   >
-                    {/* Pull Tab Handle */}
-                    {renderedTerritory && (
-                      <div 
-                        onClick={() => setIsBottomSheetExpanded(prev => !prev)}
-                        style={{
-                          width: '40px',
-                          height: '4px',
-                          background: '#2D2D2D',
-                          borderRadius: '2px',
-                          margin: '0 auto 4px auto',
-                          cursor: 'pointer'
-                        }}
-                      ></div>
-                    )}
-
-                    {/* Empty State */}
-                    {!renderedTerritory ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', height: '80px', justifyContent: 'center' }}>
-                        <div style={{
-                          width: '44px',
-                          height: '44px',
-                          borderRadius: '50%',
-                          background: 'rgba(252, 76, 2, 0.08)',
-                          border: '1px solid rgba(252, 76, 2, 0.2)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0
-                        }}>
-                          <Compass size={20} className="intel-badge-pulse" style={{ color: '#FC4C02' }} />
+                    {/* Collapsed view */}
+                    {!isBottomSheetExpanded ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', opacity: isInspectingTransition ? 0 : 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: pillColor, display: 'inline-block' }} className="intel-badge-pulse"></span>
+                            <span className="clash-subtitle" style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', margin: 0, fontWeight: '800' }}>
+                              {renderedTerritory.name}
+                            </span>
+                          </div>
+                          <span style={{
+                            padding: '2px 6px',
+                            borderRadius: '6px',
+                            fontSize: '8px',
+                            fontWeight: '800',
+                            background: pillBg,
+                            color: pillColor,
+                            textTransform: 'uppercase'
+                          }}>
+                            {pillText}
+                          </span>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
-                          <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '800', color: 'white' }}>No Sector Selected</h4>
-                          <p style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
-                            Tap any nearby territory to inspect it.
-                          </p>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', background: '#0B0B0D', padding: '8px 12px', borderRadius: '12px', border: '1px solid #2A2A2A', textAlign: 'center' }}>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Owner</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>{renderedTerritory.ownerName}</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{targetDist}</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Difficulty</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{difficulty}</span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                          <button 
+                            onClick={handleNavigateTerritory}
+                            className="clash-btn-secondary"
+                            style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
+                          >
+                            NAVIGATE
+                          </button>
+                          <button 
+                            onClick={() => setIsBottomSheetExpanded(true)}
+                            className="clash-btn-secondary"
+                            style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
+                          >
+                            INSPECT
+                          </button>
                         </div>
                       </div>
                     ) : (
-                      /* Inspected Territory Intelligence Card */
-                      <div 
-                        className="intel-content-transition"
-                        style={{ 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '12px',
-                          opacity: isInspectingTransition ? 0 : 1
-                        }}
-                      >
-                        {/* Collapsed Header View */}
-                        {!isBottomSheetExpanded ? (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '80px' }}>
-                            <div 
-                              onClick={() => setIsBottomSheetExpanded(true)}
-                              style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer', gap: '4px', width: '55%' }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: pillColor, display: 'inline-block' }} className="intel-badge-pulse"></span>
-                                <span className="clash-subtitle" style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', margin: 0 }}>
-                                  {renderedTerritory.name}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{
-                                  padding: '2px 6px',
-                                  borderRadius: '6px',
-                                  fontSize: '7.5px',
-                                  fontWeight: '800',
-                                  background: pillBg,
-                                  color: pillColor,
-                                  textTransform: 'uppercase'
-                                }}>
-                                  {pillText}
-                                </span>
-                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
-                                  {difficulty.toUpperCase()} • {targetDist}
-                                </span>
-                              </div>
-                            </div>
+                      /* Detailed/Expanded view */
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', opacity: isInspectingTransition ? 0 : 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span className="clash-label" style={{ fontSize: '8px' }}>SECTOR INTEL</span>
+                          <button 
+                            onClick={() => setIsBottomSheetExpanded(false)}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', cursor: 'pointer' }}
+                          >
+                            <ChevronDown size={18} />
+                          </button>
+                        </div>
 
-                            <button 
-                              onClick={startTracking}
-                              className="clash-btn-primary clash-btn-press"
-                              style={{ 
-                                width: '40%', 
-                                height: '44px', 
-                                borderRadius: '22px', 
-                                border: 'none', 
-                                background: '#FC4C02', 
-                                color: 'white', 
-                                fontWeight: '800', 
-                                fontSize: '11px',
-                                letterSpacing: '0.5px',
-                                boxShadow: '0 6px 16px rgba(252, 76, 2, 0.25)' 
-                              }}
-                            >
-                              {primaryActionLabel.toUpperCase()}
-                            </button>
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                          <div style={{
+                            width: '44px',
+                            height: '44px',
+                            borderRadius: '8px',
+                            background: '#0B0B0D',
+                            border: '1px solid #2A2A2A',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                          }}>
+                            {(() => {
+                              const coords = renderedTerritory.coords;
+                              if (!coords || coords.length === 0) return null;
+                              const lats = coords.map(c => c[0]);
+                              const lngs = coords.map(c => c[1]);
+                              const minLat = Math.min(...lats);
+                              const maxLat = Math.max(...lats);
+                              const minLng = Math.min(...lngs);
+                              const maxLng = Math.max(...lngs);
+                              const latRange = maxLat - minLat || 0.0001;
+                              const lngRange = maxLng - minLng || 0.0001;
+                              const points = coords.map(c => {
+                                const x = 4 + ((c[1] - minLng) / lngRange) * 36;
+                                const y = 40 - ((c[0] - minLat) / latRange) * 36;
+                                return `${x.toFixed(1)},${y.toFixed(1)}`;
+                              }).join(' ');
+                              return (
+                                <svg width="44" height="44" viewBox="0 0 44 44">
+                                  <polygon points={points} fill={pillColor} fillOpacity="0.15" stroke={pillColor} strokeWidth="1.5" />
+                                </svg>
+                              );
+                            })()}
                           </div>
-                        ) : (
-                          /* Expanded Panel Details */
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span className="clash-label" style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>TERRITORY INTELLIGENCE</span>
-                              <button 
-                                onClick={() => setIsBottomSheetExpanded(false)}
-                                style={{ background: 'transparent', border: 'none', color: 'var(--clash-text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                                className="clash-btn-press"
-                              >
-                                <ChevronDown size={20} />
-                              </button>
-                            </div>
 
-                            {/* Geometric Preview & Header */}
-                            <div style={{ display: 'flex', gap: '14px', alignItems: 'center', background: '#0B0B0D', padding: '12px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
-                              {/* Relative SVG Polygon Preview */}
-                              <div style={{
-                                width: '72px',
-                                height: '72px',
-                                borderRadius: '12px',
-                                background: '#151515',
-                                border: '1px solid #2A2A2A',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                overflow: 'hidden'
-                              }}>
-                                {(() => {
-                                  const coords = renderedTerritory.coords;
-                                  if (!coords || coords.length === 0) return null;
-                                  const lats = coords.map(c => c[0]);
-                                  const lngs = coords.map(c => c[1]);
-                                  const minLat = Math.min(...lats);
-                                  const maxLat = Math.max(...lats);
-                                  const minLng = Math.min(...lngs);
-                                  const maxLng = Math.max(...lngs);
-                                  
-                                  const latRange = maxLat - minLat || 0.0001;
-                                  const lngRange = maxLng - minLng || 0.0001;
-                                  
-                                  const points = coords.map(c => {
-                                    const x = 6 + ((c[1] - minLng) / lngRange) * 60;
-                                    const y = 66 - ((c[0] - minLat) / latRange) * 60;
-                                    return `${x.toFixed(1)},${y.toFixed(1)}`;
-                                  }).join(' ');
-
-                                  return (
-                                    <svg width="72" height="72" viewBox="0 0 72 72">
-                                      <polygon 
-                                        points={points} 
-                                        fill={pillColor} 
-                                        fillOpacity="0.15" 
-                                        stroke={pillColor} 
-                                        strokeWidth="2" 
-                                        strokeLinejoin="round"
-                                      />
-                                    </svg>
-                                  );
-                                })()}
-                              </div>
-
-                              {/* Title and Pill */}
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: pillColor, display: 'inline-block' }} className="intel-badge-pulse"></span>
-                                  <span style={{ fontSize: '8px', color: '#FC4C02', fontWeight: '800', letterSpacing: '0.5px', textTransform: 'uppercase' }}>SECTOR PROFILE</span>
-                                </div>
-                                <h4 style={{ margin: 0, fontSize: '15px', color: 'white', fontWeight: '800', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {renderedTerritory.name}
-                                </h4>
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                  <span style={{
-                                    padding: '2px 8px',
-                                    borderRadius: '8px',
-                                    fontSize: '8px',
-                                    fontWeight: '800',
-                                    background: pillBg,
-                                    color: pillColor,
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.3px',
-                                    border: `1.5px solid ${pillColor}10`
-                                  }}
-                                  className="intel-badge-pulse"
-                                  >
-                                    {pillText}
-                                  </span>
-                                  <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
-                                    {renderedTerritory.area}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* 2-Column Info Grid */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', background: '#0B0B0D', padding: '14px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Owner</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {renderedTerritory.ownerName}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Reward Coins</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {renderedTerritory.rate ? `+${renderedTerritory.rate} Coins/Hr` : '50 Coins'}
-                                </span>
-                              </div>
-                              
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Distance</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {targetDist}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Capture Progress</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {renderedTerritory.ownerId === currentUser.uid ? '100%' : '0%'}
-                                </span>
-                              </div>
-
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Difficulty</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {difficulty}
-                                </span>
-                              </div>
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Estimated Time</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                  {trackingMode === 'sim' ? '12 min' : 'Dynamic'}
-                                </span>
-                              </div>
-
-                              <div>
-                                <span className="clash-label" style={{ fontSize: '7.5px' }}>Reward XP</span>
-                                <span className="clash-subtitle" style={{ fontSize: '11px', color: '#FC4C02', fontWeight: '800' }}>
-                                  120 XP
-                                </span>
-                              </div>
-                              {DEBUG_MODE && (
-                                <div>
-                                  <span className="clash-label" style={{ fontSize: '7.5px' }}>Simulation Key</span>
-                                  <span className="clash-subtitle" style={{ fontSize: '11px', color: 'white' }}>
-                                    {renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument')}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-
-                            {DEBUG_MODE && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', marginBottom: '8px' }}>
-                                <span className="clash-label" style={{ fontSize: '8px' }}>Tracker Configuration</span>
-                                <div style={{ display: 'flex', background: '#0B0B0D', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
-                                  <button 
-                                    onClick={() => setTrackingMode('sim')}
-                                    style={{
-                                      flex: 1,
-                                      background: trackingMode === 'sim' ? '#FC4C02' : 'transparent',
-                                      color: 'white',
-                                      border: 'none',
-                                      padding: '6px 0',
-                                      borderRadius: '10px',
-                                      fontSize: '10px',
-                                      fontWeight: '800',
-                                      cursor: 'pointer'
-                                    }}
-                                    className="clash-btn-press"
-                                  >
-                                    Dev Simulator
-                                  </button>
-                                  <button 
-                                    onClick={() => setTrackingMode('gps')}
-                                    style={{
-                                      flex: 1,
-                                      background: trackingMode === 'gps' ? '#FC4C02' : 'transparent',
-                                      color: 'white',
-                                      border: 'none',
-                                      padding: '6px 0',
-                                      borderRadius: '10px',
-                                      fontSize: '10px',
-                                      fontWeight: '800',
-                                      cursor: 'pointer'
-                                    }}
-                                    className="clash-btn-press"
-                                  >
-                                    Real GPS Stride
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Actions */}
-                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '2px' }}>
-                              <button 
-                                onClick={() => {
-                                  if (mapInstanceRef.current && renderedTerritory.coords?.length > 0) {
-                                    mapInstanceRef.current.flyTo(renderedTerritory.coords[0], 15);
-                                    addLog(`System: Navigating viewport to ${renderedTerritory.name}.`);
-                                  }
-                                }}
-                                className="clash-btn-secondary clash-btn-press"
-                                style={{ height: '44px', flex: 1, borderRadius: '22px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#151515', border: '1px solid #2A2A2A', color: 'white', fontWeight: '800' }}
-                              >
-                                Navigate
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  // Auto-set the correct route key if using simulator
-                                  if (trackingMode === 'sim') {
-                                    const key = renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument');
-                                    setSimulationRouteKey(key);
-                                  }
-                                  setIsBottomSheetExpanded(false);
-                                  startTracking();
-                                }}
-                                className="clash-btn-primary clash-btn-press"
-                                style={{ height: '44px', flex: 1.5, borderRadius: '22px', fontSize: '11px', boxShadow: '0 8px 16px rgba(252, 76, 2, 0.25)', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
-                              >
-                                {primaryActionLabel.toUpperCase()}
-                              </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                            <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {renderedTerritory.name}
+                            </span>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <span style={{ fontSize: '8px', color: pillColor, background: pillBg, padding: '1px 6px', borderRadius: '4px', fontWeight: '800' }}>{pillText}</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>{renderedTerritory.area}</span>
                             </div>
                           </div>
-                        )}
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 12px', background: '#0B0B0D', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>OWNER</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{renderedTerritory.ownerName}</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>COIN REWARD</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{renderedTerritory.rate ? `+${renderedTerritory.rate} Coins/Hr` : '50 Coins'}</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>DISTANCE</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{targetDist}</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>XP REWARD</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02' }}>120 XP</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>EST. CAPTURE TIME</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>12 min</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>DIFFICULTY</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{difficulty}</span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+                          <button 
+                            onClick={handleNavigateTerritory}
+                            className="clash-btn-secondary"
+                            style={{ height: '36px', flex: 1, borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
+                          >
+                            NAVIGATE
+                          </button>
+                          <button 
+                            onClick={() => setIsBottomSheetExpanded(false)}
+                            className="clash-btn-secondary"
+                            style={{ height: '36px', flex: 1, borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
+                          >
+                            CLOSE DETAILS
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
                 );
               })()}
+
+              {/* Ready to Run Card (Bottom HUD module) */}
+              {runState.status === 'idle' && (
+                <div 
+                  className="clash-bottom-sheet"
+                  style={{
+                    position: 'absolute',
+                    bottom: '16px',
+                    left: '16px',
+                    right: '16px',
+                    height: '110px',
+                    background: '#151515',
+                    border: '1px solid #2A2A2A',
+                    borderRadius: '24px',
+                    padding: '12px 20px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    zIndex: 999,
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: '800', color: 'white' }}>Ready to Run</span>
+                      <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                        Start a tactical mission to conquer sectors and capture loops.
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: isGpsReady ? '#10B981' : '#FBBF24' }}>
+                      {isGpsReady ? '🟢 GPS READY' : '🟡 ACQUIRING...'}
+                    </span>
+                  </div>
+
+                  <button 
+                    disabled={!isGpsReady}
+                    onClick={startTracking}
+                    className="clash-btn-primary clash-btn-press"
+                    style={{ 
+                      width: '100%', 
+                      height: '40px', 
+                      borderRadius: '20px', 
+                      border: 'none', 
+                      background: isGpsReady ? '#FC4C02' : '#2A2A2A', 
+                      color: isGpsReady ? 'white' : 'rgba(255,255,255,0.3)', 
+                      fontWeight: '800', 
+                      fontSize: '12px',
+                      letterSpacing: '0.5px',
+                      boxShadow: isGpsReady ? '0 6px 16px rgba(252, 76, 2, 0.2)' : 'none',
+                      cursor: isGpsReady ? 'pointer' : 'not-allowed'
+                    }}
+                  >
+                    {isGpsReady ? 'START RUN' : 'ACQUIRING GPS LOCK...'}
+                  </button>
+                </div>
+              )}
 
               {/* COMPACT TOP HUD */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (

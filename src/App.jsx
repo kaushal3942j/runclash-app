@@ -117,6 +117,15 @@ export default function App() {
   const [completedRunData, setCompletedRunData] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
 
+  // Live Run Screen 2.0 States
+  const [bottomHudState, setBottomHudState] = useState('medium'); // 'mini', 'medium', 'expanded'
+  const [cameraSheetOpen, setCameraSheetOpen] = useState(false);
+  const [activeBanner, setActiveBanner] = useState(null); // { type, sectorName }
+  const [toastMessage, setToastMessage] = useState(null);
+  const [showCameraFlash, setShowCameraFlash] = useState(false);
+  
+  const lastEnteredSectorIdRef = useRef(null);
+
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
   
@@ -561,6 +570,38 @@ export default function App() {
     });
   };
 
+  // Helper to check if a point is inside a polygon (Ray-casting algorithm)
+  const isPointInPolygon = (point, polygon) => {
+    if (!polygon || polygon.length < 3) return false;
+    const lat = point[0];
+    const lng = point[1];
+    let isInside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const latI = polygon[i][0];
+      const lngI = polygon[i][1];
+      const latJ = polygon[j][0];
+      const lngJ = polygon[j][1];
+      
+      const intersect = ((lngI > lng) !== (lngJ > lng))
+          && (lat < (latJ - latI) * (lng - lngI) / (lngJ - lngI) + latI);
+      if (intersect) isInside = !isInside;
+    }
+    return isInside;
+  };
+
+  // Helper to trigger territory banners
+  const triggerTerritoryBanner = (type, sectorName) => {
+    setActiveBanner({ type, sectorName });
+    setTimeout(() => {
+      setActiveBanner(prev => {
+        if (prev && prev.type === type && prev.sectorName === sectorName) {
+          return null;
+        }
+        return prev;
+      });
+    }, 4000);
+  };
+
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
@@ -675,6 +716,44 @@ export default function App() {
 
               const wLat = watchPos.coords.latitude;
               const wLng = watchPos.coords.longitude;
+
+              // Check territory transition
+              const newCoord = [wLat, wLng];
+              let currentEnteredTerritory = null;
+              for (const t of territories) {
+                if (t.coords && t.coords.length >= 3) {
+                  if (isPointInPolygon(newCoord, t.coords)) {
+                    currentEnteredTerritory = t;
+                    break;
+                  }
+                }
+              }
+
+              if (currentEnteredTerritory) {
+                if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
+                  lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
+                  let bannerType = 'entering_neutral';
+                  if (currentEnteredTerritory.ownerId === currentUser.uid) {
+                    bannerType = 'entering_friendly';
+                  } else if (currentEnteredTerritory.ownerId) {
+                    if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
+                      bannerType = 'entering_friendly';
+                    } else {
+                      bannerType = 'entering_enemy';
+                    }
+                  }
+                  triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
+                }
+              } else {
+                if (lastEnteredSectorIdRef.current !== null) {
+                  const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
+                  lastEnteredSectorIdRef.current = null;
+                  if (prevTerritory) {
+                    triggerTerritoryBanner('leaving', prevTerritory.name);
+                  }
+                }
+              }
+
               const wAccuracy = watchPos.coords.accuracy;
               const wTimestamp = watchPos.timestamp || Date.now();
 
@@ -891,6 +970,42 @@ ${watchErr.message} (retrying)`);
 
         const point = route.points[idx];
         const timestamp = Date.now();
+
+        // Check territory transition in simulator
+        let currentEnteredTerritory = null;
+        for (const t of territories) {
+          if (t.coords && t.coords.length >= 3) {
+            if (isPointInPolygon(point, t.coords)) {
+              currentEnteredTerritory = t;
+              break;
+            }
+          }
+        }
+
+        if (currentEnteredTerritory) {
+          if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
+            lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
+            let bannerType = 'entering_neutral';
+            if (currentEnteredTerritory.ownerId === currentUser.uid) {
+              bannerType = 'entering_friendly';
+            } else if (currentEnteredTerritory.ownerId) {
+              if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
+                bannerType = 'entering_friendly';
+              } else {
+                bannerType = 'entering_enemy';
+              }
+            }
+            triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
+          }
+        } else {
+          if (lastEnteredSectorIdRef.current !== null) {
+            const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
+            lastEnteredSectorIdRef.current = null;
+            if (prevTerritory) {
+              triggerTerritoryBanner('leaving', prevTerritory.name);
+            }
+          }
+        }
 
         setRunState(prev => {
           if (prev.status === 'paused') return prev;
@@ -1781,7 +1896,7 @@ ${watchErr.message} (retrying)`);
           {/* Active Tab Screen Content */}
           <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column' }}>
             
-            {/* COMPLETED RUN SUMMARY MODAL */}
+            {/* COMPLETED RUN SUMMARY MODAL (Mission Complete Overlay) */}
             {showSummaryModal && completedRunData && (
               <div 
                 className="fade-in" 
@@ -1791,105 +1906,180 @@ ${watchErr.message} (retrying)`);
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  background: 'rgba(0, 0, 0, 0.85)',
-                  backdropFilter: 'blur(8px)',
+                  background: '#0B0B0B',
                   zIndex: 20000,
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '20px'
+                  flexDirection: 'column',
+                  padding: '24px',
+                  overflowY: 'auto'
                 }}
               >
-                <div 
-                  className="clash-card scale-in"
-                  style={{
-                    width: '100%',
-                    maxWidth: '340px',
-                    background: '#0B0B0D',
-                    border: '1px solid var(--clash-border)',
-                    borderRadius: '24px',
-                    padding: '24px',
+                {/* Header */}
+                <div style={{ textAlign: 'center', marginTop: '20px', marginBottom: '24px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{
+                    width: '64px',
+                    height: '64px',
+                    borderRadius: '50%',
+                    background: 'rgba(252, 76, 2, 0.1)',
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: '20px',
-                    boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
-                  }}
-                >
-                  <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{
-                      width: '48px',
-                      height: '48px',
-                      borderRadius: '50%',
-                      background: 'rgba(252, 76, 2, 0.1)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      margin: '0 auto 8px auto'
-                    }}>
-                      <Trophy size={24} style={{ color: '#FC4C02' }} />
-                    </div>
-                    <h3 className="clash-title" style={{ fontSize: '18px', color: 'white', margin: 0 }}>RUN COMPLETED</h3>
-                    <span className="clash-label" style={{ fontSize: '9px' }}>Tactical Mission Logged</span>
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto 8px auto'
+                  }}>
+                    <Trophy size={32} style={{ color: '#FC4C02' }} />
                   </div>
+                  <h2 className="clash-title" style={{ fontSize: '24px', color: 'white', margin: 0, letterSpacing: '1px' }}>🏆 MISSION COMPLETE</h2>
+                  <span className="clash-label" style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '1.5px' }}>
+                    Tactical Operation Successful
+                  </span>
+                </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div>
-                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Distance</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.distance} <span style={{ fontSize: '10px' }}>KM</span></span>
-                    </div>
-                    <div>
-                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Duration</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                        {Math.floor(completedRunData.duration / 60)}:{(completedRunData.duration % 60).toString().padStart(2, '0')}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Avg Pace</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.pace}</span>
-                    </div>
-                    <div>
-                      <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '2px' }}>Avg Speed</span>
-                      <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.speed} <span style={{ fontSize: '10px' }}>km/h</span></span>
-                    </div>
-                    <div style={{ gridColumn: 'span 2', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px', marginTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <span className="clash-label" style={{ fontSize: '8px', display: 'block' }}>Energy Burn</span>
-                        <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{completedRunData.calories} <span style={{ fontSize: '9px', fontWeight: 'normal', color: 'var(--clash-text-secondary)' }}>KCAL</span></span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(252,76,2,0.1)', padding: '4px 8px', borderRadius: '8px', border: '1px solid rgba(252,76,2,0.2)' }}>
+                {/* Primary Stats Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                  <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
+                    <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Distance</span>
+                    <span style={{ fontSize: '20px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.distance} <span style={{ fontSize: '12px' }}>KM</span></span>
+                  </div>
+                  <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
+                    <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Duration</span>
+                    <span style={{ fontSize: '20px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                      {Math.floor(completedRunData.duration / 60)}:{(completedRunData.duration % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                  <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
+                    <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Average Pace</span>
+                    <span style={{ fontSize: '20px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.pace}</span>
+                  </div>
+                  <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
+                    <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Average Speed</span>
+                    <span style={{ fontSize: '20px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.speed} <span style={{ fontSize: '12px' }}>km/h</span></span>
+                  </div>
+                </div>
+
+                {/* Secondary stats & rewards */}
+                <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '20px', borderRadius: '20px', display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)', fontWeight: '800' }}>ENERGY BURNED</span>
+                    <span style={{ fontSize: '14px', color: 'white', fontWeight: '800' }}>{completedRunData.calories} KCAL</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #2A2A2A', paddingTop: '10px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)', fontWeight: '800' }}>SECTORS CAPTURED</span>
+                    <span style={{ fontSize: '14px', color: '#FC4C02', fontWeight: '800' }}>
+                      {completedRunData.summaryStatistics?.conqueredTerritoryName ? 1 : 0}
+                    </span>
+                  </div>
+                  
+                  {/* Rewards Row */}
+                  <div style={{ display: 'flex', gap: '10px', borderTop: '1px solid #2A2A2A', paddingTop: '14px', marginTop: '4px' }}>
+                    <div style={{ flex: 1, background: 'rgba(252, 76, 2, 0.05)', border: '1px solid rgba(252, 76, 2, 0.15)', borderRadius: '12px', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)', fontWeight: '800' }}>COINS</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Coins size={12} style={{ color: '#FC4C02' }} />
-                        <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>+{Math.ceil(completedRunData.distance * 20) + 10}</span>
+                        <span style={{ fontSize: '13px', color: 'white', fontWeight: '800' }}>+{Math.ceil(completedRunData.distance * 20) + 10}</span>
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.15)', borderRadius: '12px', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)', fontWeight: '800' }}>XP REWARD</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Award size={12} style={{ color: '#10B981' }} />
+                        <span style={{ fontSize: '13px', color: 'white', fontWeight: '800' }}>+{Math.ceil(completedRunData.distance * 100) + 50}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <button 
-                      onClick={async () => {
-                        addLog("System: Saving run record to database...");
-                        const res = await saveCompletedRun(completedRunData);
-                        if (res.success) {
-                          addLog("System: Run successfully synced and saved.");
-                        } else {
-                          addLog("GPS Warning: Run saved locally (sync deferred).");
-                        }
-                        
-                        // Reward coins and XP
-                        const coinReward = Math.ceil(completedRunData.distance * 20) + 10;
-                        const xpReward = Math.ceil(completedRunData.distance * 100) + 50;
-                        setCurrentUser(prev => {
-                          const newXp = prev.xp + xpReward;
-                          const leveledUp = newXp >= prev.nextLevelXp;
-                          return {
-                            ...prev,
-                            coins: prev.coins + coinReward,
-                            xp: leveledUp ? newXp - prev.nextLevelXp : newXp,
-                            level: leveledUp ? prev.level + 1 : prev.level,
-                            nextLevelXp: leveledUp ? prev.nextLevelXp + 500 : prev.nextLevelXp
-                          };
-                        });
+                  {/* Achievements section */}
+                  <div style={{ borderTop: '1px solid #2A2A2A', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>
+                      Achievements Earned
+                    </span>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {completedRunData.distance >= 1.0 ? (
+                        <div style={{ fontSize: '10px', color: 'white', background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A2A', padding: '4px 10px', borderRadius: '8px', fontWeight: '800' }}>
+                          🔥 First Flight
+                        </div>
+                      ) : null}
+                      {completedRunData.speed >= 10 ? (
+                        <div style={{ fontSize: '10px', color: 'white', background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A2A', padding: '4px 10px', borderRadius: '8px', fontWeight: '800' }}>
+                          🏃 Speed Demon
+                        </div>
+                      ) : null}
+                      {completedRunData.summaryStatistics?.conqueredTerritoryName ? (
+                        <div style={{ fontSize: '10px', color: 'white', background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A2A', padding: '4px 10px', borderRadius: '8px', fontWeight: '800' }}>
+                          🎯 Precision Loop
+                        </div>
+                      ) : null}
+                      {completedRunData.distance < 1.0 && completedRunData.speed < 10 && !completedRunData.summaryStatistics?.conqueredTerritoryName ? (
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
+                          No achievements earned this run. Keep going!
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
 
-                        // Clear maps layer
+                {/* Primary Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto', marginBottom: '20px' }}>
+                  <button 
+                    onClick={async () => {
+                      addLog("System: Saving run record to database...");
+                      const res = await saveCompletedRun(completedRunData);
+                      if (res.success) {
+                        addLog("System: Run successfully synced and saved.");
+                      } else {
+                        addLog("GPS Warning: Run saved locally (sync deferred).");
+                      }
+                      
+                      // Reward coins and XP
+                      const coinReward = Math.ceil(completedRunData.distance * 20) + 10;
+                      const xpReward = Math.ceil(completedRunData.distance * 100) + 50;
+                      setCurrentUser(prev => {
+                        const newXp = prev.xp + xpReward;
+                        const leveledUp = newXp >= prev.nextLevelXp;
+                        return {
+                          ...prev,
+                          coins: prev.coins + coinReward,
+                          xp: leveledUp ? newXp - prev.nextLevelXp : newXp,
+                          level: leveledUp ? prev.level + 1 : prev.level,
+                          nextLevelXp: leveledUp ? prev.nextLevelXp + 500 : prev.nextLevelXp
+                        };
+                      });
+
+                      // Clear maps layer
+                      if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+                      if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+                      setRunState({
+                        status: 'idle',
+                        path: [],
+                        distance: 0,
+                        duration: 0,
+                        pace: '--:--',
+                        gpsAccuracy: null,
+                        speed: 0,
+                        avgSpeed: 0,
+                        avgPace: '--:--',
+                        calories: 0,
+                        isAutoPaused: false
+                      });
+
+                      setShowSummaryModal(false);
+                    }}
+                    className="clash-btn-primary"
+                    style={{ height: '48px', width: '100%', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: '800' }}
+                  >
+                    CONTINUE
+                  </button>
+                  
+                  <button 
+                    disabled
+                    style={{ height: '44px', width: '100%', borderRadius: '22px', border: '1px solid rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.25)', fontWeight: '800', background: 'transparent', cursor: 'not-allowed' }}
+                  >
+                    SHARE RUN (COMING SOON)
+                  </button>
+
+                  <button 
+                    onClick={() => {
+                      if (confirm("Are you sure you want to discard this run summary? The logged data will be permanently deleted.")) {
                         if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
                         if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
 
@@ -1906,42 +2096,13 @@ ${watchErr.message} (retrying)`);
                           calories: 0,
                           isAutoPaused: false
                         });
-
                         setShowSummaryModal(false);
-                      }}
-                      className="clash-btn-primary"
-                      style={{ height: '48px', width: '100%', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: '800' }}
-                    >
-                      <CheckCircle size={16} /> SAVE & CLAIM
-                    </button>
-                    <button 
-                      onClick={() => {
-                        if (confirm("Are you sure you want to discard this run summary? The logged data will be permanently deleted.")) {
-                          if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
-                          if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
-
-                          setRunState({
-                            status: 'idle',
-                            path: [],
-                            distance: 0,
-                            duration: 0,
-                            pace: '--:--',
-                            gpsAccuracy: null,
-                            speed: 0,
-                            avgSpeed: 0,
-                            avgPace: '--:--',
-                            calories: 0,
-                            isAutoPaused: false
-                          });
-                          setShowSummaryModal(false);
-                        }
-                      }}
-                      className="clash-btn-secondary"
-                      style={{ height: '44px', width: '100%', borderRadius: '22px', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)', fontWeight: '800' }}
-                    >
-                      DISCARD RECORD
-                    </button>
-                  </div>
+                      }
+                    }}
+                    style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px', textAlign: 'center', fontWeight: '800' }}
+                  >
+                    DISCARD RECORD
+                  </button>
                 </div>
               </div>
             )}
@@ -2342,6 +2503,7 @@ ${watchErr.message} (retrying)`);
               <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
 
               {/* Floating top Command Header */}
+              {runState.status === 'idle' && (
               <div 
                 className="clash-glass-panel animate-fade-in-down"
                 style={{
@@ -2490,8 +2652,10 @@ ${watchErr.message} (retrying)`);
                 </div>
               </div>
 
-              {/* Accuracy floating indicator */}
-              {(runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
+              )}
+
+              {/* Accuracy floating indicator (Hidden/relegated to Top HUD capsule in 2.0) */}
+              {false && (runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
                 <div style={{
                   position: 'absolute',
                   top: '76px',
@@ -2520,33 +2684,79 @@ ${watchErr.message} (retrying)`);
               {/* Right Circular Map Controls (Aligned Vertically) */}
               <div style={{
                 position: 'absolute',
-                top: '50%',
-                transform: 'translateY(-50%)',
+                top: '200px',
                 right: '16px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '10px',
                 zIndex: 999
               }}>
-                {/* Zoom In */}
+                {/* Recenter */}
                 <button 
-                  onClick={() => {
-                    if (mapInstanceRef.current) mapInstanceRef.current.zoomIn();
-                  }}
+                  onClick={recenterMap}
                   style={{
-                    width: '44px',
-                    height: '44px',
+                    width: '40px',
+                    height: '40px',
                     borderRadius: '50%',
                     border: '1px solid #2A2A2A',
                     color: '#FC4C02',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    background: '#151515',
+                    background: '#0B0B0D',
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
                     cursor: 'pointer',
-                    fontSize: '20px',
-                    fontWeight: '800'
+                    transition: 'transform 0.1s ease'
+                  }}
+                  className="clash-btn-press"
+                  title="Recenter GPS"
+                >
+                  <Navigation size={14} style={{ transform: 'rotate(45deg)', color: '#FC4C02' }} />
+                </button>
+
+                {/* Camera Button */}
+                <button 
+                  onClick={() => setCameraSheetOpen(true)}
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    border: '1px solid #2A2A2A',
+                    color: '#FC4C02',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#0B0B0D',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    cursor: 'pointer',
+                    transition: 'transform 0.1s ease'
+                  }}
+                  className="clash-btn-press"
+                  title="Drone Recon Camera"
+                >
+                  <Radio size={14} style={{ color: '#FC4C02' }} />
+                </button>
+
+                {/* Zoom In */}
+                <button 
+                  onClick={() => {
+                    if (mapInstanceRef.current) mapInstanceRef.current.zoomIn();
+                  }}
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    border: '1px solid #2A2A2A',
+                    color: '#FC4C02',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#0B0B0D',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    cursor: 'pointer',
+                    fontSize: '18px',
+                    fontWeight: '800',
+                    transition: 'transform 0.1s ease'
                   }}
                   className="clash-btn-press"
                   title="Zoom In"
@@ -2560,46 +2770,25 @@ ${watchErr.message} (retrying)`);
                     if (mapInstanceRef.current) mapInstanceRef.current.zoomOut();
                   }}
                   style={{
-                    width: '44px',
-                    height: '44px',
+                    width: '40px',
+                    height: '40px',
                     borderRadius: '50%',
                     border: '1px solid #2A2A2A',
                     color: '#FC4C02',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    background: '#151515',
+                    background: '#0B0B0D',
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
                     cursor: 'pointer',
-                    fontSize: '20px',
-                    fontWeight: '800'
+                    fontSize: '18px',
+                    fontWeight: '800',
+                    transition: 'transform 0.1s ease'
                   }}
                   className="clash-btn-press"
                   title="Zoom Out"
                 >
                   -
-                </button>
-
-                {/* Recenter */}
-                <button 
-                  onClick={recenterMap}
-                  style={{
-                    width: '44px',
-                    height: '44px',
-                    borderRadius: '50%',
-                    border: '1px solid #2A2A2A',
-                    color: '#FC4C02',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: '#151515',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                    cursor: 'pointer'
-                  }}
-                  className="clash-btn-press"
-                  title="Recenter GPS"
-                >
-                  <Navigation size={15} style={{ transform: 'rotate(45deg)', color: '#FC4C02' }} />
                 </button>
               </div>
 
@@ -3022,7 +3211,277 @@ ${watchErr.message} (retrying)`);
                 );
               })()}
 
-              {/* Active Run HUD (Live Stride stats overlay) */}
+              {/* COMPACT TOP HUD */}
+              {(runState.status === 'tracking' || runState.status === 'paused') && (
+                <div 
+                  className="clash-glass-panel animate-fade-in-down"
+                  style={{
+                    position: 'absolute',
+                    top: '16px',
+                    left: '16px',
+                    right: '16px',
+                    borderRadius: '24px',
+                    padding: '8px 16px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    zIndex: 1000,
+                    background: 'rgba(11, 11, 13, 0.9)',
+                    border: '1px solid #2A2A2A',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '50%',
+                      background: '#FC4C02',
+                      border: '1.5px solid rgba(255, 255, 255, 0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      color: 'white',
+                      flexShrink: 0
+                    }}>
+                      {(currentUser.displayName || 'R')[0].toUpperCase()}
+                    </div>
+                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white' }}>
+                      {currentUser.displayName}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(252, 76, 2, 0.08)', padding: '4px 10px', borderRadius: '12px', border: '1px solid rgba(252, 76, 2, 0.2)' }}>
+                    <span style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      background: '#FC4C02',
+                      display: 'inline-block',
+                      animation: 'pulse 1.2s infinite'
+                    }}></span>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', letterSpacing: '0.5px' }}>
+                      LIVE REC
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 15 ? '#10B981' : runState.gpsAccuracy && runState.gpsAccuracy <= 25 ? '#FBBF24' : '#EF4444' }}>
+                      {(() => {
+                        if (trackingMode === 'sim') return '🟢 GPS LOCKED';
+                        if (runState.gpsAccuracy === null) return '🟡 ACQUIRING SIGNAL';
+                        if (runState.gpsAccuracy <= 15) return '🟢 GPS LOCKED';
+                        if (runState.gpsAccuracy <= 25) return '🟡 ACQUIRING SIGNAL';
+                        return '🔴 WEAK SIGNAL';
+                      })()}
+                    </span>
+                    <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                      {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* DYNAMIC TERRITORY NOTIFICATION BANNER */}
+              {activeBanner && (
+                <div 
+                  className="animate-slide-down"
+                  style={{
+                    position: 'absolute',
+                    top: '80px',
+                    left: '16px',
+                    right: '16px',
+                    zIndex: 1001,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <div 
+                    style={{
+                      background: '#0B0B0B',
+                      border: (() => {
+                        if (activeBanner.type === 'entering_friendly') return '1px solid #10B981';
+                        if (activeBanner.type === 'entering_enemy') return '1px solid #EF4444';
+                        if (activeBanner.type === 'entering_neutral') return '1px solid #FC4C02';
+                        if (activeBanner.type === 'captured') return '1px solid #FC4C02';
+                        if (activeBanner.type === 'lost') return '1px solid #EF4444';
+                        return '1px solid #2A2A2A';
+                      })(),
+                      borderRadius: '16px',
+                      padding: '10px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                      maxWidth: '320px',
+                      width: '100%'
+                    }}
+                  >
+                    <div style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '50%',
+                      background: (() => {
+                        if (activeBanner.type === 'entering_friendly') return 'rgba(16, 185, 129, 0.1)';
+                        if (activeBanner.type === 'entering_enemy') return 'rgba(239, 68, 68, 0.1)';
+                        if (activeBanner.type === 'entering_neutral') return 'rgba(252, 76, 2, 0.1)';
+                        if (activeBanner.type === 'captured') return 'rgba(252, 76, 2, 0.1)';
+                        if (activeBanner.type === 'lost') return 'rgba(239, 68, 68, 0.1)';
+                        return 'rgba(255, 255, 255, 0.05)';
+                      })(),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: (() => {
+                        if (activeBanner.type === 'entering_friendly') return '#10B981';
+                        if (activeBanner.type === 'entering_enemy') return '#EF4444';
+                        return '#FC4C02';
+                      })()
+                    }}>
+                      {activeBanner.type === 'captured' ? <Trophy size={14} /> : <Compass size={14} />}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>
+                        {(() => {
+                          if (activeBanner.type === 'entering_friendly') return 'Entering Friendly Sector';
+                          if (activeBanner.type === 'entering_enemy') return 'Entering Hostile Sector';
+                          if (activeBanner.type === 'entering_neutral') return 'Entering Neutral Sector';
+                          if (activeBanner.type === 'captured') return 'Sector Secured';
+                          if (activeBanner.type === 'lost') return 'Sector Compromised';
+                          if (activeBanner.type === 'leaving') return 'Leaving Sector';
+                          return 'Sector Alert';
+                        })()}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'white', fontWeight: '800' }}>
+                        {activeBanner.sectorName}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* FLOATING CAMERA ACTION SHEET */}
+              {cameraSheetOpen && (
+                <div 
+                  className="fade-in" 
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.7)',
+                    backdropFilter: 'blur(4px)',
+                    zIndex: 20001,
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <div 
+                    className="slide-up"
+                    style={{
+                      width: '100%',
+                      background: '#151515',
+                      borderTopLeftRadius: '24px',
+                      borderTopRightRadius: '24px',
+                      padding: '20px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      boxShadow: '0 -8px 24px rgba(0, 0, 0, 0.5)',
+                      border: '1px solid #2A2A2A',
+                      borderBottom: 'none'
+                    }}
+                  >
+                    <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        Drone Recon Camera
+                      </span>
+                    </div>
+
+                    <button 
+                      onClick={() => {
+                        setShowCameraFlash(true);
+                        setTimeout(() => setShowCameraFlash(false), 200);
+                        setToastMessage("Snapshot Saved: Drone Recon Record logged.");
+                        setTimeout(() => setToastMessage(null), 3000);
+                        setCameraSheetOpen(false);
+                      }}
+                      className="clash-btn-primary"
+                      style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
+                    >
+                      TAKE PHOTO
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setShowCameraFlash(true);
+                        setTimeout(() => setShowCameraFlash(false), 200);
+                        setToastMessage("Recon Video Saved: Tactical story created.");
+                        setTimeout(() => setToastMessage(null), 3000);
+                        setCameraSheetOpen(false);
+                      }}
+                      className="clash-btn-primary"
+                      style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
+                    >
+                      RECORD VIDEO
+                    </button>
+
+                    <button 
+                      onClick={() => setCameraSheetOpen(false)}
+                      className="clash-btn-secondary"
+                      style={{ height: '44px', width: '100%', borderRadius: '22px', border: '1px solid #2A2A2A', color: 'rgba(255,255,255,0.6)', fontWeight: '800' }}
+                    >
+                      CANCEL
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CAMERA FLASH OVERLAY */}
+              {showCameraFlash && (
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'white',
+                  zIndex: 99999,
+                  opacity: 1
+                }} />
+              )}
+
+              {/* TOAST NOTIFICATION */}
+              {toastMessage && (
+                <div 
+                  className="fade-in"
+                  style={{
+                    position: 'absolute',
+                    bottom: '180px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#FC4C02',
+                    color: 'white',
+                    padding: '10px 20px',
+                    borderRadius: '20px',
+                    zIndex: 20002,
+                    fontWeight: '800',
+                    fontSize: '11px',
+                    textTransform: 'uppercase',
+                    boxShadow: '0 8px 16px rgba(252, 76, 2, 0.3)',
+                    letterSpacing: '0.5px'
+                  }}
+                >
+                  {toastMessage}
+                </div>
+              )}
+
+              {/* MULTI-STAGE BOTTOM HUD */}
               {(runState.status === 'tracking' || runState.status === 'paused') && (
                 <div 
                   className="clash-bottom-sheet"
@@ -3032,88 +3491,198 @@ ${watchErr.message} (retrying)`);
                     left: '16px',
                     right: '16px',
                     zIndex: 999,
+                    background: '#151515',
+                    border: '1px solid #2A2A2A',
+                    borderRadius: '24px',
+                    padding: '16px 20px',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '12px'
+                    height: (() => {
+                      if (runState.distance === 0) return '110px';
+                      if (bottomHudState === 'mini') return '90px';
+                      if (bottomHudState === 'medium') return '155px';
+                      return '310px';
+                    })(),
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    overflow: 'hidden',
+                    boxShadow: '0 12px 36px rgba(0, 0, 0, 0.6)'
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span className="clash-label" style={{ fontSize: '9px' }}>Live HUD</span>
-                      <span style={{
-                        width: '6px',
-                        height: '6px',
-                        borderRadius: '50%',
-                        background: '#FC4C02',
-                        display: 'inline-block',
-                        animation: 'pulse 1.5s infinite'
-                      }}></span>
+                  {/* Drag Handle */}
+                  <div 
+                    onTouchStart={(e) => {
+                      touchStartY.current = e.touches[0].clientY;
+                    }}
+                    onTouchEnd={(e) => {
+                      const deltaY = touchStartY.current - e.changedTouches[0].clientY;
+                      if (deltaY > 40) {
+                        setBottomHudState(prev => prev === 'mini' ? 'medium' : 'expanded');
+                      } else if (deltaY < -40) {
+                        setBottomHudState(prev => prev === 'expanded' ? 'medium' : 'mini');
+                      }
+                    }}
+                    onClick={() => {
+                      if (runState.distance === 0) return;
+                      setBottomHudState(prev => {
+                        if (prev === 'mini') return 'medium';
+                        if (prev === 'medium') return 'expanded';
+                        return 'mini';
+                      });
+                    }}
+                    style={{
+                      width: '40px',
+                      height: '4px',
+                      background: 'rgba(255,255,255,0.15)',
+                      borderRadius: '2px',
+                      margin: '-8px auto 12px auto',
+                      cursor: 'pointer'
+                    }}
+                  />
+
+                  {runState.distance === 0 ? (
+                    <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px', paddingBottom: '8px' }}>
+                      <Radio size={16} className="gps-pulse" style={{ color: '#FC4C02' }} />
+                      <span style={{ fontSize: '11px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        Waiting for movement...
+                      </span>
                     </div>
-                    <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {runState.isAutoPaused && (
-                        <span style={{
-                          background: 'rgba(252, 76, 2, 0.1)',
-                          border: '1px solid #FC4C02',
-                          color: '#FC4C02',
-                          padding: '2px 6px',
-                          borderRadius: '6px',
-                          fontSize: '8px',
-                          fontWeight: '800'
-                        }}>
-                          AUTO-PAUSED
-                        </span>
+                  ) : (
+                    <>
+                      {/* MINI STATE */}
+                      {bottomHudState === 'mini' && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                            <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '9px' }}>KM</span></span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                            <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                              {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                            </span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                            <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                          </div>
+                        </div>
                       )}
-                      {runState.status === 'tracking' ? 'Recording' : 'Paused'}
-                    </span>
-                  </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', background: '#0B0B0B', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A', textAlign: 'center' }}>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                        {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                      </span>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Energy</span>
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.calories} <span style={{ fontSize: '8px' }}>KCAL</span></span>
-                    </div>
-                    <div>
-                      <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>GPS Lock</span>
-                      <span style={{ fontSize: '12px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 10 ? '#4CAF50' : '#FC4C02', textTransform: 'uppercase' }}>
-                        {runState.gpsAccuracy ? `${Math.round(runState.gpsAccuracy)}m` : 'Locking'}
-                      </span>
-                    </div>
-                  </div>
+                      {/* MEDIUM STATE */}
+                      {bottomHudState === 'medium' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', textAlign: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                                {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
+                            </div>
+                          </div>
 
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <button 
-                      onClick={togglePauseResume}
-                      className="clash-btn-secondary"
-                      style={{ height: '44px', flex: 1 }}
-                    >
-                      {runState.status === 'tracking' ? 'Pause' : 'Resume'}
-                    </button>
-                    <button 
-                      onClick={() => stopTracking("Explicit User Request")}
-                      className="clash-btn-primary"
-                      style={{ height: '44px', flex: 1.2 }}
-                    >
-                      STOP & CLAIM
-                    </button>
-                  </div>
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                            <button 
+                              onClick={togglePauseResume}
+                              className="clash-btn-secondary"
+                              style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
+                            >
+                              {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                            </button>
+                            <button 
+                              onClick={() => stopTracking("Explicit User Request")}
+                              className="clash-btn-primary"
+                              style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
+                            >
+                              STOP & CLAIM
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* EXPANDED STATE */}
+                      {bottomHudState === 'expanded' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px 6px', textAlign: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                                {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Cur Pace</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Avg Pace</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.avgPace}</span>
+                            </div>
+
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Calories</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.calories} <span style={{ fontSize: '8px' }}>KCAL</span></span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Elevation</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>384 <span style={{ fontSize: '8px' }}>M</span></span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>GPS Lock</span>
+                              <span style={{ fontSize: '13px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 10 ? '#10B981' : '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>
+                                {runState.gpsAccuracy ? `${Math.round(runState.gpsAccuracy)}m` : 'Lock'}
+                              </span>
+                            </div>
+
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Weather</span>
+                              <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>28°C</span>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Heart Rate</span>
+                              <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>142 BPM</span>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px' }}>
+                            <button 
+                              onClick={togglePauseResume}
+                              className="clash-btn-secondary"
+                              style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
+                            >
+                              {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                            </button>
+                            <button 
+                              onClick={() => stopTracking("Explicit User Request")}
+                              className="clash-btn-primary"
+                              style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
+                            >
+                              STOP & CLAIM
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>

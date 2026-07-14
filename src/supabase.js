@@ -35,62 +35,85 @@ let mockCurrentUser = JSON.parse(localStorage.getItem('runclash_mock_auth')) || 
 
 const getMockTerritories = () => {
   const data = localStorage.getItem('runclash_territories');
+  const initial = [
+    {
+      id: 'lm1',
+      name: 'Fateh Sagar Lake Center',
+      ownerId: 'landmark',
+      ownerName: 'Official Landmark',
+      clan: 'None',
+      area: 'N/A',
+      rate: 0,
+      coords: [
+        [24.6015, 73.6805]
+      ],
+      isLandmark: true
+    },
+    {
+      id: 'lm2',
+      name: 'Sajjan Garh Fort Sanctuary',
+      ownerId: 'landmark',
+      ownerName: 'Official Landmark',
+      clan: 'None',
+      area: 'N/A',
+      rate: 0,
+      coords: [
+        [24.5900, 73.6620]
+      ],
+      isLandmark: true
+    },
+    {
+      id: 'lm3',
+      name: 'Gulab Bagh Botanical Garden',
+      ownerId: 'landmark',
+      ownerName: 'Official Landmark',
+      clan: 'None',
+      area: 'N/A',
+      rate: 0,
+      coords: [
+        [24.5710, 73.7020]
+      ],
+      isLandmark: true
+    }
+  ];
+
   if (!data) {
-    const initial = [
-      {
-        id: 't1',
-        name: 'Fateh Sagar Lake Shore',
-        ownerId: 'mock_owner_1',
-        ownerName: 'Lakshya',
-        clan: 'Udaipur Racers',
-        area: '24,800 m²',
-        decayHours: 48,
-        maxDecayHours: 72,
-        rate: 8,
-        coords: [
-          [24.6042, 73.6805], [24.6015, 73.6762], [24.5975, 73.6750], 
-          [24.5948, 73.6781], [24.5932, 73.6825], [24.5961, 73.6865], 
-          [24.6010, 73.6870], [24.6030, 73.6845], [24.6042, 73.6805]
-        ],
-        color: '#00e5ff'
-      },
-      {
-        id: 't2',
-        name: 'Sajjan Garh Foothills Base',
-        ownerId: 'mock_owner_2',
-        ownerName: 'Sam',
-        clan: 'GITS Runners',
-        area: '18,200 m²',
-        decayHours: 28,
-        maxDecayHours: 72,
-        rate: 5,
-        coords: [
-          [24.5920, 73.6620], [24.5890, 73.6580], [24.5840, 73.6600], 
-          [24.5860, 73.6670], [24.5900, 73.6680], [24.5920, 73.6620]
-        ],
-        color: '#ff007f'
-      },
-      {
-        id: 't3',
-        name: 'Udaipur Castle Park Landmark',
-        ownerId: 'unclaimed',
-        ownerName: 'Unclaimed',
-        clan: 'None',
-        area: '12,500 m²',
-        decayHours: 0,
-        maxDecayHours: 72,
-        rate: 15,
-        coords: [
-          [24.5780, 73.6920], [24.5750, 73.6900], [24.5730, 73.6930], 
-          [24.5760, 73.6960], [24.5780, 73.6920]
-        ],
-        color: '#fffb00'
-      }
-    ];
     localStorage.setItem('runclash_territories', JSON.stringify(initial));
     return initial;
   }
-  return JSON.parse(data);
+  try {
+    const parsed = JSON.parse(data);
+    let migrated = false;
+    
+    // Filter out any legacy pre-generated unclaimed sectors (t1, t2, t3, t4)
+    // Keep only landmarks and player-created territories
+    const updated = parsed.filter(t => {
+      if (!t) return false;
+      if (t.isLandmark) return true;
+      if (t.id === 't1' || t.id === 't2' || t.id === 't3' || t.id === 't4') {
+        if (t.ownerId === 'unclaimed') {
+          migrated = true;
+          return false;
+        }
+      }
+      return true;
+    });
+
+    initial.forEach(initItem => {
+      if (!updated.some(t => t.id === initItem.id)) {
+        updated.push(initItem);
+        migrated = true;
+      }
+    });
+
+    if (migrated) {
+      localStorage.setItem('runclash_territories', JSON.stringify(updated));
+    }
+    return updated;
+  } catch (e) {
+    console.error("Failed to parse local territories", e);
+    return initial;
+  }
 };
 
 // ----------------------------------------------------

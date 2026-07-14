@@ -141,6 +141,8 @@ export default function App() {
   
   const guidancePolylineRef = useRef(null);
 
+
+
   useEffect(() => {
     setIsInspectingTransition(true);
     const timer = setTimeout(() => {
@@ -570,28 +572,45 @@ export default function App() {
     if (!mapInstanceRef.current || !currentUser) return;
 
     // Clear old layers
-    Object.values(territoryPolygonsRef.current).forEach(poly => {
-      mapInstanceRef.current.removeLayer(poly);
+    Object.values(territoryPolygonsRef.current).forEach(layer => {
+      mapInstanceRef.current.removeLayer(layer);
     });
     territoryPolygonsRef.current = {};
 
     // Redraw list
     territories.forEach(terr => {
+      // 1. Render Official Landmark (Always Visible, Custom Marker)
+      if (terr.isLandmark) {
+        const starIcon = L.divIcon({
+          className: 'custom-landmark-icon',
+          html: `<div style="background-color: rgba(250,204,21,0.15); border: 2px solid #FACC15; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(250,204,21,0.4);" class="intel-badge-pulse">
+            <span style="font-size: 14px;">🏆</span>
+          </div>`,
+          iconSize: [28, 28]
+        });
+        const marker = L.marker(terr.coords[0], { icon: starIcon }).addTo(mapInstanceRef.current);
+        marker.bindTooltip(terr.name, { permanent: false, direction: 'top', className: 'clash-tooltip' });
+        
+        marker.on('click', (e) => {
+          if (e.originalEvent) e.originalEvent.stopPropagation();
+          setSelectedTerritoryId(terr.id);
+          setIsBottomSheetExpanded(true);
+        });
+
+        territoryPolygonsRef.current[terr.id] = marker;
+        return;
+      }
+
+      // 2. Render Player-Created Territories Only
       const isOwner = terr.ownerId === currentUser.uid;
       const isTeammate = terr.clan === currentUser.clan && !isOwner;
       const isEnemy = terr.clan && terr.clan !== currentUser.clan && terr.ownerName !== 'Unclaimed';
-      const isBonus = terr.rate >= 10 || (terr.name && terr.name.toLowerCase().includes('landmark'));
-      
-      let polyColor = '#888888'; // Neutral: Gray
-      if (isBonus) {
-        polyColor = '#EAB308'; // Bonus territory: Gold
-      } else if (isOwner) {
-        polyColor = '#FC4C02'; // Current player: Orange
-      } else if (isTeammate) {
-        polyColor = '#3B82F6'; // Clan teammate: Blue
-      } else if (isEnemy) {
-        polyColor = '#EF4444'; // Enemy clan: Red
-      }
+
+      let polyColor = '#888888';
+      if (isOwner) polyColor = '#FC4C02';
+      else if (isTeammate) polyColor = '#3B82F6';
+      else if (isEnemy) polyColor = '#EF4444';
+      else polyColor = '#A8A8A8';
 
       const poly = L.polygon(terr.coords, {
         color: polyColor,
@@ -600,11 +619,10 @@ export default function App() {
         weight: 2
       }).addTo(mapInstanceRef.current);
 
-      // Select territory on click
+      poly.bindTooltip(terr.name, { permanent: false, direction: 'center', className: 'clash-tooltip' });
+
       poly.on('click', (e) => {
-        if (e.originalEvent) {
-          e.originalEvent.stopPropagation();
-        }
+        if (e.originalEvent) e.originalEvent.stopPropagation();
         setSelectedTerritoryId(terr.id);
         setIsBottomSheetExpanded(true);
       });
@@ -698,9 +716,13 @@ export default function App() {
     endTimeRef.current = null;
     lowSpeedDurationRef.current = 0;
 
-    // Auto-configure route key if territory is selected and simulating
+    // Auto-configure route key if territory/landmark is selected and simulating
     if (trackingMode === 'sim' && renderedTerritory) {
-      const key = renderedTerritory.id === 't1' ? 'lake' : (renderedTerritory.id === 't2' ? 'foothills' : 'monument');
+      const name = (renderedTerritory.name || '').toLowerCase();
+      let key = 'lake';
+      if (name.includes('foothills') || name.includes('sajjan')) key = 'foothills';
+      else if (name.includes('castle') || name.includes('park') || name.includes('monument')) key = 'monument';
+      else if (name.includes('micro')) key = 'micro';
       setSimulationRouteKey(key);
     }
 
@@ -2594,6 +2616,51 @@ ${watchErr.message} (retrying)`);
               {/* Fullscreen Map Hero */}
               <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
 
+              {/* Empty World State Banner */}
+              {runState.status === 'idle' && (() => {
+                const hasPlayerTerritories = territories.some(t => !t.isLandmark);
+                return !hasPlayerTerritories;
+              })() && (
+                <div 
+                  className="animate-slide-down"
+                  style={{
+                    position: 'absolute',
+                    top: '80px',
+                    left: '16px',
+                    right: '16px',
+                    zIndex: 1000,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <div 
+                    style={{
+                      background: 'rgba(11, 11, 13, 0.9)',
+                      backdropFilter: 'blur(8px)',
+                      border: '1.5px solid #2A2A2A',
+                      borderRadius: '16px',
+                      padding: '12px 18px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      maxWidth: '400px',
+                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+                    }}
+                  >
+                    <span style={{ fontSize: '18px', flexShrink: 0 }}>🌍</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', letterSpacing: '0.3px' }}>
+                        No territories exist yet.
+                      </span>
+                      <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
+                        Be the first runner to create one.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Floating top Command Header */}
               {runState.status === 'idle' && (
               <div 
@@ -2898,19 +2965,26 @@ ${watchErr.message} (retrying)`);
                 if (runnerLatLng) {
                   const firstCoord = renderedTerritory.coords[0];
                   const dist = getGeodeticDistance(runnerLatLng.lat, runnerLatLng.lng, firstCoord[0], firstCoord[1]);
-                  targetDist = `${dist.toFixed(2)} km`;
-                  difficulty = renderedTerritory.rate >= 10 ? 'Hard' : (renderedTerritory.id === 't2' ? 'Medium' : 'Easy');
+                  targetDist = `...${dist.toFixed(2)} km`.replace('...', '');
+                  difficulty = renderedTerritory.rate >= 10 ? 'Hard' : (renderedTerritory.rate >= 5 ? 'Medium' : 'Easy');
                 }
+
+                const isLandmark = !!renderedTerritory.isLandmark;
 
                 let pillText = 'Abandoned';
                 let pillColor = '#888888';
                 let pillBg = 'rgba(136, 136, 136, 0.1)';
+                let primaryActionLabel = 'Capture Territory';
 
-                if (renderedTerritory) {
+                if (isLandmark) {
+                  pillText = 'Landmark';
+                  pillColor = '#FACC15';
+                  pillBg = 'rgba(250, 204, 21, 0.15)';
+                } else {
                   const isOwner = renderedTerritory.ownerId === currentUser.uid;
                   const isTeammate = renderedTerritory.clan === currentUser.clan && !isOwner;
                   const isEnemy = renderedTerritory.clan && renderedTerritory.clan !== currentUser.clan && renderedTerritory.ownerName !== 'Unclaimed';
-                  
+
                   if (renderedTerritory.ownerName === 'Unclaimed') {
                     pillText = 'Neutral';
                     pillColor = '#EAB308';
@@ -2919,14 +2993,17 @@ ${watchErr.message} (retrying)`);
                     pillText = renderedTerritory.decayHours > 24 ? 'Protected' : 'Friendly';
                     pillColor = '#10B981';
                     pillBg = 'rgba(16, 185, 129, 0.15)';
+                    primaryActionLabel = 'Defend Territory';
                   } else if (isTeammate) {
                     pillText = 'Clan';
                     pillColor = '#3B82F6';
                     pillBg = 'rgba(59, 130, 246, 0.15)';
+                    primaryActionLabel = 'Defend Territory';
                   } else if (isEnemy) {
                     pillText = renderedTerritory.decayHours > 40 ? 'Contested' : 'Enemy';
                     pillColor = '#EF4444';
                     pillBg = 'rgba(239, 68, 68, 0.15)';
+                    primaryActionLabel = 'Attack Sector';
                   }
                 }
 
@@ -2975,10 +3052,13 @@ ${watchErr.message} (retrying)`);
                           </span>
                         </div>
 
+                        {/* Middle quick details */}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', background: '#0B0B0D', padding: '8px 12px', borderRadius: '12px', border: '1px solid #2A2A2A', textAlign: 'center' }}>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Owner</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>{renderedTerritory.ownerName}</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                              {isLandmark ? 'Official' : renderedTerritory.ownerName}
+                            </span>
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
@@ -2986,7 +3066,9 @@ ${watchErr.message} (retrying)`);
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Difficulty</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{difficulty}</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>
+                              {isLandmark ? 'N/A' : difficulty}
+                            </span>
                           </div>
                         </div>
 
@@ -3032,28 +3114,32 @@ ${watchErr.message} (retrying)`);
                             justifyContent: 'center',
                             flexShrink: 0
                           }}>
-                            {(() => {
-                              const coords = renderedTerritory.coords;
-                              if (!coords || coords.length === 0) return null;
-                              const lats = coords.map(c => c[0]);
-                              const lngs = coords.map(c => c[1]);
-                              const minLat = Math.min(...lats);
-                              const maxLat = Math.max(...lats);
-                              const minLng = Math.min(...lngs);
-                              const maxLng = Math.max(...lngs);
-                              const latRange = maxLat - minLat || 0.0001;
-                              const lngRange = maxLng - minLng || 0.0001;
-                              const points = coords.map(c => {
-                                const x = 4 + ((c[1] - minLng) / lngRange) * 36;
-                                const y = 40 - ((c[0] - minLat) / latRange) * 36;
-                                return `${x.toFixed(1)},${y.toFixed(1)}`;
-                              }).join(' ');
-                              return (
-                                <svg width="44" height="44" viewBox="0 0 44 44">
-                                  <polygon points={points} fill={pillColor} fillOpacity="0.15" stroke={pillColor} strokeWidth="1.5" />
-                                </svg>
-                              );
-                            })()}
+                            {isLandmark ? (
+                              <span style={{ fontSize: '18px' }}>🏆</span>
+                            ) : (
+                              (() => {
+                                const coords = renderedTerritory.coords;
+                                if (!coords || coords.length === 0) return null;
+                                const lats = coords.map(c => c[0]);
+                                const lngs = coords.map(c => c[1]);
+                                const minLat = Math.min(...lats);
+                                const maxLat = Math.max(...lats);
+                                const minLng = Math.min(...lngs);
+                                const maxLng = Math.max(...lngs);
+                                const latRange = maxLat - minLat || 0.0001;
+                                const lngRange = maxLng - minLng || 0.0001;
+                                const points = coords.map(c => {
+                                  const x = 4 + ((c[1] - minLng) / lngRange) * 36;
+                                  const y = 40 - ((c[0] - minLat) / latRange) * 36;
+                                  return `${x.toFixed(1)},${y.toFixed(1)}`;
+                                }).join(' ');
+                                return (
+                                  <svg width="44" height="44" viewBox="0 0 44 44">
+                                    <polygon points={points} fill={pillColor} fillOpacity="0.15" stroke={pillColor} strokeWidth="1.5" />
+                                  </svg>
+                                );
+                              })()
+                            )}
                           </div>
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
@@ -3062,19 +3148,26 @@ ${watchErr.message} (retrying)`);
                             </span>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               <span style={{ fontSize: '8px', color: pillColor, background: pillBg, padding: '1px 6px', borderRadius: '4px', fontWeight: '800' }}>{pillText}</span>
-                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>{renderedTerritory.area}</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                                {isLandmark ? 'Official Area' : renderedTerritory.area}
+                              </span>
                             </div>
                           </div>
                         </div>
 
+                        {/* Grid Details */}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 12px', background: '#0B0B0D', padding: '12px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>OWNER</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{renderedTerritory.ownerName}</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>
+                              {isLandmark ? 'Official Landmark' : renderedTerritory.ownerName}
+                            </span>
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>COIN REWARD</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{renderedTerritory.rate ? `+${renderedTerritory.rate} Coins/Hr` : '50 Coins'}</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>
+                              {isLandmark ? 'None' : (renderedTerritory.rate ? `+&nbsp;${renderedTerritory.rate} Coins/Hr`.replace('&nbsp;', ' ') : '50 Coins')}
+                            </span>
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>DISTANCE</span>
@@ -3082,18 +3175,25 @@ ${watchErr.message} (retrying)`);
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>XP REWARD</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02' }}>120 XP</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02' }}>
+                              {isLandmark ? 'None' : '120 XP'}
+                            </span>
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>EST. CAPTURE TIME</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>12 min</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>
+                              {isLandmark ? 'N/A' : '12 min'}
+                            </span>
                           </div>
                           <div>
                             <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>DIFFICULTY</span>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{difficulty}</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>
+                              {isLandmark ? 'N/A' : difficulty}
+                            </span>
                           </div>
                         </div>
 
+                        {/* Card Actions */}
                         <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
                           <button 
                             onClick={handleNavigateTerritory}
@@ -3102,13 +3202,36 @@ ${watchErr.message} (retrying)`);
                           >
                             NAVIGATE
                           </button>
-                          <button 
-                            onClick={() => setIsBottomSheetExpanded(false)}
-                            className="clash-btn-secondary"
-                            style={{ height: '36px', flex: 1, borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
-                          >
-                            CLOSE DETAILS
-                          </button>
+                          
+                          {!isLandmark && (
+                            <button 
+                              onClick={() => {
+                                if (trackingMode === 'sim') {
+                                  const name = (renderedTerritory.name || '').toLowerCase();
+                                  let key = 'lake';
+                                  if (name.includes('foothills') || name.includes('sajjan')) key = 'foothills';
+                                  else if (name.includes('castle') || name.includes('park') || name.includes('monument')) key = 'monument';
+                                  setSimulationRouteKey(key);
+                                }
+                                setIsBottomSheetExpanded(false);
+                                startTracking();
+                              }}
+                              className="clash-btn-primary"
+                              style={{ height: '36px', flex: 1.5, borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: 'none', background: '#FC4C02', color: 'white' }}
+                            >
+                              {primaryActionLabel.toUpperCase()}
+                            </button>
+                          )}
+                          
+                          {isLandmark && (
+                            <button 
+                              onClick={() => setIsBottomSheetExpanded(false)}
+                              className="clash-btn-secondary"
+                              style={{ height: '36px', flex: 1, borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: '1px solid #2A2A2A', background: '#151515' }}
+                            >
+                              CLOSE
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -3229,13 +3352,27 @@ ${watchErr.message} (retrying)`);
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 15 ? '#10B981' : runState.gpsAccuracy && runState.gpsAccuracy <= 25 ? '#FBBF24' : '#EF4444' }}>
+                    <span style={{
+                      fontSize: '9px',
+                      fontWeight: '800',
+                      color: (() => {
+                        if (trackingMode === 'sim') return '#10B981';
+                        const acc = runState.gpsAccuracy;
+                        if (acc === null) return '#EF4444';
+                        if (acc < 10) return '#10B981';
+                        if (acc <= 25) return '#FBBF24';
+                        if (acc <= 50) return '#F97316';
+                        return '#EF4444';
+                      })()
+                    }}>
                       {(() => {
                         if (trackingMode === 'sim') return '🟢 GPS LOCKED';
-                        if (runState.gpsAccuracy === null) return '🟡 ACQUIRING SIGNAL';
-                        if (runState.gpsAccuracy <= 15) return '🟢 GPS LOCKED';
-                        if (runState.gpsAccuracy <= 25) return '🟡 ACQUIRING SIGNAL';
-                        return '🔴 WEAK SIGNAL';
+                        const acc = runState.gpsAccuracy;
+                        if (acc === null) return '🔴 GPS WEAK';
+                        if (acc < 10) return '🟢 GPS LOCKED';
+                        if (acc <= 25) return '🟡 GPS GOOD';
+                        if (acc <= 50) return '🟠 GPS FAIR';
+                        return '🔴 GPS WEAK';
                       })()}
                     </span>
                     <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
@@ -3459,10 +3596,14 @@ ${watchErr.message} (retrying)`);
                     display: 'flex',
                     flexDirection: 'column',
                     height: (() => {
-                      if (runState.distance === 0) return '110px';
-                      if (bottomHudState === 'mini') return '90px';
-                      if (bottomHudState === 'medium') return '155px';
-                      return '310px';
+                      let baseHeight = 90;
+                      if (bottomHudState === 'medium') baseHeight = 155;
+                      else if (bottomHudState === 'expanded') baseHeight = 310;
+                      
+                      if (runState.distance === 0) {
+                        return `${baseHeight + 35}px`;
+                      }
+                      return `${baseHeight}px`;
                     })(),
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                     overflow: 'hidden',
@@ -3483,7 +3624,6 @@ ${watchErr.message} (retrying)`);
                       }
                     }}
                     onClick={() => {
-                      if (runState.distance === 0) return;
                       setBottomHudState(prev => {
                         if (prev === 'mini') return 'medium';
                         if (prev === 'medium') return 'expanded';
@@ -3500,149 +3640,159 @@ ${watchErr.message} (retrying)`);
                     }}
                   />
 
-                  {runState.distance === 0 ? (
-                    <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px', paddingBottom: '8px' }}>
-                      <Radio size={16} className="gps-pulse" style={{ color: '#FC4C02' }} />
-                      <span style={{ fontSize: '11px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  {runState.distance === 0 && (
+                    <div style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center', 
+                      gap: '8px', 
+                      padding: '6px 12px', 
+                      background: 'rgba(252, 76, 2, 0.08)', 
+                      borderRadius: '12px', 
+                      border: '1px solid rgba(252, 76, 2, 0.15)',
+                      marginBottom: '10px',
+                      width: '100%',
+                      boxSizing: 'border-box'
+                    }}>
+                      <Radio size={12} className="gps-pulse" style={{ color: '#FC4C02' }} />
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         Waiting for movement...
                       </span>
                     </div>
-                  ) : (
-                    <>
-                      {/* MINI STATE */}
-                      {bottomHudState === 'mini' && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}>
-                          <div>
-                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                            <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '9px' }}>KM</span></span>
-                          </div>
-                          <div>
-                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
-                            <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                              {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                            </span>
-                          </div>
-                          <div>
-                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
-                            <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
-                          </div>
+                  )}
+
+                  {/* MINI STATE */}
+                  {bottomHudState === 'mini' && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}>
+                      <div>
+                        <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                        <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '9px' }}>KM</span></span>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                        <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                          {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                        <span style={{ fontSize: '16px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* MEDIUM STATE */}
+                  {bottomHudState === 'medium' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', textAlign: 'center' }}>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
                         </div>
-                      )}
-
-                      {/* MEDIUM STATE */}
-                      {bottomHudState === 'medium' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', textAlign: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                                {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                              </span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                            <button 
-                              onClick={togglePauseResume}
-                              className="clash-btn-secondary"
-                              style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
-                            >
-                              {runState.status === 'tracking' ? 'Pause' : 'Resume'}
-                            </button>
-                            <button 
-                              onClick={() => stopTracking("Explicit User Request")}
-                              className="clash-btn-primary"
-                              style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
-                            >
-                              STOP & CLAIM
-                            </button>
-                          </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                            {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                          </span>
                         </div>
-                      )}
-
-                      {/* EXPANDED STATE */}
-                      {bottomHudState === 'expanded' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px 6px', textAlign: 'center' }}>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                                {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                              </span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Cur Pace</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Avg Pace</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.avgPace}</span>
-                            </div>
-
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Calories</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.calories} <span style={{ fontSize: '8px' }}>KCAL</span></span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Elevation</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>384 <span style={{ fontSize: '8px' }}>M</span></span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>GPS Lock</span>
-                              <span style={{ fontSize: '13px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 10 ? '#10B981' : '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>
-                                {runState.gpsAccuracy ? `${Math.round(runState.gpsAccuracy)}m` : 'Lock'}
-                              </span>
-                            </div>
-
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Weather</span>
-                              <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>28°C</span>
-                            </div>
-                            <div>
-                              <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Heart Rate</span>
-                              <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>142 BPM</span>
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px' }}>
-                            <button 
-                              onClick={togglePauseResume}
-                              className="clash-btn-secondary"
-                              style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
-                            >
-                              {runState.status === 'tracking' ? 'Pause' : 'Resume'}
-                            </button>
-                            <button 
-                              onClick={() => stopTracking("Explicit User Request")}
-                              className="clash-btn-primary"
-                              style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
-                            >
-                              STOP & CLAIM
-                            </button>
-                          </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Pace</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
                         </div>
-                      )}
-                    </>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <button 
+                          onClick={togglePauseResume}
+                          className="clash-btn-secondary"
+                          style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
+                        >
+                          {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                        </button>
+                        <button 
+                          onClick={() => stopTracking("Explicit User Request")}
+                          className="clash-btn-primary"
+                          style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
+                        >
+                          STOP & CLAIM
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* EXPANDED STATE */}
+                  {bottomHudState === 'expanded' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px 6px', textAlign: 'center' }}>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                            {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Cur Pace</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.pace}</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Avg Pace</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.avgPace}</span>
+                        </div>
+
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Speed</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.speed} <span style={{ fontSize: '8px' }}>KM/H</span></span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Calories</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>{runState.calories} <span style={{ fontSize: '8px' }}>KCAL</span></span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Elevation</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>384 <span style={{ fontSize: '8px' }}>M</span></span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>GPS Lock</span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: runState.gpsAccuracy && runState.gpsAccuracy <= 10 ? '#10B981' : '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>
+                            {runState.gpsAccuracy ? `${Math.round(runState.gpsAccuracy)}m` : 'Lock'}
+                          </span>
+                        </div>
+
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Weather</span>
+                          <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>28°C</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'rgba(255,255,255,0.2)', display: 'block', textTransform: 'uppercase' }}>Heart Rate</span>
+                          <span style={{ fontSize: '12px', fontWeight: '800', color: 'rgba(255,255,255,0.3)' }}>142 BPM</span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px' }}>
+                        <button 
+                          onClick={togglePauseResume}
+                          className="clash-btn-secondary"
+                          style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
+                        >
+                          {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                        </button>
+                        <button 
+                          onClick={() => stopTracking("Explicit User Request")}
+                          className="clash-btn-primary"
+                          style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
+                        >
+                          STOP & CLAIM
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

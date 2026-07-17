@@ -4,7 +4,7 @@ import {
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass, 
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
   Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home,
-  ChevronUp, ChevronDown, Clock, Check
+  ChevronUp, ChevronDown, Clock, Check, Flame, Share2, Edit3, Bell, ChevronLeft, ChevronRight, Activity
 } from 'lucide-react';
 import { 
   isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
@@ -140,6 +140,79 @@ export default function App() {
   const [guidanceLineCoords, setGuidanceLineCoords] = useState(null);
   
   const guidancePolylineRef = useRef(null);
+
+  // Runner HQ Configuration & Subpages States
+  const [activeSettingSubpage, setActiveSettingSubpage] = useState(null); // null, 'notifications', 'privacy', 'preferences', 'gps', 'appearance', 'support', 'about', 'account'
+  const [editClanName, setEditClanName] = useState('');
+  
+  const [showAchievementsModal, setShowAchievementsModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  // Settings values
+  const [prefAutoPause, setPrefAutoPause] = useState(true);
+  const [prefUnits, setPrefUnits] = useState('metric');
+  const [prefNotifications, setPrefNotifications] = useState({ sound: true, vibration: true, clan: true });
+  const [prefPrivacy, setPrefPrivacy] = useState({ publicProfile: true, shareStats: true });
+  const [prefAppearance, setPrefAppearance] = useState({ darkMode: true, neonGlow: false, accentColor: '#FC4C02' });
+
+  // Initialize edit profile fields when user is loaded
+  useEffect(() => {
+    if (currentUser) {
+      setEditDisplayName(currentUser.displayName || '');
+      setEditClanName(currentUser.clan || '');
+    }
+  }, [currentUser]);
+
+  // Dynamic statistics calculator based on local history
+  const getLifetimeStats = () => {
+    try {
+      const runs = JSON.parse(localStorage.getItem('runclash_runs')) || [];
+      const totalRuns = runs.length;
+      const lifetimeDistance = runs.reduce((acc, r) => acc + (parseFloat(r.distance) || 0), 0);
+      const longestRun = Math.max(0, ...runs.map(r => parseFloat(r.distance) || 0));
+      const totalCalories = runs.reduce((acc, r) => acc + (parseInt(r.calories) || 0), 0);
+      
+      const paceToSeconds = (paceStr) => {
+        if (!paceStr || paceStr === '--:--') return Infinity;
+        const parts = paceStr.split(':');
+        if (parts.length !== 2) return Infinity;
+        return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+      };
+      
+      const secondsToPace = (secs) => {
+        if (secs === Infinity || secs === 0) return '0:00';
+        const mins = Math.floor(secs / 60);
+        const rem = Math.floor(secs % 60);
+        return `${mins}:${rem.toString().padStart(2, '0')}`;
+      };
+
+      const paces = runs.map(r => paceToSeconds(r.pace)).filter(p => p !== Infinity);
+      const bestPaceSecs = paces.length > 0 ? Math.min(...paces) : Infinity;
+      const bestPace = bestPaceSecs === Infinity ? '0:00' : secondsToPace(bestPaceSecs);
+
+      const totalDist = runs.reduce((acc, r) => acc + (parseFloat(r.distance) || 0), 0);
+      const totalDur = runs.reduce((acc, r) => acc + (parseInt(r.duration) || 0), 0);
+      const avgPace = totalDist > 0 ? secondsToPace(totalDur / totalDist) : '0:00';
+
+      return {
+        totalRuns,
+        lifetimeDistance: parseFloat(lifetimeDistance.toFixed(2)),
+        longestRun: parseFloat(longestRun.toFixed(2)),
+        bestPace,
+        avgPace,
+        calories: totalCalories
+      };
+    } catch (e) {
+      return {
+        totalRuns: 0,
+        lifetimeDistance: 0.00,
+        longestRun: 0.00,
+        bestPace: '0:00',
+        avgPace: '0:00',
+        calories: 0
+      };
+    }
+  };
 
 
 
@@ -1766,7 +1839,7 @@ ${watchErr.message} (retrying)`);
     >
       {DEBUG_MODE && (
         /* SIMULATOR / CONFIGURATION CONTROL PANEL */
-        <div className="clash-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
+        <div className="clash-card gps-config-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
           <div>
             <span className="clash-label" style={{ color: '#FC4C02', fontSize: '11px', letterSpacing: '2.5px' }}>Configuration Control</span>
             <h2 className="clash-title" style={{ margin: '6px 0 0 0', fontSize: '28px', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
@@ -2221,7 +2294,7 @@ ${watchErr.message} (retrying)`);
               </div>
             )}
 
-            {/* SETTINGS DRAWER OVERLAY */}
+            {/* SETTINGS DRAWER OVERLAY (TRANSFORMED INTO RUNNER HQ COMMAND CENTER) */}
             {showSettingsDrawer && (
               <div className="fade-in settings-drawer-mobile" style={{
                 position: 'absolute',
@@ -2234,165 +2307,771 @@ ${watchErr.message} (retrying)`);
                 padding: '24px 20px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '22px',
+                gap: '20px',
                 overflowY: 'auto'
               }}>
-                {/* Header Title */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--clash-border)', paddingBottom: '14px' }}>
-                  <h3 className="clash-subtitle" style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '1px' }}>Tactical Settings</h3>
-                  <button 
-                    onClick={() => setShowSettingsDrawer(false)}
-                    className="clash-btn-secondary btn-sm"
-                    style={{ color: '#FC4C02', borderColor: '#FC4C02' }}
-                  >
-                    Close
-                  </button>
-                </div>
+                {activeSettingSubpage !== null ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Subpage Header */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--clash-border)', paddingBottom: '14px' }}>
+                      <button 
+                        onClick={() => setActiveSettingSubpage(null)}
+                        className="clash-btn-secondary"
+                        style={{ width: '32px', height: '32px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #2A2A2A', background: '#151515', cursor: 'pointer' }}
+                      >
+                        <ChevronLeft size={16} style={{ color: '#FC4C02' }} />
+                      </button>
+                      <h3 className="clash-subtitle" style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '1px', fontSize: '14px' }}>
+                        {activeSettingSubpage === 'notifications' && 'Notifications'}
+                        {activeSettingSubpage === 'privacy' && 'Privacy Settings'}
+                        {activeSettingSubpage === 'preferences' && 'Running Preferences'}
+                        {activeSettingSubpage === 'gps' && 'GPS & Permissions'}
+                        {activeSettingSubpage === 'appearance' && 'Appearance'}
+                        {activeSettingSubpage === 'support' && 'Support & Feedback'}
+                        {activeSettingSubpage === 'about' && 'About RunClash'}
+                        {activeSettingSubpage === 'account' && 'Account Settings'}
+                      </h3>
+                    </div>
 
-                {/* Profile Header Block */}
-                <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    <div style={{
-                      width: '52px',
-                      height: '52px',
-                      borderRadius: '50%',
-                      background: '#0B0B0B',
-                      border: '2px solid #FC4C02',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '18px',
-                      fontWeight: '800',
-                      color: 'white',
-                      boxShadow: 'none'
-                    }}>
-                      {(currentUser.displayName || 'R')[0].toUpperCase()}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <h4 className="clash-title" style={{ margin: 0, fontSize: '18px' }}>{currentUser.displayName}</h4>
-                      <span className="clash-label" style={{ color: '#FC4C02', fontSize: '10px' }}>
-                        {currentUser.clan || 'Udaipur Racers'}
-                      </span>
-                    </div>
-                  </div>
+                    {/* Subpage Body Content */}
+                    <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {activeSettingSubpage === 'notifications' && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Sound Effects</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Audio feedback during active loops</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefNotifications.sound}
+                              onChange={e => setPrefNotifications(prev => ({ ...prev, sound: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '12px' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Loop Vibration</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Vibrate phone when loop is verified</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefNotifications.vibration}
+                              onChange={e => setPrefNotifications(prev => ({ ...prev, vibration: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '12px' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Clan Alerts</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Get notified on sector challenges</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefNotifications.clan}
+                              onChange={e => setPrefNotifications(prev => ({ ...prev, clan: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                        </>
+                      )}
 
-                  {/* XP & Level progress */}
-                  <div style={{ borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--clash-text-secondary)', marginBottom: '4px' }}>
-                      <span style={{ fontWeight: '800' }}>LEVEL {currentUser.level}</span>
-                      <span style={{ fontFamily: 'var(--clash-font-family)' }}>{currentUser.xp} XP</span>
-                    </div>
-                    <div className="clash-progress-bar">
-                      <div className="clash-progress-bar-fill" style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%` }}></div>
-                    </div>
-                  </div>
+                      {activeSettingSubpage === 'privacy' && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Public Profile</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Allow other clans to view your stats</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefPrivacy.publicProfile}
+                              onChange={e => setPrefPrivacy(prev => ({ ...prev, publicProfile: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '12px' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Leaderboard Sharing</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Share runs history on leaderboards</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefPrivacy.shareStats}
+                              onChange={e => setPrefPrivacy(prev => ({ ...prev, shareStats: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                        </>
+                      )}
 
-                  {/* Coin holdings */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0B0B0B', border: '1px solid var(--clash-border)', padding: '8px 12px', borderRadius: '10px' }}>
-                    <span className="clash-label" style={{ fontSize: '9px' }}>Coin Holdings</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Coins size={14} style={{ color: '#FC4C02' }} />
-                      <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>{currentUser.coins}</span>
-                    </div>
-                  </div>
-                </div>
+                      {activeSettingSubpage === 'preferences' && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Auto-Pause Loop</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Pause tracking when runner stops moving</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefAutoPause}
+                              onChange={e => setPrefAutoPause(e.target.checked)}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '12px' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Measurement Units</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Select preferred units system</span>
+                            </div>
+                            <select 
+                              value={prefUnits}
+                              onChange={e => setPrefUnits(e.target.value)}
+                              className="cyber-select"
+                              style={{ fontSize: '11px', padding: '6px 10px', background: '#0B0B0D', border: '1px solid #2A2A2A', color: 'white', borderRadius: '8px' }}
+                            >
+                              <option value="metric">Metric (km, km/h)</option>
+                              <option value="imperial">Imperial (miles, mph)</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
 
-                {DEBUG_MODE && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
-                    <span className="clash-label" style={{ fontSize: '9px' }}>Running & GPS Configuration</span>
-                    <div className="clash-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <label className="clash-subtitle" style={{ fontSize: '12px' }}>Location Source Mode</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      {activeSettingSubpage === 'gps' && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>GPS Lock State</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Status of device geolocation hardware</span>
+                            </div>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: isGpsReady ? '#10B981' : '#FBBF24' }}>
+                              {isGpsReady ? '🟢 ACTIVE & READY' : '🟡 ACQUIRING...'}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Developer Sim Controls</span>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Location Source Mode</label>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                <button 
+                                  className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                                  onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
+                                  disabled={runState.status !== 'idle'}
+                                  style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px', height: '36px', cursor: 'pointer' }}
+                                >
+                                  <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
+                                </button>
+                                <button 
+                                  className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
+                                  onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
+                                  disabled={runState.status !== 'idle'}
+                                  style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px', height: '36px', cursor: 'pointer' }}
+                                >
+                                  <Radio size={12} /> Dev Sim
+                                </button>
+                              </div>
+                            </div>
+
+                            {trackingMode === 'sim' && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                                <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Mock Simulator Route</label>
+                                <select 
+                                  value={simulationRouteKey}
+                                  onChange={e => setSimulationRouteKey(e.target.value)}
+                                  disabled={runState.status !== 'idle'}
+                                  className="cyber-select focus-ring"
+                                  style={{ fontSize: '11px', width: '100%', padding: '6px 10px', background: '#0B0B0D', border: '1px solid #2A2A2A', color: 'white', borderRadius: '8px' }}
+                                >
+                                  <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
+                                  <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
+                                  <option value="monument">Udaipur Castle Park (1.4 km)</option>
+                                </select>
+                              </div>
+                            )}
+
+                            <details style={{ marginTop: '10px' }}>
+                              <summary style={{ fontSize: '10px', cursor: 'pointer', color: '#FC4C02', outline: 'none', fontWeight: '800' }}>
+                                View Tactical Console Logs
+                              </summary>
+                              <div style={{
+                                background: '#0B0B0B',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '12px',
+                                padding: '10px',
+                                height: '140px',
+                                overflowY: 'auto',
+                                fontFamily: 'var(--clash-font-family)',
+                                fontSize: '9px',
+                                color: 'white',
+                                display: 'flex',
+                                flexDirection: 'column-reverse',
+                                gap: '4px',
+                                marginTop: '8px'
+                              }}>
+                                {consoleLogs.map((log, i) => (
+                                  <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
+                                    <span style={{ color: '#FC4C02' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          </div>
+                        </>
+                      )}
+
+                      {activeSettingSubpage === 'appearance' && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Interface Theme</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Toggle dark mode</span>
+                            </div>
+                            <span style={{ fontSize: '11px', color: 'white', fontWeight: '800' }}>DARK (default)</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '12px' }}>
+                            <div>
+                              <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>Neon Glow Accents</span>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>Toggle high contrast border lighting</span>
+                            </div>
+                            <input 
+                              type="checkbox" 
+                              checked={prefAppearance.neonGlow}
+                              onChange={e => setPrefAppearance(prev => ({ ...prev, neonGlow: e.target.checked }))}
+                              style={{ accentColor: '#FC4C02', width: '18px', height: '18px' }}
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {activeSettingSubpage === 'support' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                            Have issues or feedback? Reach out to the GITS RunClash development team.
+                          </span>
                           <button 
-                            className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                            onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
-                            disabled={runState.status !== 'idle'}
-                            style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
+                            className="clash-btn-primary" 
+                            style={{ height: '36px', fontSize: '11px', cursor: 'pointer' }}
+                            onClick={() => { alert("Thank you! Feedback module coming soon."); }}
                           >
-                            <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
-                          </button>
-                          <button 
-                            className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                            onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
-                            disabled={runState.status !== 'idle'}
-                            style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px' }}
-                          >
-                            <Radio size={12} /> Dev Sim
+                            Submit Bug Report
                           </button>
                         </div>
-                      </div>
-                      {trackingMode === 'sim' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '12px' }}>
-                          <label className="clash-subtitle" style={{ fontSize: '12px' }}>Mock Simulator Loop</label>
-                          <select 
-                            value={simulationRouteKey}
-                            onChange={e => setSimulationRouteKey(e.target.value)}
-                            disabled={runState.status !== 'idle'}
-                            className="cyber-select focus-ring"
-                            style={{ fontSize: '11px' }}
+                      )}
+
+                      {activeSettingSubpage === 'about' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                          <span style={{ color: 'white', fontWeight: '800' }}>RunClash v2.0.0</span>
+                          <span>Gamified GPS Loop Tracking & Crew Territory Conquests. Built by GITS Developers.</span>
+                          <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px', marginTop: '6px', fontSize: '9px' }}>
+                            &copy; 2026 RunClash Arena. All rights reserved.
+                          </div>
+                        </div>
+                      )}
+
+                      {activeSettingSubpage === 'account' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Display Name</label>
+                            <input 
+                              type="text" 
+                              value={editDisplayName}
+                              onChange={e => setEditDisplayName(e.target.value)}
+                              className="cyber-select focus-ring"
+                              style={{ height: '40px', padding: '0 12px', fontSize: '12px', color: 'white', background: '#0B0B0D', border: '1px solid #2A2A2A', borderRadius: '10px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Clan Name</label>
+                            <input 
+                              type="text" 
+                              value={editClanName}
+                              onChange={e => setEditClanName(e.target.value)}
+                              className="cyber-select focus-ring"
+                              style={{ height: '40px', padding: '0 12px', fontSize: '12px', color: 'white', background: '#0B0B0D', border: '1px solid #2A2A2A', borderRadius: '10px' }}
+                            />
+                          </div>
+                          <button 
+                            onClick={() => {
+                              if (!editDisplayName.trim()) return alert("Display Name cannot be empty!");
+                              setCurrentUser(prev => ({
+                                ...prev,
+                                displayName: editDisplayName.trim(),
+                                clan: editClanName.trim() || 'None'
+                              }));
+                              setActiveSettingSubpage(null);
+                              setToastMessage("Account settings updated successfully!");
+                              setTimeout(() => setToastMessage(null), 3000);
+                            }}
+                            className="clash-btn-primary"
+                            style={{ height: '42px', fontSize: '11px', marginTop: '6px', cursor: 'pointer' }}
                           >
-                            <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-                            <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-                            <option value="monument">Udaipur Castle Park (1.4 km)</option>
-                          </select>
+                            Save Changes
+                          </button>
                         </div>
                       )}
                     </div>
                   </div>
-                )}
+                ) : (
+                  /* MAIN RUNNER HQ COMMAND CENTER VIEW */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Header Row */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--clash-border)', paddingBottom: '14px' }}>
+                      <h3 className="clash-subtitle" style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '1.5px', fontSize: '14px', color: '#FC4C02', fontWeight: '800' }}>Runner HQ</h3>
+                      <button 
+                        onClick={() => setShowSettingsDrawer(false)}
+                        className="clash-btn-secondary btn-sm"
+                        style={{ color: '#FC4C02', borderColor: '#FC4C02', borderRadius: '12px', height: '28px', cursor: 'pointer' }}
+                      >
+                        Exit HQ
+                      </button>
+                    </div>
 
-                {DEBUG_MODE && (
-                  <details style={{ marginTop: '12px' }}>
-                    <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
-                      Developer Tools
-                    </summary>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
-                      <span className="clash-label" style={{ fontSize: '8px' }}>Tactical Console Logs</span>
-                      <div style={{
-                        background: '#0B0B0B',
-                        border: '1px solid var(--clash-border)',
-                        borderRadius: '12px',
-                        padding: '10px',
-                        height: '150px',
-                        overflowY: 'auto',
-                        fontFamily: 'var(--clash-font-family)',
-                        fontSize: '10px',
-                        color: 'white',
-                        display: 'flex',
-                        flexDirection: 'column-reverse',
-                        gap: '4px'
-                      }}>
-                        {consoleLogs.map((log, i) => (
-                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
-                            <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
+                    {/* 1. HERO PROFILE CARD */}
+                    <div className="runner-hq-card runner-hq-hero-bg card-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', fontWeight: '800', letterSpacing: '0.8px', textTransform: 'uppercase' }}>
+                          {(() => {
+                            const hr = new Date().getHours();
+                            if (hr < 12) return 'Good Morning, Runner ☀️';
+                            if (hr < 17) return 'Good Afternoon, Runner 🌤️';
+                            return 'Good Evening, Runner 🌙';
+                          })()}
+                        </span>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: '8px',
+                          fontSize: '8px',
+                          fontWeight: '800',
+                          background: 'rgba(252, 76, 2, 0.15)',
+                          color: '#FC4C02',
+                          textTransform: 'uppercase'
+                        }}>
+                          {(() => {
+                            const lvl = currentUser.level || 1;
+                            if (lvl < 5) return 'Bronze Scout';
+                            if (lvl < 9) return 'Silver Raider';
+                            if (lvl < 13) return 'Gold Vanguard';
+                            return 'Apex Centurion';
+                          })()}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        {/* Custom glowing circular avatar */}
+                        <div style={{
+                          width: '64px',
+                          height: '64px',
+                          borderRadius: '50%',
+                          background: 'rgba(11, 11, 13, 0.9)',
+                          border: '2px solid #FC4C02',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '22px',
+                          fontWeight: '800',
+                          color: 'white',
+                          boxShadow: '0 0 12px rgba(252, 76, 2, 0.2)'
+                        }}>
+                          {(currentUser.displayName || 'R')[0].toUpperCase()}
+                        </div>
+                        
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <h4 className="clash-title" style={{ margin: 0, fontSize: '20px', letterSpacing: '0.2px' }}>{currentUser.displayName}</h4>
+                          <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)', fontFamily: 'var(--clash-font-family)' }}>
+                            @{ (currentUser.displayName || 'runner').toLowerCase().replace(/\s+/g, '_') }
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* XP Progress Slider */}
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--clash-text-secondary)', marginBottom: '5px' }}>
+                          <span style={{ fontWeight: '800', color: 'white' }}>LVL {currentUser.level} BADGE</span>
+                          <span>{currentUser.xp} / {currentUser.nextLevelXp || 2500} XP</span>
+                        </div>
+                        <div className="clash-progress-bar" style={{ height: '6px', background: 'rgba(255,255,255,0.05)' }}>
+                          <div className="clash-progress-bar-fill" style={{ width: `${Math.min(100, ((currentUser.xp || 0) / (currentUser.nextLevelXp || 2500)) * 100)}%`, height: '100%' }}></div>
+                        </div>
+                      </div>
+
+                      {/* CTA Buttons */}
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <button 
+                          onClick={() => setActiveSettingSubpage('account')}
+                          className="clash-btn-secondary btn-sm"
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                        >
+                          <Edit3 size={11} style={{ marginRight: '4px' }} /> Edit Profile
+                        </button>
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(`Check out my RunClash stats! LVL ${currentUser.level} | ${currentUser.clan}`);
+                            setToastMessage("Profile details copied to clipboard!");
+                            setTimeout(() => setToastMessage(null), 3000);
+                          }}
+                          className="clash-btn-secondary btn-sm"
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                        >
+                          <Share2 size={11} style={{ marginRight: '4px' }} /> Share Profile
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 2. TODAY'S MISSION CARD */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '100ms', gap: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02' }}>DAILY CAMPAIGN</span>
+                        <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>+150 XP • +25 COINS</span>
+                      </div>
+                      
+                      {(() => {
+                        const stats = getLifetimeStats();
+                        const isMissionDone = stats.totalRuns > 0;
+                        
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div>
+                                <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '13px' }}>
+                                  {isMissionDone ? 'Daily Loop Infiltration' : 'Tactical Loop Infiltration'}
+                                </h4>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', display: 'block', marginTop: '2px' }}>
+                                  {isMissionDone ? 'Run loop verified successfully!' : 'Complete any loop of at least 1.5 km.'}
+                                </span>
+                              </div>
+                              <Target size={16} style={{ color: '#FC4C02' }} />
+                            </div>
+
+                            <div>
+                              <div className="clash-progress-bar" style={{ height: '5px', background: 'rgba(255,255,255,0.05)' }}>
+                                <div className="clash-progress-bar-fill" style={{ width: isMissionDone ? '100%' : '0%', height: '100%' }}></div>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: 'var(--clash-text-secondary)', marginTop: '4px' }}>
+                                <span>PROGRESS</span>
+                                <span>{isMissionDone ? '100%' : '0%'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* 3. WEEKLY PROGRESS CHART */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '180ms', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>WEEKLY ACTIVITY</span>
+                        <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>
+                          AVG: { (getLifetimeStats().lifetimeDistance / 7).toFixed(1) } km/day
+                        </span>
+                      </div>
+
+                      {/* Visual capsules bar graph */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', height: '100px', paddingTop: '10px', paddingBottom: '4px', background: 'rgba(0,0,0,0.15)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.02)' }}>
+                        {[
+                          { day: 'Mon', val: 3.2, active: true },
+                          { day: 'Tue', val: 5.4, active: true },
+                          { day: 'Wed', val: 1.8, active: true },
+                          { day: 'Thu', val: 0.0, active: false },
+                          { day: 'Fri', val: 4.2, active: true },
+                          { day: 'Sat', val: 8.5, active: true },
+                          { day: 'Sun', val: 2.1, active: true }
+                        ].map((d, index) => {
+                          const percentage = Math.min(100, (d.val / 8.5) * 100);
+                          return (
+                            <div key={index} className="weekly-bar-container">
+                              <div className="weekly-bar-bg" style={{ height: '65px' }}>
+                                <div className="weekly-bar-fill" style={{ height: `${percentage}%`, background: d.active ? '#FC4C02' : '#2A2A2A' }}></div>
+                              </div>
+                              <span style={{ fontSize: '8px', color: d.active ? 'white' : 'var(--clash-text-secondary)', fontWeight: '800' }}>{d.day}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 4. DAILY STREAK CARD */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '240ms', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '20px' }}>🔥</span>
+                          <div>
+                            <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Running Streak</span>
+                            <span style={{ fontSize: '16px', fontWeight: '800', color: 'white' }}>8 Days Active</span>
+                          </div>
+                        </div>
+                        <span style={{ fontSize: '9px', color: '#10B981', fontWeight: '800', background: 'rgba(16,185,129,0.1)', padding: '2px 8px', borderRadius: '8px' }}>STREAK SAFE</span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '10px', color: 'var(--clash-text-secondary)', fontStyle: 'italic' }}>
+                        "Don't break your running loop streak tomorrow. Keep Udaipur secured!"
+                      </p>
+                    </div>
+
+                    {/* 5. PERFORMANCE DASHBOARD */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '300ms', gap: '14px' }}>
+                      <span className="clash-label" style={{ fontSize: '9px' }}>PERFORMANCE ANALYTICS</span>
+                      
+                      {(() => {
+                        const stats = getLifetimeStats();
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            {/* Running Group */}
+                            <div>
+                              <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.5px' }}>Running Overview</span>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Lifetime Dist</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.lifetimeDistance} km</span>
+                                </div>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Total Runs</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.totalRuns}</span>
+                                </div>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Longest Run</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.longestRun} km</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Performance Group */}
+                            <div>
+                              <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', display: 'block', marginBottom: '8px', letterSpacing: '0.5px' }}>Velocity & Energy</span>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Best Pace</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.bestPace} /km</span>
+                                </div>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Avg Pace</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.avgPace} /km</span>
+                                </div>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                                  <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Calories</span>
+                                  <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{stats.calories} kcal</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* 6. TERRITORY COMMAND CENTER */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '360ms', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>TERRITORY CONTROL</span>
+                        <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Rank #14 Globally</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', background: 'rgba(0,0,0,0.15)', padding: '8px 12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Controlled Sectors</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>
+                            {territories.filter(t => t.ownerId === currentUser.uid).length}
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Territory XP</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>
+                            {currentUser.level * 450 + currentUser.xp} XP
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Hourly yield</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', display: 'block', marginTop: '2px' }}>
+                            +{territories.filter(t => t.ownerId === currentUser.uid).reduce((acc, t) => acc + (t.rate || 5), 0)}/HR
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+                        <button 
+                          onClick={() => { setShowSettingsDrawer(false); setActiveTab('map'); }}
+                          className="clash-btn-secondary btn-sm"
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                        >
+                          View Territories
+                        </button>
+                        <button 
+                          onClick={() => setShowHistoryModal(true)}
+                          className="clash-btn-secondary btn-sm"
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                        >
+                          Territory History
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 7. ACHIEVEMENTS CARD */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '420ms', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>ACHIEVEMENTS</span>
+                        <button 
+                          onClick={() => setShowAchievementsModal(true)}
+                          style={{ background: 'none', border: 'none', color: '#FC4C02', fontSize: '9px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                        >
+                          View All
+                        </button>
+                      </div>
+
+                      {/* Horizontal Scrolling Badges */}
+                      <div className="runner-hq-scroll" style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
+                        {[
+                          { id: 'first_run', title: '🥇', label: 'First Run', unlocked: getLifetimeStats().totalRuns > 0 },
+                          { id: 'first_terr', title: '🗺', label: 'First Territory', unlocked: territories.some(t => t.ownerId === currentUser.uid) },
+                          { id: 'streak_7', title: '🔥', label: '7-Day Streak', unlocked: true },
+                          { id: 'km_100', title: '💯', label: '100 km Club', unlocked: getLifetimeStats().lifetimeDistance >= 100 },
+                          { id: 'terr_king', title: '👑', label: 'Territory King', unlocked: false },
+                          { id: 'speed_demon', title: '⚡', label: 'Speed Demon', unlocked: false }
+                        ].map((ach, idx) => (
+                          <div key={idx} className={`achievement-badge ${ach.unlocked ? '' : 'locked'}`}>
+                            <span style={{ fontSize: '24px' }}>{ach.title}</span>
+                            <span style={{ fontSize: '9px', fontWeight: '800', color: 'white', whiteSpace: 'nowrap' }}>{ach.label}</span>
+                            <span style={{ fontSize: '7px', color: ach.unlocked ? '#10B981' : 'var(--clash-text-secondary)' }}>
+                              {ach.unlocked ? 'UNLOCKED' : 'LOCKED'}
+                            </span>
                           </div>
                         ))}
                       </div>
                     </div>
-                  </details>
-                )}
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px', marginTop: '16px' }}>
-                  <button 
-                    onClick={() => {
-                      if (confirm("Are you sure you want to sign out?")) {
-                        handleLogout();
-                        setShowSettingsDrawer(false);
-                      }
-                    }}
-                    className="clash-btn-secondary"
-                    style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px' }}
-                  >
-                    <LogOut size={13} style={{ color: '#FC4C02' }} /> Sign Out Account
-                  </button>
+                    {/* 8. SOCIAL OVERVIEW */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '460ms', gap: '12px' }}>
+                      <span className="clash-label" style={{ fontSize: '9px' }}>SOCIAL MATRIX</span>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr 1fr 1fr', gap: '4px', background: 'rgba(0,0,0,0.15)', padding: '8px 10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Friends</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>31</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Followers</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>42</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Following</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>29</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Posts</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>15</span>
+                        </div>
+                        <div>
+                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Stories</span>
+                          <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', display: 'block', marginTop: '2px' }}>2</span>
+                        </div>
+                      </div>
 
-                  <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
-                    RunClash v2.0.0 • Secured Database Sync
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
+                        <button 
+                          className="clash-btn-secondary btn-sm" 
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                          onClick={() => alert("Photos gallery coming soon!")}
+                        >
+                          My Photos
+                        </button>
+                        <button 
+                          className="clash-btn-secondary btn-sm" 
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                          onClick={() => alert("Saved posts coming soon!")}
+                        >
+                          Saved Posts
+                        </button>
+                        <button 
+                          className="clash-btn-secondary btn-sm" 
+                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                          onClick={() => alert("Draft stories coming soon!")}
+                        >
+                          Draft Stories
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 9. AI COACH INSIGHT */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '500ms', gap: '10px', borderLeft: '3px solid #FC4C02' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02' }}>AI COACH ANALYTICS</span>
+                        <Sparkles size={14} style={{ color: '#FC4C02' }} />
+                      </div>
+                      <p style={{ margin: 0, fontSize: '11px', color: 'white', lineHeight: '1.4' }}>
+                        "You're running 12% farther than last week. Consider a recovery run tomorrow to maintain pace."
+                      </p>
+                      <button 
+                        onClick={() => { setShowSettingsDrawer(false); setActiveTab('coach'); }}
+                        className="clash-btn-primary btn-sm"
+                        style={{ height: '32px', borderRadius: '16px', fontSize: '10px', border: 'none', background: '#FC4C02', color: 'white', marginTop: '4px', cursor: 'pointer' }}
+                      >
+                        Open AI Coach
+                      </button>
+                    </div>
+
+                    {/* 10. RUNNER SETTINGS (GLASS CARDS STACK) */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '550ms', gap: '10px' }}>
+                      <span className="clash-label" style={{ fontSize: '9px' }}>COMMAND PREFERENCES</span>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {[
+                          { id: 'notifications', title: 'Notifications', icon: <Bell size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'privacy', title: 'Privacy Settings', icon: <Lock size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'preferences', title: 'Running Preferences', icon: <Compass size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'gps', title: 'GPS & Permissions', icon: <Navigation size={13} style={{ color: '#FC4C02', transform: 'rotate(45deg)' }} /> },
+                          { id: 'appearance', title: 'Appearance & Themes', icon: <Trophy size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'support', title: 'Support & Feedback', icon: <AlertCircle size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'about', title: 'About RunClash', icon: <Target size={13} style={{ color: '#FC4C02' }} /> },
+                          { id: 'account', title: 'Account Settings', icon: <User size={13} style={{ color: '#FC4C02' }} /> }
+                        ].map((settingItem, idx) => (
+                          <div 
+                            key={idx}
+                            onClick={() => setActiveSettingSubpage(settingItem.id)}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '10px 14px',
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid rgba(255,255,255,0.04)',
+                              borderRadius: '12px',
+                              cursor: 'pointer',
+                              transition: 'background-color 0.2s ease'
+                            }}
+                            className="clash-btn-press"
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              {settingItem.icon}
+                              <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>{settingItem.title}</span>
+                            </div>
+                            <ChevronRight size={13} style={{ color: 'var(--clash-text-secondary)' }} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Exit Sign Out Account Action */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px', marginTop: '16px' }}>
+                      <button 
+                        onClick={() => {
+                          if (confirm("Are you sure you want to sign out?")) {
+                            handleLogout();
+                            setShowSettingsDrawer(false);
+                          }
+                        }}
+                        className="clash-btn-secondary"
+                        style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: 'pointer' }}
+                      >
+                        <LogOut size={13} style={{ color: '#FC4C02', marginRight: '6px' }} /> Sign Out Account
+                      </button>
+
+                      <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>
+                        RunClash v2.0.0 • Secured Database Sync
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
+
 
             <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px', height: '100%', overflowY: 'auto' }} className="fade-in">
               
@@ -4794,8 +5473,183 @@ ${watchErr.message} (retrying)`);
             </button>
           </div>
  
+          {/* Achievements View All Checklist Modal */}
+          {showAchievementsModal && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(11, 11, 13, 0.85)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 99999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px'
+              }}
+            >
+              <div 
+                className="clash-card animate-slide-in-up"
+                style={{
+                  width: '100%',
+                  maxWidth: '400px',
+                  maxHeight: '80vh',
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
+                  borderRadius: '24px',
+                  padding: '24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  overflowY: 'auto'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '12px' }}>
+                  <h3 className="clash-subtitle" style={{ margin: 0, fontSize: '14px', textTransform: 'uppercase' }}>Achievements</h3>
+                  <button 
+                    onClick={() => setShowAchievementsModal(false)}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ color: '#FC4C02', borderColor: '#FC4C02', borderRadius: '10px', height: '24px', padding: '0 8px' }}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {[
+                    { title: '🥇 First Run', desc: 'Complete your first run loop', req: '1 loop tracking run', unlocked: getLifetimeStats().totalRuns > 0 },
+                    { title: '🗺 First Territory', desc: 'Claim your first tactical sector', req: '1 captured territory', unlocked: territories.some(t => t.ownerId === currentUser.uid) },
+                    { title: '🔥 7-Day Streak', desc: 'Maintain running streak for 7 days', req: '7 consecutive running days', unlocked: true },
+                    { title: '💯 100 km Club', desc: 'Accumulate 100 km total distance', req: '100 km cumulative running', unlocked: getLifetimeStats().lifetimeDistance >= 100 },
+                    { title: '👑 Territory King', desc: 'Own 10 active sectors simultaneously', req: '10 owned territories', unlocked: false },
+                    { title: '⚡ Speed Demon', desc: 'Maintain pace faster than 4:30/km for a full loop', req: 'Fast loop pace', unlocked: false }
+                  ].map((ach, idx) => (
+                    <div key={idx} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '14px',
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.04)',
+                      borderRadius: '14px',
+                      padding: '12px',
+                      opacity: ach.unlocked ? 1 : 0.4
+                    }}>
+                      <span style={{ fontSize: '24px' }}>{ach.title.split(' ')[0]}</span>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: '12px', fontWeight: '800', display: 'block', color: 'white' }}>{ach.title.replace(/^[^\s]+\s+/, '')}</span>
+                        <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>{ach.desc}</span>
+                      </div>
+                      <span style={{ fontSize: '8px', fontWeight: '800', color: ach.unlocked ? '#10B981' : 'var(--clash-text-secondary)' }}>
+                        {ach.unlocked ? 'UNLOCKED' : 'LOCKED'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Territory History Completed Loops Modal */}
+          {showHistoryModal && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(11, 11, 13, 0.85)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 99999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px'
+              }}
+            >
+              <div 
+                className="clash-card animate-slide-in-up"
+                style={{
+                  width: '100%',
+                  maxWidth: '400px',
+                  maxHeight: '80vh',
+                  background: '#151515',
+                  border: '1px solid #2A2A2A',
+                  borderRadius: '24px',
+                  padding: '24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  overflowY: 'auto'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '12px' }}>
+                  <h3 className="clash-subtitle" style={{ margin: 0, fontSize: '14px', textTransform: 'uppercase' }}>Territory History</h3>
+                  <button 
+                    onClick={() => setShowHistoryModal(false)}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ color: '#FC4C02', borderColor: '#FC4C02', borderRadius: '10px', height: '24px', padding: '0 8px' }}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {(() => {
+                    const runs = JSON.parse(localStorage.getItem('runclash_runs')) || [];
+                    if (runs.length === 0) {
+                      return (
+                        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--clash-text-secondary)', fontSize: '11px' }}>
+                          No loops completed yet. Capture a territory to write history!
+                        </div>
+                      );
+                    }
+                    return runs.slice().reverse().map((r, idx) => (
+                      <div key={idx} style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        background: 'rgba(255,255,255,0.02)',
+                        border: '1px solid rgba(255,255,255,0.04)',
+                        borderRadius: '14px',
+                        padding: '12px'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '12px', fontWeight: '800', color: 'white' }}>
+                            {r.summaryStatistics?.conqueredTerritoryName || 'Loop Sector'}
+                          </span>
+                          <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)' }}>
+                            {new Date(r.endTime).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>DISTANCE</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{r.distance} km</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>PACE</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{r.pace} /km</span>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block' }}>CALORIES</span>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white' }}>{r.calories} kcal</span>
+                          </div>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Public Profile Modal */}
           {selectedProfileUser && (
+
             <div 
               style={{
                 position: 'fixed',

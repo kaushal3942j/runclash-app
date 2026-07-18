@@ -25,16 +25,51 @@ if (hasSupabaseKeys) {
 // LOCALSTORAGE FALLBACK SERVICE IMPLEMENTATION
 // ----------------------------------------------------
 
+// 0. LOCALSTORAGE MIGRATION FOR PRE-ALPHA STABILIZATION
+const migrateLocalStorage = () => {
+  try {
+    const oldUser = localStorage.getItem('runclash_mock_auth');
+    if (oldUser) {
+      if (!localStorage.getItem('clash_user')) {
+        localStorage.setItem('clash_user', oldUser);
+      }
+      localStorage.removeItem('runclash_mock_auth');
+    }
+
+    const oldRuns = localStorage.getItem('runclash_runs');
+    if (oldRuns) {
+      if (!localStorage.getItem('clash_runs')) {
+        localStorage.setItem('clash_runs', oldRuns);
+      }
+      localStorage.removeItem('runclash_runs');
+    }
+
+    const oldTerritories = localStorage.getItem('runclash_territories');
+    if (oldTerritories) {
+      if (!localStorage.getItem('clash_territories')) {
+        localStorage.setItem('clash_territories', oldTerritories);
+      }
+      localStorage.removeItem('runclash_territories');
+    }
+    
+    // Clean up other old developer/test keys
+    localStorage.removeItem('clash_debug');
+  } catch (e) {
+    console.error("Local storage migration failed", e);
+  }
+};
+migrateLocalStorage();
+
 const listeners = new Set();
 const triggerListeners = (data) => {
   listeners.forEach(cb => cb(data));
 };
 
 const mockAuthChangeListeners = new Set();
-let mockCurrentUser = JSON.parse(localStorage.getItem('runclash_mock_auth')) || null;
+let mockCurrentUser = JSON.parse(localStorage.getItem('clash_user')) || null;
 
 const getMockTerritories = () => {
-  const data = localStorage.getItem('runclash_territories');
+  const data = localStorage.getItem('clash_territories');
   const initial = [
     {
       id: 'lm1',
@@ -78,7 +113,7 @@ const getMockTerritories = () => {
   ];
 
   if (!data) {
-    localStorage.setItem('runclash_territories', JSON.stringify(initial));
+    localStorage.setItem('clash_territories', JSON.stringify(initial));
     return initial;
   }
   try {
@@ -107,7 +142,7 @@ const getMockTerritories = () => {
     });
 
     if (migrated) {
-      localStorage.setItem('runclash_territories', JSON.stringify(updated));
+      localStorage.setItem('clash_territories', JSON.stringify(updated));
     }
     return updated;
   } catch (e) {
@@ -175,7 +210,7 @@ export const registerUser = async (email, password, name, clan) => {
       options: {
         data: {
           display_name: name,
-          clan_name: clan
+          clan_name: clan || 'None'
         }
       }
     });
@@ -186,7 +221,7 @@ export const registerUser = async (email, password, name, clan) => {
     const profile = {
       id: user.id,
       display_name: name,
-      clan_name: clan,
+      clan_name: clan || 'None',
       level: 1,
       xp: 0,
       coins: 100,
@@ -206,7 +241,7 @@ export const registerUser = async (email, password, name, clan) => {
       uid: user.id,
       email: user.email,
       displayName: name,
-      clan: clan,
+      clan: clan || 'None',
       level: 1,
       xp: 0,
       coins: 100,
@@ -217,13 +252,13 @@ export const registerUser = async (email, password, name, clan) => {
       uid: 'local_' + Date.now(),
       email: email,
       displayName: name,
-      clan: clan,
+      clan: clan || 'None',
       level: 1,
       xp: 0,
       coins: 100,
       premium: false
     };
-    localStorage.setItem('runclash_mock_auth', JSON.stringify(profile));
+    localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
     mockAuthChangeListeners.forEach(cb => cb(profile));
     return profile;
@@ -265,13 +300,13 @@ export const loginUser = async (email, password) => {
       uid: 'local_user',
       email: email,
       displayName: email.split('@')[0],
-      clan: 'Udaipur Racers',
+      clan: 'None',
       level: 4,
       xp: 1420,
       coins: 350,
       premium: false
     };
-    localStorage.setItem('runclash_mock_auth', JSON.stringify(profile));
+    localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
     mockAuthChangeListeners.forEach(cb => cb(profile));
     return profile;
@@ -285,7 +320,7 @@ export const loginGuest = async (name, clan) => {
         options: {
           data: {
             display_name: name || 'Guest Runner',
-            clan_name: clan || 'Udaipur Racers'
+            clan_name: clan || 'None'
           }
         }
       });
@@ -295,7 +330,7 @@ export const loginGuest = async (name, clan) => {
       const profile = {
         id: user.id,
         display_name: name || 'Guest Runner',
-        clan_name: clan || 'Udaipur Racers',
+        clan_name: clan || 'None',
         level: 1,
         xp: 0,
         coins: 50,
@@ -325,7 +360,7 @@ export const loginGuest = async (name, clan) => {
       const profile = {
         uid: 'local_guest_' + Date.now(),
         displayName: name || 'Guest Runner',
-        clan: clan || 'Udaipur Racers',
+        clan: clan || 'None',
         level: 1,
         xp: 0,
         coins: 50,
@@ -333,7 +368,7 @@ export const loginGuest = async (name, clan) => {
         isAnonymous: true,
         offlineFallback: true
       };
-      localStorage.setItem('runclash_mock_auth', JSON.stringify(profile));
+      localStorage.setItem('clash_user', JSON.stringify(profile));
       mockCurrentUser = profile;
       mockAuthChangeListeners.forEach(cb => cb(profile));
       return profile;
@@ -342,14 +377,14 @@ export const loginGuest = async (name, clan) => {
     const profile = {
       uid: 'local_guest_' + Date.now(),
       displayName: name || 'Guest Runner',
-      clan: clan || 'Udaipur Racers',
+      clan: clan || 'None',
       level: 1,
       xp: 0,
       coins: 50,
       premium: false,
       isAnonymous: true
     };
-    localStorage.setItem('runclash_mock_auth', JSON.stringify(profile));
+    localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
     mockAuthChangeListeners.forEach(cb => cb(profile));
     return profile;
@@ -360,7 +395,7 @@ export const logout = async () => {
   if (useSupabase) {
     await supabase.auth.signOut();
   } else {
-    localStorage.removeItem('runclash_mock_auth');
+    localStorage.removeItem('clash_user');
     mockCurrentUser = null;
     mockAuthChangeListeners.forEach(cb => cb(null));
   }
@@ -383,10 +418,10 @@ export const syncUserStats = async (profile) => {
 
     console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${profile.uid}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
   } else {
-    const localUser = JSON.parse(localStorage.getItem('runclash_mock_auth'));
+    const localUser = JSON.parse(localStorage.getItem('clash_user'));
     if (localUser && localUser.uid === profile.uid) {
       const updated = { ...localUser, ...profile };
-      localStorage.setItem('runclash_mock_auth', JSON.stringify(updated));
+      localStorage.setItem('clash_user', JSON.stringify(updated));
       mockCurrentUser = updated;
     }
   }
@@ -432,7 +467,7 @@ export const subscribeToTerritories = (onUpdate) => {
 
       // Merge local guest-mode territories from LocalStorage
       try {
-        const localData = localStorage.getItem('runclash_territories');
+        const localData = localStorage.getItem('clash_territories');
         if (localData) {
           const locals = JSON.parse(localData);
           locals.forEach(loc => {
@@ -501,7 +536,7 @@ export const saveNewTerritory = async (territory) => {
 
     console.log(`[SUPABASE]\noperation: INSERT\ntable: territories\nuser: ${territory.ownerId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
 
-    if (error) console.error("Supabase error inserting territory", error);
+    if (error) console.error("RunClash: Supabase error inserting territory", error);
   } else {
     const list = getMockTerritories();
     const newTerr = {
@@ -509,7 +544,7 @@ export const saveNewTerritory = async (territory) => {
       id: territory.id || `t_local_${Date.now()}`
     };
     const updated = [...list, newTerr];
-    localStorage.setItem('runclash_territories', JSON.stringify(updated));
+    localStorage.setItem('clash_territories', JSON.stringify(updated));
     triggerListeners(updated);
     if (activeLoadTerritories) {
       activeLoadTerritories();
@@ -547,7 +582,7 @@ export const updateTerritory = async (id, updates) => {
       }
       return t;
     });
-    localStorage.setItem('runclash_territories', JSON.stringify(updated));
+    localStorage.setItem('clash_territories', JSON.stringify(updated));
     triggerListeners(updated);
   }
 };
@@ -577,10 +612,10 @@ export const getLeaderboard = async () => {
     }
   } else {
     return [
-      { displayName: 'Lakshya', clan: 'Udaipur Racers', level: 12, xp: 5800 },
-      { displayName: 'Sam', clan: 'GITS Runners', level: 10, xp: 4500 },
-      { displayName: 'Rohan', clan: 'Udaipur Racers', level: 8, xp: 3200 },
-      { displayName: 'Divya', clan: 'Udaipur Racers', level: 7, xp: 2900 }
+      { displayName: 'Lakshya', clan: 'None', level: 12, xp: 5800 },
+      { displayName: 'Sam', clan: 'None', level: 10, xp: 4500 },
+      { displayName: 'Rohan', clan: 'None', level: 8, xp: 3200 },
+      { displayName: 'Divya', clan: 'None', level: 7, xp: 2900 }
     ];
   }
 };
@@ -626,7 +661,7 @@ export const saveCompletedRun = async (runData) => {
         .from('runs')
         .insert(dbRun);
 
-      console.log(`[SUPABASE]\\noperation: INSERT\\ntable: runs\\nuser: \${runData.userId}\\nstatus: \${error ? \`error: \${error.message}\` : 'success'}`);
+      console.log(`[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ${runData.userId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
 
       if (error) throw error;
       return { success: true, data };
@@ -637,10 +672,10 @@ export const saveCompletedRun = async (runData) => {
 
   // Fallback to local storage
   try {
-    const localRunsKey = 'runclash_runs';
+    const localRunsKey = 'clash_runs';
     const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
     const localRun = {
-      id: `run_local_\${Date.now()}`,
+      id: `run_local_${Date.now()}`,
       ...runData,
       createdAt: new Date().toISOString()
     };

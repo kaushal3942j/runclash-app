@@ -81,7 +81,7 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
-  const [authClan, setAuthClan] = useState('Udaipur Racers');
+  const [authClan, setAuthClan] = useState('None');
   const [authError, setAuthError] = useState('');
 
   // Global App States
@@ -93,9 +93,8 @@ export default function App() {
     decoys: 0
   });
 
-  // GPS Mode Toggles & Debug Flag
-  const DEBUG_MODE = localStorage.getItem('clash_debug') === 'true';
-  const [trackingMode, setTrackingMode] = useState(DEBUG_MODE ? 'sim' : 'gps'); // Default to 'gps' in production
+  const DEBUG_MODE = false;
+  const [trackingMode, setTrackingMode] = useState('gps'); // Enforced 'gps' in production
   const [simulationRouteKey, setSimulationRouteKey] = useState('lake');
   const [isSearchingGps, setIsSearchingGps] = useState(false);
   
@@ -166,7 +165,7 @@ export default function App() {
   // Dynamic statistics calculator based on local history
   const getLifetimeStats = () => {
     try {
-      const runs = JSON.parse(localStorage.getItem('runclash_runs')) || [];
+      const runs = JSON.parse(localStorage.getItem('clash_runs')) || [];
       const totalRuns = runs.length;
       const lifetimeDistance = runs.reduce((acc, r) => acc + (parseFloat(r.distance) || 0), 0);
       const longestRun = Math.max(0, ...runs.map(r => parseFloat(r.distance) || 0));
@@ -454,6 +453,7 @@ export default function App() {
   // Simulation Interval Refs
   const simIntervalRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const lastLoopWarningTimeRef = useRef(0);
 
   // Helper log function
   const addLog = (msg) => {
@@ -550,13 +550,36 @@ export default function App() {
     e.preventDefault();
     setAuthError('');
     try {
+      if (authMode !== 'guest') {
+        const trimmedEmail = authEmail.trim();
+        if (!trimmedEmail) {
+          throw new Error("Email address is required.");
+        }
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(trimmedEmail)) {
+          throw new Error("Please enter a valid email address (e.g. name@domain.com).");
+        }
+        if (!authPassword) {
+          throw new Error("Password is required.");
+        }
+        if (authPassword.length < 6) {
+          throw new Error("Password must be at least 6 characters long.");
+        }
+      } else {
+        // Guest mode validation
+        const guestName = authPassword.trim() || authName.trim();
+        if (!guestName) {
+          throw new Error("Display name is required to enter as guest.");
+        }
+      }
+
       if (authMode === 'login') {
-        const profile = await loginUser(authEmail, authPassword);
+        const profile = await loginUser(authEmail.trim(), authPassword);
         setCurrentUser(profile);
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'signup') {
         if (!authName.trim()) throw new Error("Display name is required.");
-        const profile = await registerUser(authEmail, authPassword, authName, authClan);
+        const profile = await registerUser(authEmail.trim(), authPassword, authName.trim(), authClan);
         setCurrentUser(profile);
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'guest') {
@@ -592,7 +615,8 @@ export default function App() {
 
       const map = L.map('map', {
         zoomControl: false,
-        attributionControl: false
+        attributionControl: false,
+        preferCanvas: true
       }).setView([24.5950, 73.6800], 13.5);
 
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
@@ -619,6 +643,12 @@ export default function App() {
       if (mapInstanceRef.current) {
         console.log("[Map Setup] Destroying map instance and clearing ref.");
         try {
+          if (polylineRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+          if (runnerMarkerRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+          if (guidancePolylineRef.current) mapInstanceRef.current.removeLayer(guidancePolylineRef.current);
+          Object.values(territoryPolygonsRef.current).forEach(layer => {
+            if (layer) mapInstanceRef.current.removeLayer(layer);
+          });
           mapInstanceRef.current.remove();
         } catch (e) {
           console.error("Map removal error", e);
@@ -627,6 +657,7 @@ export default function App() {
       }
       polylineRef.current = null;
       runnerMarkerRef.current = null;
+      guidancePolylineRef.current = null;
       territoryPolygonsRef.current = {};
     };
   }, [currentUser]);
@@ -981,11 +1012,20 @@ export default function App() {
                   instantSpeedMS = distMeters / dt;
                   const wAcceleration = Math.abs(instantSpeedMS - lastSpeedRef.current) / dt;
 
-                  // 4. Anti-Cheat spike validation (> 12 m/s / 43 km/h discarded)
-                  if (instantSpeedMS > 12.0) {
+                  // Track Max Speed in km/h
+                  const speedKmh = instantSpeedMS * 3.6;
+                  if (!cheatMetricsRef.current.maxSpeed || speedKmh > cheatMetricsRef.current.maxSpeed) {
+                    cheatMetricsRef.current.maxSpeed = speedKmh;
+                  }
+
+                  // 4. Anti-Cheat spike validation (> 8.0 m/s / 28.8 km/h flagged as spike)
+                  if (instantSpeedMS > 8.0) {
                     cheatMetricsRef.current.speedSpikes += 1;
-                    addLog(`GPS: Discarding GPS speed spike (${(instantSpeedMS * 3.6).toFixed(1)} km/h).`);
-                    return { ...prev, gpsAccuracy: wAccuracy };
+                    addLog(`GPS: Speed spike detected (${speedKmh.toFixed(1)} km/h).`);
+                    if (instantSpeedMS > 12.0) {
+                      // Discard points above 12 m/s to prevent fake distance from car jumps
+                      return { ...prev, gpsAccuracy: wAccuracy };
+                    }
                   }
 
                   if (instantSpeedMS > 6.0) {
@@ -1001,14 +1041,15 @@ export default function App() {
 
                 // 5. Automatic Pause & Resume detection
                 let nextAutoPaused = prev.isAutoPaused;
-                if (instantSpeedMS < 0.5) {
+                const isStationary = instantSpeedMS < 0.8;
+                if (isStationary) {
                   // Increment stationary low speed timer
-                  lowSpeedDurationRef.current += dt || 1.5;
-                  if (lowSpeedDurationRef.current >= 6 && !prev.isAutoPaused) {
+                  lowSpeedDurationRef.current += dt || 1.0;
+                  if (lowSpeedDurationRef.current >= 4 && !prev.isAutoPaused) {
                     nextAutoPaused = true;
                     addLog("GPS: Auto-paused (runner stopped).");
                   }
-                } else if (instantSpeedMS >= 0.8) {
+                } else if (instantSpeedMS >= 1.0) {
                   // Reset stationary timer and auto-resume
                   lowSpeedDurationRef.current = 0;
                   if (prev.isAutoPaused) {
@@ -1022,7 +1063,7 @@ export default function App() {
                 // Format current speed & pace
                 const speedKmH = instantSpeedMS * 3.6;
                 let currentPaceStr = '--:--';
-                if (instantSpeedMS >= 0.3) {
+                if (instantSpeedMS >= 0.8) {
                   const paceDec = 60 / speedKmH;
                   const pMins = Math.floor(paceDec);
                   const pSecs = Math.floor((paceDec - pMins) * 60);
@@ -1031,10 +1072,10 @@ export default function App() {
                   }
                 }
 
-                // If auto-paused, do NOT accumulate distance or path coordinates
+                // If auto-paused or stationary (GPS drift/shaking), do NOT accumulate distance or path coordinates
                 let updatedPath = prev.path;
                 let updatedDistance = prev.distance;
-                if (!nextAutoPaused) {
+                if (!nextAutoPaused && !isStationary) {
                   updatedPath = [...prev.path, newPoint];
                   updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
                 }
@@ -1044,7 +1085,7 @@ export default function App() {
                 const avgPaceStr = calculatePaceStr(totalDuration, updatedDistance);
                 const caloriesEst = Math.round(updatedDistance * 75 * 1.03);
 
-                if (polylineRef.current && !nextAutoPaused) polylineRef.current.setLatLngs(updatedPath);
+                if (polylineRef.current && !nextAutoPaused && !isStationary) polylineRef.current.setLatLngs(updatedPath);
                 if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
                 if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
@@ -1333,7 +1374,11 @@ ${watchErr.message} (retrying)`);
 
     if (areaSqM < 200) {
       addLog(`GeoCalc: Loop area is too small (${formattedArea} < 200 m²). Territory not recorded.`);
-      alert("Loop too small. Continue running to create a larger loop.");
+      const now = Date.now();
+      if (now - lastLoopWarningTimeRef.current > 20000) {
+        lastLoopWarningTimeRef.current = now;
+        alert("Loop too small. Continue running to create a larger loop.");
+      }
       return;
     }
 
@@ -1355,8 +1400,8 @@ ${watchErr.message} (retrying)`);
       const totalDistanceMeters = runState.distance * 1000;
       const overallAvgSpeed = totalDistanceMeters / totalDuration; // m/s
 
-      // 1. Hard cutoff check: overall average speed > 8.0 m/s (28.8 km/h) is impossible for long loops
-      if (overallAvgSpeed > 8.0) {
+      // 1. Hard cutoff check: overall average speed > 7.0 m/s (25.2 km/h) is impossible for long running loops
+      if (overallAvgSpeed > 7.0) {
         addLog(`Anti-Cheat: Run invalidated. Unrealistic average speed (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`);
         reportError(
           `Anti-Cheat: Invalidation. Overall avg speed is too high (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`,
@@ -1373,6 +1418,12 @@ ${watchErr.message} (retrying)`);
       let suspicionScore = 0;
       suspicionScore += cheatMetricsRef.current.repeatedJumps * 15;
       suspicionScore += cheatMetricsRef.current.unrealisticAcceleration * 10;
+      suspicionScore += (cheatMetricsRef.current.speedSpikes || 0) * 35;
+      
+      const maxSpeed = cheatMetricsRef.current.maxSpeed || 0;
+      if (maxSpeed > 28) {
+        suspicionScore += 50; // High speed spike suspicion (bike/car)
+      }
       if (overallAvgSpeed > 5.5) {
         suspicionScore += 40; // High running average speed suspicion
       }
@@ -1801,9 +1852,7 @@ ${watchErr.message} (retrying)`);
                   onChange={e => setAuthClan(e.target.value)}
                   className="cyber-select focus-ring"
                 >
-                  <option value="Udaipur Racers">Udaipur Racers (Orange)</option>
-                  <option value="GITS Runners">GITS Runners (White)</option>
-                  <option value="Delhi Marathon Club">Delhi Marathon Club (Gray)</option>
+                  <option value="None">Skip for now</option>
                 </select>
               </div>
             )}
@@ -1835,120 +1884,9 @@ ${watchErr.message} (retrying)`);
   return (
     <div 
       className="sim-container fade-in"
-      style={!DEBUG_MODE ? { display: 'flex', justifyContent: 'center', padding: '24px 0', minHeight: '100vh', alignItems: 'center' } : {}}
+      style={{ display: 'flex', justifyContent: 'center', padding: '24px 0', minHeight: '100vh', alignItems: 'center' }}
     >
-      {DEBUG_MODE && (
-        /* SIMULATOR / CONFIGURATION CONTROL PANEL */
-        <div className="clash-card gps-config-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '22px', height: 'fit-content' }}>
-          <div>
-            <span className="clash-label" style={{ color: '#FC4C02', fontSize: '11px', letterSpacing: '2.5px' }}>Configuration Control</span>
-            <h2 className="clash-title" style={{ margin: '6px 0 0 0', fontSize: '28px', letterSpacing: '-0.5px' }}>GPS Tracker Setup</h2>
-            <p className="clash-body" style={{ fontSize: '13px', marginTop: '8px' }}>
-              Choose your execution mode. Step outside and run in loops with <b>Real GPS</b>, or test closed loops from your computer with <b>Developer Sim</b>.
-            </p>
-          </div>
-
-          {/* Tracking Mode selection */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <label className="clash-label" style={{ fontSize: '10px' }}>Location Source Mode</label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <button 
-                className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                onClick={() => setTrackingMode('gps')}
-                disabled={runState.status !== 'idle'}
-                style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
-              >
-                <Navigation size={13} style={{ transform: 'rotate(45deg)' }} /> Real GPS
-              </button>
-              <button 
-                className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                onClick={() => setTrackingMode('sim')}
-                disabled={runState.status !== 'idle'}
-                style={{ fontSize: '11px', gap: '6px', padding: '12px', borderRadius: '12px' }}
-              >
-                <Radio size={13} /> Developer Sim
-              </button>
-            </div>
-          </div>
-
-          {/* Predefined Simulator selection (Only shown if mode is sim) */}
-          {trackingMode === 'sim' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label className="clash-label" style={{ fontSize: '10px' }}>Mock Simulator Loop</label>
-              <select 
-                value={simulationRouteKey}
-                onChange={e => setSimulationRouteKey(e.target.value)}
-                disabled={runState.status !== 'idle'}
-                className="cyber-select"
-              >
-                <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-                <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-                <option value="monument">Udaipur Castle Park (1.4 km)</option>
-                <option value="micro">Micro Loop (Too Small Test)</option>
-              </select>
-            </div>
-          )}
-
-          {/* Control execution buttons */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            {runState.status === 'idle' ? (
-              <button className="clash-btn-primary" onClick={startTracking} style={{ width: '100%', fontSize: '11px', padding: '12px' }}>
-                <Play size={13} /> Start Tracking
-              </button>
-            ) : (
-              <button className="clash-btn-secondary" onClick={stopTracking} style={{ width: '100%', borderColor: '#FC4C02', color: '#FC4C02', fontSize: '11px', padding: '12px' }}>
-                <Square size={13} /> Stop Run
-              </button>
-            )}
-
-            <button 
-              className="clash-btn-secondary"
-              onClick={handleLogout}
-              style={{ width: '100%', fontSize: '11px', gap: '6px', padding: '12px' }}
-            >
-              <LogOut size={13} /> Sign Out
-            </button>
-          </div>
-
-          {/* Collapsible Developer Console logs */}
-          <details style={{ marginTop: '4px' }}>
-            <summary className="clash-label" style={{ fontSize: '10px', cursor: 'pointer', outline: 'none' }}>
-              Developer Tools
-            </summary>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-              <span className="clash-label" style={{ fontSize: '9px' }}>GPS Engine Console logs</span>
-              <div style={{
-                background: '#0B0B0B',
-                border: '1px solid var(--clash-border)',
-                borderRadius: '12px',
-                padding: '12px',
-                height: '150px',
-                overflowY: 'auto',
-                fontFamily: 'var(--clash-font-family)',
-                fontSize: '10px',
-                color: 'white',
-                display: 'flex',
-                flexDirection: 'column-reverse',
-                gap: '6px'
-              }}>
-                {consoleLogs.map((log, i) => (
-                  <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '4px' }}>
-                    <span style={{ color: '#FC4C02', fontWeight: 'bold' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </details>
-
-          {/* Cloud database active details */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(255, 255, 255, 0.02)', padding: '12px 14px', borderRadius: '12px', border: '1px solid var(--clash-border)' }}>
-            <ShieldCheck size={16} style={{ color: '#FC4C02' }} />
-            <span className="clash-body" style={{ fontSize: '11px', fontWeight: '500' }}>
-              Active Sync: <span style={{ color: 'white', fontWeight: '700' }}>{isFirebaseActive() ? 'Supabase Cloud (PostgreSQL)' : 'Local Offline Database'}</span>
-            </span>
-          </div>
-        </div>
-      )}      {/* MOBILE DEVICE FRAME SIMULATION */}
+      {/* MOBILE DEVICE FRAME SIMULATION */}
       <div className="phone-frame">
         <div className="phone-notch">
           <div className="phone-camera"></div>
@@ -2449,74 +2387,27 @@ ${watchErr.message} (retrying)`);
                             </span>
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px' }}>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Developer Sim Controls</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px' }}>
+                            <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', letterSpacing: '0.5px', textTransform: 'uppercase' }}>GPS Troubleshooting Guide</span>
                             
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                              <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Location Source Mode</label>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                                <button 
-                                  className={trackingMode === 'gps' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                                  onClick={() => { setTrackingMode('gps'); addLog("GPS: Switched to Real GPS mode."); }}
-                                  disabled={runState.status !== 'idle'}
-                                  style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px', height: '36px', cursor: 'pointer' }}
-                                >
-                                  <Navigation size={12} style={{ transform: 'rotate(45deg)' }} /> Real GPS
-                                </button>
-                                <button 
-                                  className={trackingMode === 'sim' ? 'clash-btn-primary' : 'clash-btn-secondary'}
-                                  onClick={() => { setTrackingMode('sim'); addLog("GPS: Switched to Dev Simulator mode."); }}
-                                  disabled={runState.status !== 'idle'}
-                                  style={{ fontSize: '10px', padding: '10px', gap: '6px', borderRadius: '12px', height: '36px', cursor: 'pointer' }}
-                                >
-                                  <Radio size={12} /> Dev Sim
-                                </button>
+                            <div style={{ background: 'rgba(252, 76, 2, 0.05)', border: '1px solid rgba(252, 76, 2, 0.15)', borderRadius: '12px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              <div>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: 'white', display: 'block', marginBottom: '2px' }}>1. Enable Location Services</span>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>Make sure GPS/Location services are turned ON in your device's system settings.</span>
+                              </div>
+                              <div>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: 'white', display: 'block', marginBottom: '2px' }}>2. Grant Browser Permissions</span>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>Ensure that your browser has permission to access your location. Check your browser address bar's lock icon to verify.</span>
+                              </div>
+                              <div>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: 'white', display: 'block', marginBottom: '2px' }}>3. High Accuracy Mode</span>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>Set your device location mode to 'High Accuracy' or 'Device Only' for the best results outdoors.</span>
+                              </div>
+                              <div>
+                                <span style={{ fontSize: '11px', fontWeight: '700', color: 'white', display: 'block', marginBottom: '2px' }}>4. Stand in Open Space</span>
+                                <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>Buildings and heavy tree canopy can block satellite signals. Step into an open area for a quick lock.</span>
                               </div>
                             </div>
-
-                            {trackingMode === 'sim' && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
-                                <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Mock Simulator Route</label>
-                                <select 
-                                  value={simulationRouteKey}
-                                  onChange={e => setSimulationRouteKey(e.target.value)}
-                                  disabled={runState.status !== 'idle'}
-                                  className="cyber-select focus-ring"
-                                  style={{ fontSize: '11px', width: '100%', padding: '6px 10px', background: '#0B0B0D', border: '1px solid #2A2A2A', color: 'white', borderRadius: '8px' }}
-                                >
-                                  <option value="lake">Fateh Sagar Lake Loop (3.2 km)</option>
-                                  <option value="foothills">Sajjan Garh Foothills Base (2.1 km)</option>
-                                  <option value="monument">Udaipur Castle Park (1.4 km)</option>
-                                </select>
-                              </div>
-                            )}
-
-                            <details style={{ marginTop: '10px' }}>
-                              <summary style={{ fontSize: '10px', cursor: 'pointer', color: '#FC4C02', outline: 'none', fontWeight: '800' }}>
-                                View Tactical Console Logs
-                              </summary>
-                              <div style={{
-                                background: '#0B0B0B',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '12px',
-                                padding: '10px',
-                                height: '140px',
-                                overflowY: 'auto',
-                                fontFamily: 'var(--clash-font-family)',
-                                fontSize: '9px',
-                                color: 'white',
-                                display: 'flex',
-                                flexDirection: 'column-reverse',
-                                gap: '4px',
-                                marginTop: '8px'
-                              }}>
-                                {consoleLogs.map((log, i) => (
-                                  <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '3px' }}>
-                                    <span style={{ color: '#FC4C02' }}>[{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}]</span> {log}
-                                  </div>
-                                ))}
-                              </div>
-                            </details>
                           </div>
                         </>
                       )}
@@ -2546,17 +2437,46 @@ ${watchErr.message} (retrying)`);
                       )}
 
                       {activeSettingSubpage === 'support' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                           <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
-                            Have issues or feedback? Reach out to the GITS RunClash development team.
+                            Access the support center, read legal terms, or file reports to the arena operations team.
                           </span>
-                          <button 
-                            className="clash-btn-primary" 
-                            style={{ height: '36px', fontSize: '11px', cursor: 'pointer' }}
-                            onClick={() => { alert("Thank you! Feedback module coming soon."); }}
-                          >
-                            Submit Bug Report
-                          </button>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <button 
+                              className="clash-btn-primary" 
+                              style={{ height: '36px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                              onClick={() => { alert("Support Portal: Please send bug reports to support@runclash.com with your log details."); }}
+                            >
+                              Report Bug / System Issue
+                            </button>
+                            <button 
+                              className="clash-btn-secondary" 
+                              style={{ height: '36px', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                              onClick={() => { alert("Contact GITS Operations: operations@runclash.com"); }}
+                            >
+                              Contact Support Team
+                            </button>
+                          </div>
+
+                          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: '800', color: 'white', textTransform: 'uppercase', letterSpacing: '0.5px' }}>FAQ & Legal Docs</span>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer' }} onClick={() => alert("FAQ (Coming Soon in Alpha v2)")}>
+                                <span>Frequently Asked Questions</span>
+                                <span style={{ color: '#FC4C02', fontSize: '10px' }}>🚧 COMING SOON</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', cursor: 'pointer' }} onClick={() => alert("Privacy Policy:\n\nRunClash is committed to protecting your GPS location data. Location updates are only processed locally to map loops and are synced securely to Supabase. No telemetry data is sold or shared.")}>
+                                <span>Privacy Policy</span>
+                                <span style={{ color: 'var(--clash-text-secondary)' }}>&rarr;</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', cursor: 'pointer' }} onClick={() => alert("Terms of Service:\n\nBy using RunClash, you agree to play fairly. Using vehicle simulation, GPS spoofing, or biking to record running loops is strictly forbidden and will result in temporary or permanent sector bans.")}>
+                                <span>Terms of Service</span>
+                                <span style={{ color: 'var(--clash-text-secondary)' }}>&rarr;</span>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       )}
 
@@ -4841,76 +4761,11 @@ ${watchErr.message} (retrying)`);
                     </div>
                   </div>
 
-                  {/* Clan Chat */}
-                  <div className="clash-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', minHeight: '230px', padding: '14px' }}>
-                    <span className="clash-label" style={{ borderBottom: '1px solid var(--clash-border)', paddingBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <MessageSquare size={13} style={{ color: '#FC4C02' }} /> Crew Comm Channel
-                    </span>
-     
-                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', padding: '4px 0' }}>
-                      {clanMessages.map((msg) => {
-                        const isSelf = msg.sender.includes('You') || msg.sender === currentUser.displayName;
-                        return (
-                          <div 
-                            key={msg.id} 
-                            style={{
-                              alignSelf: isSelf ? 'flex-end' : 'flex-start',
-                              maxWidth: '85%',
-                              padding: '10px 14px',
-                              borderRadius: '16px',
-                              fontSize: '12px',
-                              lineHeight: '1.45',
-                              background: isSelf ? 'rgba(252, 76, 2, 0.05)' : '#0B0B0B',
-                              border: `1px solid ${isSelf ? '#FC4C02' : 'var(--clash-border)'}`,
-                              color: 'white'
-                            }}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}>
-                              <span 
-                                onClick={() => {
-                                  if (!isSelf) {
-                                    const found = INITIAL_PROFILES.find(p => p.displayName === msg.sender) || {
-                                      id: 'mock_chat_' + msg.sender,
-                                      displayName: msg.sender,
-                                      clan: currentUser.clan,
-                                      level: 5,
-                                      xp: 1800,
-                                      distance: '24.5 km',
-                                      territories: 1,
-                                      bio: 'Active crew operator.',
-                                      friendsCount: 6,
-                                      postsCount: 1,
-                                      online: true
-                                    };
-                                    setSelectedProfileUser(found);
-                                  }
-                                }}
-                                style={{ fontSize: '9px', fontWeight: '800', color: isSelf ? '#FC4C02' : '#FFFFFF', cursor: isSelf ? 'default' : 'pointer' }}
-                                className={isSelf ? '' : 'clash-btn-press'}
-                              >
-                                {msg.sender}
-                              </span>
-                              <span className="clash-body" style={{ fontSize: '8px' }}>{msg.time}</span>
-                            </div>
-                            <p style={{ margin: '0', fontSize: '11px', color: 'white', fontWeight: '500' }}>{msg.text}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-     
-                    <form onSubmit={handleClanSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
-                      <input 
-                        type="text" 
-                        value={clanInput}
-                        onChange={(e) => setClanInput(e.target.value)}
-                        placeholder="Message crew..."
-                        className="cyber-input"
-                        style={{ padding: '8px 12px', fontSize: '12px' }}
-                      />
-                      <button type="submit" style={{ background: '#FC4C02', border: 'none', color: 'white', borderRadius: '10px', padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'transform 0.1s ease' }}>
-                        <Send size={12} />
-                      </button>
-                    </form>
+                  {/* Clan Chat Coming Soon banner */}
+                  <div className="clash-card text-center p-6" style={{ minHeight: '160px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                    <MessageSquare size={28} style={{ color: '#FC4C02', opacity: 0.7 }} />
+                    <h4 className="m-0 text-sm" style={{ fontWeight: '800', color: 'white', textTransform: 'uppercase' }}>Crew Comm Channel</h4>
+                    <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>🚧 Coming Soon in Alpha 2.0. Join factions and chat in real-time with your crew.</span>
                   </div>
                 </div>
               ) : (
@@ -5325,94 +5180,10 @@ ${watchErr.message} (retrying)`);
               </div>
 
               {/* Chat Thread Panel */}
-              <div className="clash-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', minHeight: '230px', padding: '14px' }}>
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px 0' }}>
-                  {coachMessages.map((msg) => {
-                    const isCoach = msg.sender === 'coach';
-                    return (
-                      <div 
-                        key={msg.id} 
-                        style={{ 
-                          alignSelf: isCoach ? 'flex-start' : 'flex-end',
-                          maxWidth: '85%',
-                          padding: '10px 14px',
-                          borderRadius: '16px',
-                          fontSize: '12px',
-                          lineHeight: '1.45',
-                          background: isCoach ? '#0B0B0B' : 'rgba(252, 76, 2, 0.05)',
-                          border: `1px solid ${isCoach ? 'var(--clash-border)' : '#FC4C02'}`,
-                          color: 'white'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '9px', fontWeight: '800', color: isCoach ? '#FC4C02' : '#FFFFFF' }}>
-                            {isCoach ? '🛡️ Coach' : 'You'}
-                          </span>
-                          <span className="clash-body" style={{ fontSize: '8px' }}>{msg.time}</span>
-                        </div>
-                        <p style={{ margin: '0', fontSize: '11px', color: 'white', lineHeight: '1.45', fontWeight: '500' }}>{msg.text}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Quick Action Suggestion Chips */}
-                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px', borderTop: '1px solid var(--clash-border)', paddingTop: '8px', scrollbarWidth: 'none' }}>
-                  <button 
-                    onClick={() => handleCoachSendMessage(null, "routes")}
-                    className="clash-btn-secondary btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
-                  >
-                    Plan route
-                  </button>
-                  <button 
-                    onClick={() => handleCoachSendMessage(null, "pace")}
-                    className="clash-btn-secondary btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
-                  >
-                    Check pace
-                  </button>
-                  <button 
-                    onClick={() => handleCoachSendMessage(null, "gps")}
-                    className="clash-btn-secondary btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
-                  >
-                    How to run GPS?
-                  </button>
-                  <button 
-                    onClick={() => handleCoachSendMessage(null, "hello")}
-                    className="clash-btn-secondary btn-sm"
-                    style={{ fontSize: '9px', whiteSpace: 'nowrap', borderRadius: '12px', padding: '4px 10px', color: '#FC4C02', borderColor: 'var(--clash-border)' }}
-                  >
-                    Calibrate
-                  </button>
-                </div>
-
-                {/* Input Area */}
-                <form onSubmit={handleCoachSendMessage} style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px', alignItems: 'center' }}>
-                  <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                    <input 
-                      type="text" 
-                      value={coachInput}
-                      onChange={(e) => setCoachInput(e.target.value)}
-                      placeholder="Ask Coach (e.g. 'gps', 'pace')..."
-                      className="cyber-input"
-                      style={{ padding: '8px 36px 8px 12px', fontSize: '12px', width: '100%' }}
-                    />
-                    {/* Voice mic icon placeholder */}
-                    <button 
-                      type="button"
-                      onClick={() => alert("Voice assistant module loading...")}
-                      style={{ background: 'none', border: 'none', color: 'var(--clash-text-secondary)', position: 'absolute', right: '10px', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center' }}
-                      title="Voice Input (Coming Soon)"
-                    >
-                      <Settings size={12} style={{ color: '#FC4C02', opacity: 0.6 }} />
-                    </button>
-                  </div>
-                  <button type="submit" style={{ background: '#FC4C02', border: 'none', color: 'white', borderRadius: '10px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.1s ease', flexShrink: 0 }}>
-                    <Send size={12} />
-                  </button>
-                </form>
+              <div className="clash-card text-center p-6" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <Sparkles size={36} style={{ color: '#FC4C02', opacity: 0.7 }} />
+                <h4 className="m-0 text-sm" style={{ fontWeight: '800', color: 'white', textTransform: 'uppercase' }}>Synergy AI Coach</h4>
+                <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>🚧 Coming Soon in Alpha 2.0. Receive personalized route planning, safety calibration, and pace suggestions based on your performance history.</span>
               </div>
             </div>
 
@@ -5599,7 +5370,7 @@ ${watchErr.message} (retrying)`);
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {(() => {
-                    const runs = JSON.parse(localStorage.getItem('runclash_runs')) || [];
+                    const runs = JSON.parse(localStorage.getItem('clash_runs')) || [];
                     if (runs.length === 0) {
                       return (
                         <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--clash-text-secondary)', fontSize: '11px' }}>

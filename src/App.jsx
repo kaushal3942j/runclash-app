@@ -12,6 +12,17 @@ import {
   saveCompletedRun
 } from './supabase';
 
+// Dynamic Crew/Clan color assignment based on name hash
+const getClanColor = (clanName) => {
+  if (!clanName || clanName === 'None') return '#555555';
+  let hash = 0;
+  for (let i = 0; i < clanName.length; i++) {
+    hash = clanName.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const colors = ['#FC4C02', '#00F0FF', '#FF007A', '#39FF14', '#FFD700', '#8A2BE2'];
+  return colors[Math.abs(hash) % colors.length];
+};
+
 // Predefined Simulation Routes for Udaipur (Developer Mode)
 const SIMULATION_ROUTES = {
   lake: {
@@ -67,11 +78,11 @@ const SIMULATION_ROUTES = {
 
 // Database of profiles for social system discovery/search
 const INITIAL_PROFILES = [
-  { id: 'user_lakshya', displayName: 'Lakshya', clan: 'Udaipur Racers', level: 12, xp: 5800, distance: '112.5 km', territories: 5, bio: 'Conquering lake sectors one run at a time.', online: true, postsCount: 24, friendsCount: 31 },
-  { id: 'user_sam', displayName: 'Sam', clan: 'GITS Runners', level: 10, xp: 4500, distance: '74.8 km', territories: 3, bio: 'Pacing Sajjan Garh foothills daily.', online: false, postsCount: 15, friendsCount: 22 },
-  { id: 'user_rohan', displayName: 'Rohan', clan: 'Udaipur Racers', level: 8, xp: 3200, distance: '48.2 km', territories: 2, bio: 'Sprinting through the old city gates.', online: true, postsCount: 8, friendsCount: 14 },
-  { id: 'user_divya', displayName: 'Divya', clan: 'Udaipur Racers', level: 7, xp: 2900, distance: '35.4 km', territories: 1, bio: 'Run, capture, defend, repeat.', online: true, postsCount: 5, friendsCount: 19 },
-  { id: 'user_arjun', displayName: 'Arjun', clan: 'GITS Runners', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
+  { id: 'user_lakshya', displayName: 'Lakshya', clan: 'None', level: 12, xp: 5800, distance: '112.5 km', territories: 5, bio: 'Conquering lake sectors one run at a time.', online: true, postsCount: 24, friendsCount: 31 },
+  { id: 'user_sam', displayName: 'Sam', clan: 'None', level: 10, xp: 4500, distance: '74.8 km', territories: 3, bio: 'Pacing Sajjan Garh foothills daily.', online: false, postsCount: 15, friendsCount: 22 },
+  { id: 'user_rohan', displayName: 'Rohan', clan: 'None', level: 8, xp: 3200, distance: '48.2 km', territories: 2, bio: 'Sprinting through the old city gates.', online: true, postsCount: 8, friendsCount: 14 },
+  { id: 'user_divya', displayName: 'Divya', clan: 'None', level: 7, xp: 2900, distance: '35.4 km', territories: 1, bio: 'Run, capture, defend, repeat.', online: true, postsCount: 5, friendsCount: 19 },
+  { id: 'user_arjun', displayName: 'Arjun', clan: 'None', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
 ];
 
 // Configurable Constants for GPS tracking, pausing, and anti-cheat
@@ -160,6 +171,7 @@ export default function App() {
   
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showClanModal, setShowClanModal] = useState(false);
 
   // Settings values
   const [prefAutoPause, setPrefAutoPause] = useState(true);
@@ -466,10 +478,7 @@ export default function App() {
     }
   ]);
   const [clanInput, setClanInput] = useState('');
-  const [clanMessages, setClanMessages] = useState([
-    { id: 1, sender: 'Rohan', text: "Udaipur Racers assemble! We need to fortify the lake.", time: '12:05' },
-    { id: 2, sender: 'Divya', text: "I'll go run it at 5:30 pace to lock it in.", time: '12:12' }
-  ]);
+  const [clanMessages, setClanMessages] = useState([]);
 
   // Leaflet Refs
   const mapInstanceRef = useRef(null);
@@ -612,7 +621,7 @@ export default function App() {
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'guest') {
         const name = authPassword.trim() || authName.trim() || `Runner_${Math.floor(1000 + Math.random() * 9000)}`;
-        const profile = await loginGuest(name, authClan);
+        const profile = await loginGuest(name, 'None');
         setCurrentUser(profile);
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       }
@@ -1499,28 +1508,22 @@ export default function App() {
   };
 
   const getClanStandings = () => {
-    const clanAreas = {
-      'Udaipur Racers': 0,
-      'GITS Runners': 0,
-      'Delhi Marathon Club': 0
-    };
+    const clanAreas = {};
     let totalArea = 0;
 
     territories.forEach(terr => {
-      const areaVal = parseFloat(terr.area.replace(/[^\d.]/g, '')) || 0;
-      if (clanAreas[terr.clan] !== undefined) {
+      if (terr.clan && terr.clan !== 'None') {
+        const areaVal = parseFloat(terr.area.replace(/[^\d.]/g, '')) || 0;
+        if (clanAreas[terr.clan] === undefined) {
+          clanAreas[terr.clan] = 0;
+        }
         clanAreas[terr.clan] += areaVal;
         totalArea += areaVal;
       }
     });
 
-    // Provide default initial non-zero standings if there are no territories yet
     if (totalArea === 0) {
-      return [
-        { name: 'Udaipur Racers', percentage: 34 },
-        { name: 'GITS Runners', percentage: 33 },
-        { name: 'Delhi Marathon Club', percentage: 33 }
-      ];
+      return [];
     }
 
     return Object.keys(clanAreas).map(name => {
@@ -1760,16 +1763,15 @@ export default function App() {
               </div>
             )}
 
-            {(authMode === 'signup' || authMode === 'guest') && (
+            {authMode === 'signup' && (
               <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="clash-label" style={{ fontSize: '9px' }}>Choose Crew / Clan</label>
+                <label className="clash-label" style={{ fontSize: '9px' }}>Join a Clan (Optional)</label>
                 <select 
                   value={authClan} 
                   onChange={e => setAuthClan(e.target.value)}
                   className="cyber-select focus-ring"
                 >
                   <option value="None">Skip for now</option>
-                  <option value="None">No Clan</option>
                 </select>
               </div>
             )}
@@ -2808,6 +2810,51 @@ export default function App() {
                       })()}
                     </div>
 
+                    {/* TACTICAL CREW / CLAN CARD */}
+                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '330ms', gap: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="clash-label" style={{ fontSize: '9px' }}>TACTICAL CREW</span>
+                        <Users size={14} style={{ color: '#FC4C02' }} />
+                      </div>
+
+                      {(!currentUser.clan || currentUser.clan === 'None') ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '13px', color: '#EF4444' }}>No Clan</h4>
+                            <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', lineHeight: '1.4' }}>
+                              You are currently unaligned. Register or join a tactical crew to claim and defend Udaipur sectors.
+                            </span>
+                          </div>
+                          <button 
+                            onClick={() => setShowClanModal(true)}
+                            className="clash-btn-primary btn-sm"
+                            style={{ height: '32px', borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: 'none', background: '#FC4C02', color: 'white', cursor: 'pointer' }}
+                          >
+                            Create or Join Clan
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '14px', color: '#FC4C02' }}>{currentUser.clan}</h4>
+                              <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)', display: 'block', marginTop: '2px' }}>
+                                Alignment Secured
+                              </span>
+                            </div>
+                            <span className="clash-label" style={{ border: '1px solid #FC4C02', color: '#FC4C02', padding: '2px 6px', borderRadius: '8px', fontSize: '8px' }}>ACTIVE</span>
+                          </div>
+                          <button 
+                            onClick={() => setShowClanModal(true)}
+                            className="clash-btn-secondary btn-sm"
+                            style={{ height: '32px', borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
+                          >
+                            Manage Crew
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
                     {/* 6. TERRITORY COMMAND CENTER */}
                     <div className="runner-hq-card card-entrance" style={{ animationDelay: '360ms', gap: '12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3050,7 +3097,7 @@ export default function App() {
                   textTransform: 'uppercase',
                   letterSpacing: '0.8px'
                 }}>
-                  {currentUser.clan || 'Udaipur Racers'}
+                  {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
                 </div>
               </div>
 
@@ -3337,7 +3384,7 @@ export default function App() {
                       {currentUser.displayName}
                     </span>
                     <span style={{ fontSize: '7px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {currentUser.clan || 'Udaipur Racers'}
+                      {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
                     </span>
                   </div>
                 </div>
@@ -4443,7 +4490,7 @@ export default function App() {
                     </div>
                   ) : (
                     territories.filter(t => t.ownerId === currentUser.uid && t.is_active !== false).map(terr => {
-                      const clanColor = terr.clan === 'Udaipur Racers' ? '#FC4C02' : terr.clan === 'GITS Runners' ? '#FFFFFF' : '#555555';
+                      const clanColor = getClanColor(terr.clan);
                       const maxDecay = terr.maxDecayHours || 72;
                       const currentDecay = terr.decayHours || 72;
                       const percentage = Math.max(0, Math.min(100, (currentDecay / maxDecay) * 100));
@@ -4608,32 +4655,50 @@ export default function App() {
               {socialSubTab === 'crew' ? (
                 /* SUB-TAB: CREW (ORIGINAL CLAN VIEW) */
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }} className="fade-in">
-                  {/* Crew Header Banner */}
-                  <div className="clash-card p-4 gap-3" style={{ borderLeft: `4px solid ${currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}` }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                      <div style={{
-                        width: '46px',
-                        height: '46px',
-                        borderRadius: '12px',
-                        background: '#0B0B0B',
-                        border: `1.5px solid ${currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <Users size={22} style={{ color: currentUser.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02' }} />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <span className="clash-label" style={{ fontSize: '9px' }}>Active Tactical Crew</span>
-                        <h3 className="clash-subtitle" style={{ margin: '0' }}>{currentUser.clan || 'Udaipur Racers'}</h3>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <span className="clash-label" style={{ border: '1px solid #FC4C02', color: '#FC4C02', padding: '3px 8px', borderRadius: '10px', fontSize: '9px' }}>
-                          DOMINANT
-                        </span>
+                  
+                  {/* Crew Header / Alignment Check */}
+                  {(!currentUser.clan || currentUser.clan === 'None') ? (
+                    <div className="clash-card p-5 text-center shadow-lg" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', borderColor: 'rgba(252, 76, 2, 0.2)' }}>
+                      <Users size={32} style={{ color: '#FC4C02', opacity: 0.8 }} />
+                      <h4 className="clash-subtitle" style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '1px' }}>Unaligned Runner</h4>
+                      <p className="clash-body" style={{ margin: 0, fontSize: '11px', lineHeight: '1.5', maxWidth: '320px' }}>
+                        You have not aligned with any active tactical crew yet. Join forces with a clan to claim sectors and dominate the regional board.
+                      </p>
+                      <button 
+                        onClick={() => setShowClanModal(true)}
+                        className="clash-btn-primary"
+                        style={{ height: '36px', borderRadius: '18px', fontSize: '11px', fontWeight: '800', border: 'none', background: '#FC4C02', color: 'white', padding: '0 24px', cursor: 'pointer' }}
+                      >
+                        Create or Join Clan
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="clash-card p-4 gap-3" style={{ borderLeft: `4px solid ${getClanColor(currentUser.clan)}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{
+                          width: '46px',
+                          height: '46px',
+                          borderRadius: '12px',
+                          background: '#0B0B0B',
+                          border: `1.5px solid ${getClanColor(currentUser.clan)}`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          <Users size={22} style={{ color: getClanColor(currentUser.clan) }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <span className="clash-label" style={{ fontSize: '9px' }}>Active Tactical Crew</span>
+                          <h3 className="clash-subtitle" style={{ margin: '0' }}>{currentUser.clan}</h3>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <span className="clash-label" style={{ border: `1px solid ${getClanColor(currentUser.clan)}`, color: getClanColor(currentUser.clan), padding: '3px 8px', borderRadius: '10px', fontSize: '9px' }}>
+                            ACTIVE CREW
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Clan Standings */}
                   <div>
@@ -4642,22 +4707,28 @@ export default function App() {
                     </h3>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {getClanStandings().map((c, index) => {
-                        const color = c.name === 'Udaipur Racers' ? '#FC4C02' : c.name === 'GITS Runners' ? '#FFFFFF' : '#555555';
-                        return (
-                          <div key={c.name} className="clash-card p-3 gap-2" style={{ borderColor: `${color}40` }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '800', marginBottom: '2px' }}>
-                              <span style={{ color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: 'var(--clash-text-secondary)', fontWeight: 'bold' }}>#{index + 1}</span> {c.name}
-                              </span>
-                              <span style={{ color: 'white' }}>{c.percentage}% DOMAIN</span>
+                      {getClanStandings().length === 0 ? (
+                        <div className="clash-card p-4 text-center" style={{ color: 'var(--clash-text-secondary)', fontSize: '11px' }}>
+                          No claimed sectors by any crew yet. Capture territories to establish dominance!
+                        </div>
+                      ) : (
+                        getClanStandings().map((c, index) => {
+                          const color = getClanColor(c.name);
+                          return (
+                            <div key={c.name} className="clash-card p-3 gap-2" style={{ borderColor: `${color}40` }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '800', marginBottom: '2px' }}>
+                                <span style={{ color: color, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ color: 'var(--clash-text-secondary)', fontWeight: 'bold' }}>#{index + 1}</span> {c.name}
+                                </span>
+                                <span style={{ color: 'white' }}>{c.percentage}% DOMAIN</span>
+                              </div>
+                              <div className="clash-progress-bar">
+                                <div className="clash-progress-bar-fill" style={{ width: `${c.percentage}%`, backgroundColor: color }}></div>
+                              </div>
                             </div>
-                            <div className="clash-progress-bar">
-                              <div className="clash-progress-bar-fill" style={{ width: `${c.percentage}%`, backgroundColor: color }}></div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })
+                      )}
                     </div>
                   </div>
 
@@ -4674,7 +4745,7 @@ export default function App() {
                           if (!userInBoard) {
                             displayLeaderboard.push({
                               displayName: currentUser.displayName,
-                              clan: currentUser.clan || 'Udaipur Racers',
+                              clan: currentUser.clan || 'None',
                               level: currentUser.level || 1,
                               xp: currentUser.xp || 0
                             });
@@ -4740,8 +4811,8 @@ export default function App() {
                                 setSelectedProfileUser(found);
                               }}
                             >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <span style={{ fontWeight: '800', color: rankColor, fontSize: '13px', width: '20px', textAlign: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+                                <span style={{ fontWeight: '800', color: rankColor, fontSize: '13px', width: '20px', textAlign: 'center', flexShrink: 0 }}>
                                   {badgeIcon}
                                 </span>
                                 
@@ -4750,28 +4821,29 @@ export default function App() {
                                   height: '28px',
                                   borderRadius: '50%',
                                   background: '#0B0B0B',
-                                  border: `1.5px solid ${player.clan === 'GITS Runners' ? '#FFFFFF' : '#FC4C02'}`,
+                                  border: `1.5px solid ${getClanColor(player.clan)}`,
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   fontSize: '11px',
                                   fontWeight: '800',
-                                  color: 'white'
+                                  color: 'white',
+                                  flexShrink: 0
                                 }}>
                                   {(player.displayName || 'G')[0].toUpperCase()}
                                 </div>
 
-                                <div>
-                                  <span style={{ fontWeight: '800', color: isSelf ? '#FC4C02' : 'white' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                                  <span style={{ fontWeight: '800', color: isSelf ? '#FC4C02' : 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                     {player.displayName} {isSelf && <span className="clash-body" style={{ fontSize: '9px' }}>(You)</span>}
                                   </span>
-                                  <span className="clash-label" style={{ fontSize: '8px', marginLeft: '8px' }}>
-                                    {player.clan}
+                                  <span className="clash-label" style={{ fontSize: '8px', color: 'var(--clash-text-secondary)' }}>
+                                    {(!player.clan || player.clan === 'None') ? 'No Clan' : player.clan}
                                   </span>
                                 </div>
                               </div>
                               
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
                                 <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', fontWeight: 'bold' }}>LVL {player.level}</span>
                                 <span style={{ fontFamily: 'var(--clash-font-family)', color: '#FC4C02', fontWeight: '800', fontSize: '12px' }}>
                                   {player.xp.toLocaleString()} XP
@@ -4784,7 +4856,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Clan Chat Coming Soon banner */}
                   <div className="clash-card text-center p-6" style={{ minHeight: '160px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                     <MessageSquare size={28} style={{ color: '#FC4C02', opacity: 0.7 }} />
                     <h4 className="m-0 text-sm" style={{ fontWeight: '800', color: 'white', textTransform: 'uppercase' }}>Crew Comm Channel</h4>
@@ -4822,7 +4893,7 @@ export default function App() {
                       </span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {friendRequestsReceived.map(reqId => {
-                          const sender = INITIAL_PROFILES.find(p => p.id === reqId) || { displayName: 'Sam', clan: 'GITS Runners', level: 10 };
+                          const sender = INITIAL_PROFILES.find(p => p.id === reqId) || { displayName: 'Sam', clan: 'None', level: 10 };
                           return (
                             <div key={reqId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0B0B0D', padding: '8px 12px', borderRadius: '12px', border: '1px solid #2A2A2A' }}>
                               <div 
@@ -4896,7 +4967,7 @@ export default function App() {
                           </span>
                         </div>
                         <span className="clash-label" style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
-                          {currentUser.clan || 'Udaipur Racers'}
+                          {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
                         </span>
                       </div>
                       <button 
@@ -5440,6 +5511,164 @@ export default function App() {
                       </div>
                     ));
                   })()}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Clan Hotfix Future-Ready Coming Soon Modal */}
+          {showClanModal && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(11, 11, 13, 0.9)',
+                backdropFilter: 'blur(10px)',
+                zIndex: 99999,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px'
+              }}
+            >
+              <div 
+                className="clash-card animate-slide-in-up"
+                style={{
+                  width: '100%',
+                  maxWidth: '440px',
+                  maxHeight: '90vh',
+                  background: '#0B0B0D',
+                  border: '1px solid #FC4C02',
+                  borderRadius: '24px',
+                  padding: '24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '18px',
+                  overflowY: 'auto',
+                  boxShadow: '0 0 20px rgba(252, 76, 2, 0.15)'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(252, 76, 2, 0.2)', paddingBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Users size={18} style={{ color: '#FC4C02' }} />
+                    <h3 className="clash-subtitle" style={{ margin: 0, fontSize: '14px', textTransform: 'uppercase', letterSpacing: '1px' }}>Crew Conquest HQ</h3>
+                  </div>
+                  <button 
+                    onClick={() => setShowClanModal(false)}
+                    className="clash-btn-secondary btn-sm"
+                    style={{ color: '#FC4C02', borderColor: '#FC4C02', borderRadius: '10px', height: '24px', padding: '0 8px', cursor: 'pointer' }}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {/* Mock Tab Selector */}
+                  <div style={{ display: 'flex', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', padding: '2px', border: '1px solid #2A2A2A' }}>
+                    <div style={{ flex: 1, textAlign: 'center', background: '#FC4C02', color: 'white', fontSize: '10px', fontWeight: '800', padding: '6px 0', borderRadius: '10px', textTransform: 'uppercase' }}>
+                      Registry (Create)
+                    </div>
+                    <div style={{ flex: 1, textAlign: 'center', color: 'var(--clash-text-secondary)', fontSize: '10px', fontWeight: '800', padding: '6px 0', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      <Lock size={9} /> Search & Join
+                    </div>
+                  </div>
+
+                  {/* Future-Ready: Create Clan Form stub */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', opacity: 0.8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase' }}>Proposed Clan Name</label>
+                      <input 
+                        type="text" 
+                        disabled
+                        placeholder="e.g. Udaipur Mavericks"
+                        className="cyber-input"
+                        style={{ height: '36px', background: 'rgba(0,0,0,0.3)', border: '1px solid #2A2A2A', cursor: 'not-allowed' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase' }}>Security Level</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'white' }}>
+                          <input type="radio" disabled checked name="clan_privacy" /> Public Clan
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'white' }}>
+                          <input type="radio" disabled name="clan_privacy" /> Private (Invite-Only)
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase' }}>Clan Access Code</label>
+                      <input 
+                        type="text" 
+                        disabled
+                        placeholder="Auto-generated on creation"
+                        className="cyber-input"
+                        style={{ height: '36px', background: 'rgba(0,0,0,0.3)', border: '1px solid #2A2A2A', cursor: 'not-allowed' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Future-Ready: Join Clan stub */}
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '12px', opacity: 0.8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase' }}>Search Public Clans</label>
+                      <input 
+                        type="text" 
+                        disabled
+                        placeholder="Search by crew name..."
+                        className="cyber-input"
+                        style={{ height: '36px', background: 'rgba(0,0,0,0.3)', border: '1px solid #2A2A2A', cursor: 'not-allowed' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase' }}>Join via Invite Code</label>
+                      <input 
+                        type="text" 
+                        disabled
+                        placeholder="Enter 6-digit code..."
+                        className="cyber-input"
+                        style={{ height: '36px', background: 'rgba(0,0,0,0.3)', border: '1px solid #2A2A2A', cursor: 'not-allowed' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Coming soon glassmorphic overlay banner */}
+                  <div style={{
+                    background: 'rgba(252, 76, 2, 0.05)',
+                    border: '1px solid rgba(252, 76, 2, 0.3)',
+                    borderRadius: '14px',
+                    padding: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '4px',
+                    textAlign: 'center',
+                    marginTop: '4px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Lock size={12} style={{ color: '#FC4C02' }} />
+                      <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Locked in Alpha v2.0
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
+                      Crew registration, private/public lobby listings, search indexes, and invite link validation are arriving in Sprint 3.0.
+                    </span>
+                  </div>
+
+                  <button 
+                    disabled
+                    className="clash-btn-primary"
+                    style={{ height: '40px', background: '#2A2A2A', borderColor: '#2A2A2A', color: 'rgba(255,255,255,0.3)', cursor: 'not-allowed', textTransform: 'uppercase', fontSize: '10px', fontWeight: '800' }}
+                  >
+                    Deploy Crew Network
+                  </button>
                 </div>
               </div>
             </div>

@@ -74,6 +74,20 @@ const INITIAL_PROFILES = [
   { id: 'user_arjun', displayName: 'Arjun', clan: 'GITS Runners', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
 ];
 
+// Configurable Constants for GPS tracking, pausing, and anti-cheat
+const GPS_CONFIG = {
+  DRIFT_SPEED_THRESHOLD: 0.8,      // m/s (2.88 km/h) below which the runner is considered stationary
+  AUTO_PAUSE_SPEED: 0.8,            // m/s below which we auto-pause after sustained time
+  AUTO_RESUME_SPEED: 1.0,           // m/s above which we resume
+  AUTO_PAUSE_DELAY: 4.0,            // seconds stationary before auto-pause triggers
+  VEHICLE_SPEED_LIMIT: 7.0,         // m/s (25.2 km/h) maximum overall average speed allowed
+  SUSTAINED_HIGH_SPEED_LIMIT: 8.0,  // m/s (28.8 km/h) instantaneous limit for flagging cheats
+  SUSTAINED_HIGH_SPEED_MAX_DUR: 5,  // seconds allowed at sustained high speed before auto-invalidate
+  JITTER_DISTANCE_FILTER: 0.002,    // km (2 meters) distance jumps to discard
+  GPS_ACCURACY_THRESHOLD: 25.0,     // meters (discard points with poor accuracy)
+  MIN_TIME_COMPUTATION_WINDOW: 1.0  // seconds (buffer coordinate updates to compute speed)
+};
+
 export default function App() {
   // Auth & Session State
   const [currentUser, setCurrentUser] = useState(null);
@@ -314,6 +328,8 @@ export default function App() {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editBio, setEditBio] = useState('');
+  const [editAvatarUrl, setEditAvatarUrl] = useState(null);
+  const [editBannerUrl, setEditBannerUrl] = useState(null);
 
   // Persisted Social arrays
   const [friendsList, setFriendsList] = useState(() => {
@@ -421,6 +437,18 @@ export default function App() {
   const cheatMetricsRef = useRef({ speedSpikes: 0, repeatedJumps: 0, unrealisticAcceleration: 0 });
   const lastPointTimeRef = useRef(null);
   const lastSpeedRef = useRef(0);
+
+  // High-performance GPS Tracking Refs (updates map in real-time, throttles React renders to once per second)
+  const gpsPathRef = useRef([]);
+  const gpsDistanceRef = useRef(0);
+  const gpsSpeedRef = useRef(0);
+  const gpsPaceRef = useRef('--:--');
+  const gpsAccuracyRef = useRef(null);
+  const gpsAutoPausedRef = useRef(false);
+  const gpsLastPointRef = useRef(null);
+  const smoothedSpeedRef = useRef(0);
+  const accumulatedDistanceRef = useRef(0);
+  const accumulatedDurationRef = useRef(0);
 
   const shopCosts = { shield: 80, boots: 120, decoy: 200 };
 
@@ -844,456 +872,341 @@ export default function App() {
     // Clear drawing elements
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
-
-    if (trackingMode === 'gps') {
-      if (!navigator.geolocation) {
-        alert("Geolocation is not supported by your browser!");
-        return;
-      }
-
-      setIsSearchingGps(true);
-      addLog("GPS: Calibrating tracking device... Searching for GPS satellites...");
-
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-          const accuracy = position.coords.accuracy;
-
-          addLog(`GPS: Lock acquired. Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)} (Accuracy: ${Math.round(accuracy)}m).`);
-
-          // Center the map on user position
-          if (mapInstanceRef.current) {
-            mapInstanceRef.current.setView([lat, lng], 15.5);
-          }
-
-          // Initial Path Polyline
-          if (mapInstanceRef.current) {
-            polylineRef.current = L.polyline([[lat, lng]], {
-              color: '#FC4C02',
-              weight: 4
-            }).addTo(mapInstanceRef.current);
-
-            const runnerIcon = L.divIcon({
-              className: 'custom-runner-icon',
-              html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
-              iconSize: [16, 16]
-            });
-            runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
-          }
-
-          setRunState({
-            status: 'tracking',
-            path: [[lat, lng]],
-            distance: 0,
-            duration: 0,
-            pace: '--:--',
-            gpsAccuracy: accuracy,
-            speed: 0,
-            avgSpeed: 0,
-            avgPace: '--:--',
-            calories: 0,
-            isAutoPaused: false
-          });
-
-          // Start Clock timer
-          timerIntervalRef.current = setInterval(() => {
-            // Stationary fallback check: if no coordinate is received for > 8s, trigger auto-pause
-            if (lastPointTimeRef.current !== null) {
-              const timeSinceLastPoint = (Date.now() - lastPointTimeRef.current) / 1000;
-              if (timeSinceLastPoint > 8 && !runStateRef.current.isAutoPaused) {
-                setRunState(prev => {
-                  if (prev.isAutoPaused) return prev;
-                  addLog("GPS: Auto-paused (no movement detected).");
-                  return { ...prev, isAutoPaused: true, speed: 0 };
-                });
-              }
-            }
-
-            setRunState(prev => {
-              if (prev.status === 'paused' || prev.isAutoPaused) return prev;
-              const newDuration = prev.duration + 1;
-              const avgSpeed = prev.distance > 0 ? (prev.distance * 3600) / newDuration : 0;
-              const avgPaceStr = calculatePaceStr(newDuration, prev.distance);
-              return {
-                ...prev,
-                duration: newDuration,
-                avgSpeed: parseFloat(avgSpeed.toFixed(1)),
-                avgPace: avgPaceStr
-              };
-            });
-          }, 1000);
-
-          lastPointTimeRef.current = Date.now();
-          setIsSearchingGps(false);
-
-          // Now start watchPosition tracking
-          const watchId = navigator.geolocation.watchPosition(
-            (watchPos) => {
-              if (runStateRef.current.status === 'paused') return;
-
-              const wLat = watchPos.coords.latitude;
-              const wLng = watchPos.coords.longitude;
-
-              // Check territory transition
-              const newCoord = [wLat, wLng];
-              let currentEnteredTerritory = null;
-              for (const t of territories) {
-                if (t.coords && t.coords.length >= 3) {
-                  if (isPointInPolygon(newCoord, t.coords)) {
-                    currentEnteredTerritory = t;
-                    break;
-                  }
-                }
-              }
-
-              if (currentEnteredTerritory) {
-                if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
-                  lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
-                  let bannerType = 'entering_neutral';
-                  if (currentEnteredTerritory.ownerId === currentUser.uid) {
-                    bannerType = 'entering_friendly';
-                  } else if (currentEnteredTerritory.ownerId) {
-                    if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
-                      bannerType = 'entering_friendly';
-                    } else {
-                      bannerType = 'entering_enemy';
-                    }
-                  }
-                  triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
-                }
-              } else {
-                if (lastEnteredSectorIdRef.current !== null) {
-                  const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
-                  lastEnteredSectorIdRef.current = null;
-                  if (prevTerritory) {
-                    triggerTerritoryBanner('leaving', prevTerritory.name);
-                  }
-                }
-              }
-
-              const wAccuracy = watchPos.coords.accuracy;
-              const wTimestamp = watchPos.timestamp || Date.now();
-
-              console.log(`[GPS]\nlatitude: ${wLat}\nlongitude: ${wLng}\naccuracy: ${wAccuracy}m\ntimestamp: ${wTimestamp}`);
-              
-              setRunState(prev => {
-                if (prev.status === 'paused') return prev;
-
-                // 1. Accuracy criteria
-                if (wAccuracy > 25) {
-                  addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
-                  return { ...prev, gpsAccuracy: wAccuracy };
-                }
-
-                const newPoint = [wLat, wLng];
-                const nowTime = Date.now();
-                
-                let incrementalDist = 0;
-                if (prev.path.length > 0) {
-                  const lastPoint = prev.path[prev.path.length - 1];
-                  incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], wLat, wLng);
-                }
-
-                // 2. Ignore GPS Jitter (drift under 2 meters)
-                if (prev.path.length > 0 && incrementalDist < 0.002) {
-                  return { ...prev, gpsAccuracy: wAccuracy };
-                }
-
-                // 3. Compute speed & acceleration metrics
-                let dt = 0;
-                let instantSpeedMS = 0;
-                if (lastPointTimeRef.current !== null) {
-                  dt = (nowTime - lastPointTimeRef.current) / 1000;
-                }
-
-                if (dt > 0.1) {
-                  const distMeters = incrementalDist * 1000;
-                  instantSpeedMS = distMeters / dt;
-                  const wAcceleration = Math.abs(instantSpeedMS - lastSpeedRef.current) / dt;
-
-                  // Track Max Speed in km/h
-                  const speedKmh = instantSpeedMS * 3.6;
-                  if (!cheatMetricsRef.current.maxSpeed || speedKmh > cheatMetricsRef.current.maxSpeed) {
-                    cheatMetricsRef.current.maxSpeed = speedKmh;
-                  }
-
-                  // 4. Anti-Cheat spike validation (> 8.0 m/s / 28.8 km/h flagged as spike)
-                  if (instantSpeedMS > 8.0) {
-                    cheatMetricsRef.current.speedSpikes += 1;
-                    addLog(`GPS: Speed spike detected (${speedKmh.toFixed(1)} km/h).`);
-                    if (instantSpeedMS > 12.0) {
-                      // Discard points above 12 m/s to prevent fake distance from car jumps
-                      return { ...prev, gpsAccuracy: wAccuracy };
-                    }
-                  }
-
-                  if (instantSpeedMS > 6.0) {
-                    cheatMetricsRef.current.repeatedJumps += 1;
-                  }
-
-                  if (wAcceleration > 4.0) {
-                    cheatMetricsRef.current.unrealisticAcceleration += 1;
-                  }
-
-                  lastSpeedRef.current = instantSpeedMS;
-                }
-
-                // 5. Automatic Pause & Resume detection
-                let nextAutoPaused = prev.isAutoPaused;
-                const isStationary = instantSpeedMS < 0.8;
-                if (isStationary) {
-                  // Increment stationary low speed timer
-                  lowSpeedDurationRef.current += dt || 1.0;
-                  if (lowSpeedDurationRef.current >= 4 && !prev.isAutoPaused) {
-                    nextAutoPaused = true;
-                    addLog("GPS: Auto-paused (runner stopped).");
-                  }
-                } else if (instantSpeedMS >= 1.0) {
-                  // Reset stationary timer and auto-resume
-                  lowSpeedDurationRef.current = 0;
-                  if (prev.isAutoPaused) {
-                    nextAutoPaused = false;
-                    addLog("GPS: Auto-resumed (runner restarted).");
-                  }
-                }
-
-                lastPointTimeRef.current = nowTime;
-
-                // Format current speed & pace
-                const speedKmH = instantSpeedMS * 3.6;
-                let currentPaceStr = '--:--';
-                if (instantSpeedMS >= 0.8) {
-                  const paceDec = 60 / speedKmH;
-                  const pMins = Math.floor(paceDec);
-                  const pSecs = Math.floor((paceDec - pMins) * 60);
-                  if (pMins <= 30) {
-                    currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
-                  }
-                }
-
-                // If auto-paused or stationary (GPS drift/shaking), do NOT accumulate distance or path coordinates
-                let updatedPath = prev.path;
-                let updatedDistance = prev.distance;
-                if (!nextAutoPaused && !isStationary) {
-                  updatedPath = [...prev.path, newPoint];
-                  updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
-                }
-
-                const totalDuration = prev.duration || 1;
-                const avgSpeed = (updatedDistance * 3600) / totalDuration;
-                const avgPaceStr = calculatePaceStr(totalDuration, updatedDistance);
-                const caloriesEst = Math.round(updatedDistance * 75 * 1.03);
-
-                if (polylineRef.current && !nextAutoPaused && !isStationary) polylineRef.current.setLatLngs(updatedPath);
-                if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
-                if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
-
-                // Self-intersection check
-                if (updatedPath.length >= 5 && updatedDistance > 0.05) {
-                  const intersectIdx = checkPathSelfIntersection(updatedPath);
-                  if (intersectIdx !== null) {
-                    setTimeout(() => {
-                      finishRealRun(updatedPath.slice(intersectIdx));
-                    }, 200);
-                  }
-                }
-
-                return {
-                  ...prev,
-                  path: updatedPath,
-                  distance: updatedDistance,
-                  gpsAccuracy: wAccuracy,
-                  speed: parseFloat(speedKmH.toFixed(1)),
-                  avgSpeed: parseFloat(avgSpeed.toFixed(1)),
-                  avgPace: avgPaceStr,
-                  calories: caloriesEst,
-                  pace: currentPaceStr,
-                  isAutoPaused: nextAutoPaused
-                };
-              });
-            },
-            (watchErr) => {
-              console.error("GPS Watch Error", watchErr);
-              addLog(`GPS Warning: 
-${watchErr.message} (retrying)`);
-            },
-            { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
-          );
-
-          watchIdRef.current = watchId;
-        },
-        (error) => {
-          setIsSearchingGps(false);
-          console.error("GPS Initial Error", error);
-          alert(`GPS Signal Acquisition Failed: ${error.message}. Please stand in an open area and try again.`);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    } else {
-      // DEVELOPER SIMULATION MODE
-      addLog("GPS Sim: Initializing developer simulator walk...");
-      const route = SIMULATION_ROUTES[simulationRouteKey];
-      const startPoint = route.points[0];
-
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.setView(startPoint, 15.5);
-
-        polylineRef.current = L.polyline([startPoint], {
-          color: '#FC4C02',
-          weight: 4
-        }).addTo(mapInstanceRef.current);
-
-        const runnerIcon = L.divIcon({
-          className: 'custom-runner-icon',
-          html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
-          iconSize: [16, 16]
-            });
-        runnerMarkerRef.current = L.marker(startPoint, { icon: runnerIcon }).addTo(mapInstanceRef.current);
-      }
-
-      setRunState({
-        status: 'tracking',
-        path: [startPoint],
-        distance: 0,
-        duration: 0,
-        pace: '05:00',
-        gpsAccuracy: 3,
-        speed: 12.0,
-        avgSpeed: 12.0,
-        avgPace: '05:00',
-        calories: 0,
-        isAutoPaused: false
-      });
-
-      // Start Clock timer
-      timerIntervalRef.current = setInterval(() => {
-        setRunState(prev => {
-          if (prev.status === 'paused' || prev.isAutoPaused) return prev;
-          const newDuration = prev.duration + 1;
-          const avgSpeed = prev.distance > 0 ? (prev.distance * 3600) / newDuration : 0;
-          const avgPaceStr = calculatePaceStr(newDuration, prev.distance);
-          return {
-            ...prev,
-            duration: newDuration,
-            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
-            avgPace: avgPaceStr
-          };
-        });
-      }, 1000);
-
-      addLog(`GPS Sim: Starting developer walk on loop: ${route.name}`);
-      let idx = 0;
-      lastPointTimeRef.current = Date.now();
-
-      const intervalId = setInterval(() => {
-        if (runStateRef.current.status === 'paused') return;
-
-        if (idx >= route.points.length) {
-          clearInterval(intervalId);
-          simIntervalRef.current = null;
-          addLog("GPS: Simulator path completed.");
-          return;
-        }
-
-        const point = route.points[idx];
-        const timestamp = Date.now();
-
-        // Check territory transition in simulator
-        let currentEnteredTerritory = null;
-        for (const t of territories) {
-          if (t.coords && t.coords.length >= 3) {
-            if (isPointInPolygon(point, t.coords)) {
-              currentEnteredTerritory = t;
-              break;
-            }
-          }
-        }
-
-        if (currentEnteredTerritory) {
-          if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
-            lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
-            let bannerType = 'entering_neutral';
-            if (currentEnteredTerritory.ownerId === currentUser.uid) {
-              bannerType = 'entering_friendly';
-            } else if (currentEnteredTerritory.ownerId) {
-              if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
-                bannerType = 'entering_friendly';
-              } else {
-                bannerType = 'entering_enemy';
-              }
-            }
-            triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
-          }
-        } else {
-          if (lastEnteredSectorIdRef.current !== null) {
-            const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
-            lastEnteredSectorIdRef.current = null;
-            if (prevTerritory) {
-              triggerTerritoryBanner('leaving', prevTerritory.name);
-            }
-          }
-        }
-
-        setRunState(prev => {
-          if (prev.status === 'paused') return prev;
-
-          let incrementalDist = 0;
-          if (prev.path.length > 0) {
-            const lastPoint = prev.path[prev.path.length - 1];
-            incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], point[0], point[1]);
-          }
-
-          const updatedPath = [...prev.path, point];
-          const updatedDistance = parseFloat((prev.distance + incrementalDist).toFixed(3));
-
-          if (polylineRef.current) polylineRef.current.setLatLngs(updatedPath);
-          if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(point);
-          if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(point);
-
-          if (updatedPath.length >= 5 && updatedDistance > 0.05) {
-            const intersectIdx = checkPathSelfIntersection(updatedPath);
-            if (intersectIdx !== null) {
-              clearInterval(intervalId);
-              simIntervalRef.current = null;
-              setTimeout(() => {
-                finishRealRun(updatedPath.slice(intersectIdx));
-              }, 200);
-            }
-          }
-
-          const totalDuration = prev.duration || 1;
-          const avgSpeed = (updatedDistance * 3600) / totalDuration;
-          const avgPaceStr = calculatePaceStr(totalDuration, updatedDistance);
-          const caloriesEst = Math.round(updatedDistance * 75 * 1.03);
-
-          const currentSpeedSim = 12.5 + (Math.random() * 2 - 1);
-          let currentPaceStr = '04:48';
-          if (currentSpeedSim > 0.5) {
-            const paceDec = 60 / currentSpeedSim;
-            const pMins = Math.floor(paceDec);
-            const pSecs = Math.floor((paceDec - pMins) * 60);
-            currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
-          }
-
-          return {
-            ...prev,
-            path: updatedPath,
-            distance: updatedDistance,
-            speed: parseFloat(currentSpeedSim.toFixed(1)),
-            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
-            avgPace: avgPaceStr,
-            calories: caloriesEst,
-            pace: currentPaceStr,
-            gpsAccuracy: 3
-          };
-        });
-
-        idx++;
-      }, 1500);
-
-      simIntervalRef.current = intervalId;
+    if (!navigator.geolocation) {
+      setToastMessage("Geolocation is not supported by your browser!");
+      setTimeout(() => setToastMessage(null), 4000);
+      return;
     }
+
+    setIsSearchingGps(true);
+    addLog("GPS: Calibrating tracking device... Searching for GPS satellites...");
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        addLog(`GPS: Lock acquired. Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)} (Accuracy: ${Math.round(accuracy)}m).`);
+
+        // Center the map on user position
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.setView([lat, lng], 15.5);
+        }
+
+        // Initial Path Polyline
+        if (mapInstanceRef.current) {
+          polylineRef.current = L.polyline([[lat, lng]], {
+            color: '#FC4C02',
+            weight: 4
+          }).addTo(mapInstanceRef.current);
+
+          const runnerIcon = L.divIcon({
+            className: 'custom-runner-icon',
+            html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+            iconSize: [16, 16]
+          });
+          runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+        }
+
+        // Initialize tracking refs
+        gpsPathRef.current = [[lat, lng]];
+        gpsDistanceRef.current = 0;
+        gpsSpeedRef.current = 0;
+        gpsPaceRef.current = '--:--';
+        gpsAccuracyRef.current = accuracy;
+        gpsAutoPausedRef.current = false;
+        gpsLastPointRef.current = [lat, lng];
+        smoothedSpeedRef.current = 0;
+        accumulatedDistanceRef.current = 0;
+        accumulatedDurationRef.current = 0;
+        lastPointTimeRef.current = Date.now();
+        lastSpeedRef.current = 0;
+
+        setRunState({
+          status: 'tracking',
+          path: [[lat, lng]],
+          distance: 0,
+          duration: 0,
+          pace: '--:--',
+          gpsAccuracy: accuracy,
+          speed: 0,
+          avgSpeed: 0,
+          avgPace: '--:--',
+          calories: 0,
+          isAutoPaused: false
+        });
+
+        // Start Clock timer
+        timerIntervalRef.current = setInterval(() => {
+          // Stationary fallback check: if no coordinate is received for > 8s, trigger auto-pause
+          if (lastPointTimeRef.current !== null) {
+            const timeSinceLastPoint = (Date.now() - lastPointTimeRef.current) / 1000;
+            if (timeSinceLastPoint > 8 && !gpsAutoPausedRef.current) {
+              gpsAutoPausedRef.current = true;
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              addLog("GPS: Auto-paused (no satellite activity).");
+            }
+          }
+
+          setRunState(prev => {
+            if (prev.status === 'paused') return prev;
+
+            const nextAutoPaused = gpsAutoPausedRef.current;
+            // Only increment active duration if not paused/auto-paused
+            const newDuration = nextAutoPaused ? prev.duration : prev.duration + 1;
+            const currentDistance = gpsDistanceRef.current;
+            const currentPath = gpsPathRef.current;
+            const currentSpeed = gpsSpeedRef.current;
+            const currentPace = gpsPaceRef.current;
+            const currentAccuracy = gpsAccuracyRef.current;
+
+            const avgSpeed = currentDistance > 0 ? (currentDistance * 3600) / newDuration : 0;
+            const avgPaceStr = calculatePaceStr(newDuration, currentDistance);
+            const caloriesEst = Math.round(currentDistance * 75 * 1.03);
+
+            return {
+              ...prev,
+              duration: newDuration,
+              path: currentPath,
+              distance: currentDistance,
+              speed: currentSpeed,
+              pace: currentPace,
+              gpsAccuracy: currentAccuracy,
+              isAutoPaused: nextAutoPaused,
+              avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+              avgPace: avgPaceStr,
+              calories: caloriesEst
+            };
+          });
+        }, 1000);
+
+        lastPointTimeRef.current = Date.now();
+        setIsSearchingGps(false);
+
+        // Now start watchPosition tracking
+        const watchId = navigator.geolocation.watchPosition(
+          (watchPos) => {
+            if (runStateRef.current.status === 'paused') return;
+
+            const wLat = watchPos.coords.latitude;
+            const wLng = watchPos.coords.longitude;
+            const wAccuracy = watchPos.coords.accuracy;
+
+            // 1. Accuracy criteria
+            if (wAccuracy > GPS_CONFIG.GPS_ACCURACY_THRESHOLD) {
+              addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
+              gpsAccuracyRef.current = wAccuracy;
+              return;
+            }
+
+            // Check territory transition
+            const newPoint = [wLat, wLng];
+            let currentEnteredTerritory = null;
+            for (const t of territories) {
+              if (t.coords && t.coords.length >= 3) {
+                if (isPointInPolygon(newPoint, t.coords)) {
+                  currentEnteredTerritory = t;
+                  break;
+                }
+              }
+            }
+
+            if (currentEnteredTerritory) {
+              if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
+                lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
+                let bannerType = 'entering_neutral';
+                if (currentEnteredTerritory.ownerId === currentUser.uid) {
+                  bannerType = 'entering_friendly';
+                } else if (currentEnteredTerritory.ownerId) {
+                  if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
+                    bannerType = 'entering_friendly';
+                  } else {
+                    bannerType = 'entering_enemy';
+                  }
+                }
+                triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
+              }
+            } else {
+              if (lastEnteredSectorIdRef.current !== null) {
+                const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
+                lastEnteredSectorIdRef.current = null;
+                if (prevTerritory) {
+                  triggerTerritoryBanner('leaving', prevTerritory.name);
+                }
+              }
+            }
+
+            gpsAccuracyRef.current = wAccuracy;
+
+            let incrementalDist = 0;
+            if (gpsPathRef.current.length > 0) {
+              const lastPoint = gpsPathRef.current[gpsPathRef.current.length - 1];
+              incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], wLat, wLng);
+            }
+
+            // 2. Ignore GPS Jitter (drift under threshold distance)
+            if (gpsPathRef.current.length > 0 && incrementalDist < GPS_CONFIG.JITTER_DISTANCE_FILTER) {
+              return;
+            }
+
+            const nowTime = Date.now();
+            let dt = 0;
+            if (lastPointTimeRef.current !== null) {
+              dt = (nowTime - lastPointTimeRef.current) / 1000;
+            }
+
+            accumulatedDistanceRef.current += incrementalDist;
+            accumulatedDurationRef.current += dt;
+            lastPointTimeRef.current = nowTime;
+
+            // Only recalculate speed and update path if accumulated time is at least 1.0 second
+            if (accumulatedDurationRef.current >= GPS_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
+              const totalAccTime = accumulatedDurationRef.current;
+              const distMeters = accumulatedDistanceRef.current * 1000;
+              const instantSpeedMS = distMeters / totalAccTime;
+              const wAcceleration = Math.abs(instantSpeedMS - lastSpeedRef.current) / totalAccTime;
+
+              // Track Max Speed in km/h
+              const speedKmh = instantSpeedMS * 3.6;
+              if (!cheatMetricsRef.current.maxSpeed || speedKmh > cheatMetricsRef.current.maxSpeed) {
+                cheatMetricsRef.current.maxSpeed = speedKmh;
+              }
+
+              // 4. Anti-Cheat spike validation (> 12.0 m/s / 43.2 km/h is a teleport jump)
+              if (instantSpeedMS > 12.0) {
+                addLog(`GPS: Extreme speed jump detected (${speedKmh.toFixed(1)} km/h). Discarding.`);
+                accumulatedDistanceRef.current = 0;
+                accumulatedDurationRef.current = 0;
+                return;
+              }
+
+              if (instantSpeedMS > GPS_CONFIG.SUSTAINED_HIGH_SPEED_LIMIT) {
+                cheatMetricsRef.current.speedSpikes = (cheatMetricsRef.current.speedSpikes || 0) + 1;
+                addLog(`GPS: High speed warning (${speedKmh.toFixed(1)} km/h).`);
+              }
+
+              if (instantSpeedMS > 6.0) {
+                cheatMetricsRef.current.repeatedJumps = (cheatMetricsRef.current.repeatedJumps || 0) + 1;
+              }
+
+              if (wAcceleration > 4.0) {
+                cheatMetricsRef.current.unrealisticAcceleration = (cheatMetricsRef.current.unrealisticAcceleration || 0) + 1;
+              }
+
+              // Apply Exponential Moving Average (EMA) to smooth speed
+              const filterAlpha = 0.25;
+              smoothedSpeedRef.current = smoothedSpeedRef.current === 0 
+                ? instantSpeedMS 
+                : (filterAlpha * instantSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
+
+              lastSpeedRef.current = smoothedSpeedRef.current;
+
+              // 5. Automatic Pause & Resume detection based on smoothed speed
+              const isStationary = smoothedSpeedRef.current < GPS_CONFIG.DRIFT_SPEED_THRESHOLD;
+              let nextAutoPaused = gpsAutoPausedRef.current;
+              if (isStationary) {
+                lowSpeedDurationRef.current += totalAccTime;
+                if (lowSpeedDurationRef.current >= GPS_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
+                  nextAutoPaused = true;
+                  gpsAutoPausedRef.current = true;
+                  addLog("GPS: Auto-paused (runner stopped).");
+                }
+              } else if (smoothedSpeedRef.current >= GPS_CONFIG.AUTO_RESUME_SPEED) {
+                lowSpeedDurationRef.current = 0;
+                if (gpsAutoPausedRef.current) {
+                  nextAutoPaused = false;
+                  gpsAutoPausedRef.current = false;
+                  addLog("GPS: Auto-resumed (runner restarted).");
+                }
+              }
+
+              // Vehicle Anti-Cheat: Sustained High Speed Detection
+              if (smoothedSpeedRef.current > GPS_CONFIG.SUSTAINED_HIGH_SPEED_LIMIT) {
+                // Count how long we run at sustained speed (totalAccTime)
+                cheatMetricsRef.current.sustainedHighSpeedTime = (cheatMetricsRef.current.sustainedHighSpeedTime || 0) + totalAccTime;
+                if (cheatMetricsRef.current.sustainedHighSpeedTime >= GPS_CONFIG.SUSTAINED_HIGH_SPEED_MAX_DUR) {
+                  setTimeout(() => {
+                    setToastMessage("Anti-Cheat Triggered: Sustained high speed exceeds running limits!");
+                    setTimeout(() => setToastMessage(null), 4000);
+                    stopTracking("Anti-Cheat Sustained High Speed Invalidation");
+                  }, 100);
+                  return;
+                }
+              } else {
+                // Slowly decay high speed time when running normally
+                cheatMetricsRef.current.sustainedHighSpeedTime = Math.max(0, (cheatMetricsRef.current.sustainedHighSpeedTime || 0) - totalAccTime);
+              }
+
+              // Format current speed & pace
+              const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
+              let currentPaceStr = '--:--';
+              if (smoothedSpeedRef.current >= GPS_CONFIG.DRIFT_SPEED_THRESHOLD) {
+                const paceDec = 60 / currentSpeedKmH;
+                const pMins = Math.floor(paceDec);
+                const pSecs = Math.floor((paceDec - pMins) * 60);
+                if (pMins <= 30) {
+                  currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
+                }
+              }
+
+              // If auto-paused or stationary (GPS drift/shaking), do NOT accumulate distance or path coordinates
+              if (!nextAutoPaused && !isStationary) {
+                gpsPathRef.current.push(newPoint);
+                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + accumulatedDistanceRef.current).toFixed(3));
+                gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
+                gpsPaceRef.current = currentPaceStr;
+              } else {
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+              }
+
+              // Reset accumulation registers
+              accumulatedDistanceRef.current = 0;
+              accumulatedDurationRef.current = 0;
+
+              // Real-time Leaflet DOM updates (Direct manipulation bypasses React render cycle!)
+              if (polylineRef.current && !nextAutoPaused && !isStationary) {
+                polylineRef.current.setLatLngs(gpsPathRef.current);
+              }
+              if (runnerMarkerRef.current) {
+                runnerMarkerRef.current.setLatLng(newPoint);
+              }
+              if (mapInstanceRef.current && mapAutoFollowRef.current) {
+                mapInstanceRef.current.panTo(newPoint);
+              }
+
+              // Self-intersection check
+              const currentDist = gpsDistanceRef.current;
+              const currentPath = gpsPathRef.current;
+              if (currentPath.length >= 5 && currentDist > 0.05) {
+                const intersectIdx = checkPathSelfIntersection(currentPath);
+                if (intersectIdx !== null) {
+                  setTimeout(() => {
+                    finishRealRun(currentPath.slice(intersectIdx));
+                  }, 200);
+                }
+              }
+            }
+          },
+          (watchErr) => {
+            console.error("GPS Watch Error", watchErr);
+            addLog(`GPS Warning: ${watchErr.message} (retrying)`);
+          },
+          { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+        );
+
+        watchIdRef.current = watchId;
+      },
+      (error) => {
+        setIsSearchingGps(false);
+        console.error("GPS Initial Error", error);
+        setToastMessage(`GPS Signal Acquisition Failed: ${error.message}`);
+        setTimeout(() => setToastMessage(null), 5000);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
   };
 
   const stopTracking = (reason = "Explicit User Request") => {
@@ -1377,7 +1290,8 @@ ${watchErr.message} (retrying)`);
       const now = Date.now();
       if (now - lastLoopWarningTimeRef.current > 20000) {
         lastLoopWarningTimeRef.current = now;
-        alert("Loop too small. Continue running to create a larger loop.");
+        setToastMessage("Loop too small. Continue running to create a larger loop.");
+        setTimeout(() => setToastMessage(null), 4000);
       }
       return;
     }
@@ -1400,8 +1314,8 @@ ${watchErr.message} (retrying)`);
       const totalDistanceMeters = runState.distance * 1000;
       const overallAvgSpeed = totalDistanceMeters / totalDuration; // m/s
 
-      // 1. Hard cutoff check: overall average speed > 7.0 m/s (25.2 km/h) is impossible for long running loops
-      if (overallAvgSpeed > 7.0) {
+      // 1. Hard cutoff check: overall average speed > VEHICLE_SPEED_LIMIT is impossible for long running loops
+      if (overallAvgSpeed > GPS_CONFIG.VEHICLE_SPEED_LIMIT) {
         addLog(`Anti-Cheat: Run invalidated. Unrealistic average speed (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`);
         reportError(
           `Anti-Cheat: Invalidation. Overall avg speed is too high (${(overallAvgSpeed * 3.6).toFixed(1)} km/h).`,
@@ -1409,7 +1323,8 @@ ${watchErr.message} (retrying)`);
           'AntiCheat',
           { distance: runState.distance, duration: runState.duration, avgSpeed: overallAvgSpeed }
         );
-        alert("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
+        setToastMessage("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
+        setTimeout(() => setToastMessage(null), 4000);
         stopTracking("Anti-Cheat Average Speed Spike Cutoff");
         return;
       }
@@ -1436,7 +1351,8 @@ ${watchErr.message} (retrying)`);
           'AntiCheat',
           { suspicionScore, metrics: cheatMetricsRef.current, avgSpeed: overallAvgSpeed }
         );
-        alert("Anti-Cheat Triggered: Unrealistic movement signals detected. Run was flagged.");
+        setToastMessage("Anti-Cheat Triggered: Unrealistic movement signals detected.");
+        setTimeout(() => setToastMessage(null), 4000);
         stopTracking("Anti-Cheat High Suspicion Score Invalidation");
         return;
       }
@@ -1853,6 +1769,7 @@ ${watchErr.message} (retrying)`);
                   className="cyber-select focus-ring"
                 >
                   <option value="None">Skip for now</option>
+                  <option value="None">No Clan</option>
                 </select>
               </div>
             )}
@@ -2019,7 +1936,7 @@ ${watchErr.message} (retrying)`);
           </div>
 
           {/* Active Tab Screen Content */}
-          <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column', paddingBottom: '60px' }}>
             
             {/* COMPLETED RUN SUMMARY MODAL (Mission Complete Overlay) */}
             {showSummaryModal && completedRunData && (
@@ -2502,6 +2419,7 @@ ${watchErr.message} (retrying)`);
                               style={{ height: '40px', padding: '0 12px', fontSize: '12px', color: 'white', background: '#0B0B0D', border: '1px solid #2A2A2A', borderRadius: '10px' }}
                             />
                           </div>
+                          
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                             <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Clan Name</label>
                             <input 
@@ -2512,14 +2430,109 @@ ${watchErr.message} (retrying)`);
                               style={{ height: '40px', padding: '0 12px', fontSize: '12px', color: 'white', background: '#0B0B0D', border: '1px solid #2A2A2A', borderRadius: '10px' }}
                             />
                           </div>
+
+                          {/* Profile Avatar Upload */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Profile Photo</label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <div style={{
+                                width: '50px',
+                                height: '50px',
+                                borderRadius: '50%',
+                                border: '1.5px solid #FC4C02',
+                                backgroundImage: editAvatarUrl ? `url(${editAvatarUrl})` : undefined,
+                                backgroundSize: 'cover',
+                                backgroundPosition: 'center',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: editAvatarUrl ? undefined : '#0B0B0D'
+                              }}>
+                                {!editAvatarUrl && <Users size={16} style={{ color: 'var(--clash-text-secondary)' }} />}
+                              </div>
+                              <input 
+                                type="file" 
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files[0];
+                                  if (file) {
+                                    if (file.size > 800 * 1024) {
+                                      alert("Image size must be less than 800 KB to fit within storage limits.");
+                                      return;
+                                    }
+                                    if (!file.type.startsWith('image/')) {
+                                      alert("Invalid file format. Please choose an image.");
+                                      return;
+                                    }
+                                    const reader = new FileReader();
+                                    reader.onload = (uploadEvent) => {
+                                      setEditAvatarUrl(uploadEvent.target.result);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                                style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Profile Banner Upload */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Banner / Cover Image</label>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <div style={{
+                                width: '100%',
+                                height: '80px',
+                                borderRadius: '12px',
+                                border: '1px dashed #2A2A2A',
+                                backgroundImage: editBannerUrl ? `url(${editBannerUrl})` : undefined,
+                                backgroundSize: 'cover',
+                                backgroundPosition: 'center',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: editBannerUrl ? undefined : '#0B0B0D'
+                              }}>
+                                {!editBannerUrl && <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>No Banner Uploaded</span>}
+                              </div>
+                              <input 
+                                type="file" 
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files[0];
+                                  if (file) {
+                                    if (file.size > 800 * 1024) {
+                                      alert("Image size must be less than 800 KB to fit within storage limits.");
+                                      return;
+                                    }
+                                    if (!file.type.startsWith('image/')) {
+                                      alert("Invalid file format. Please choose an image.");
+                                      return;
+                                    }
+                                    const reader = new FileReader();
+                                    reader.onload = (uploadEvent) => {
+                                      setEditBannerUrl(uploadEvent.target.result);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                                style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}
+                              />
+                            </div>
+                          </div>
+
                           <button 
                             onClick={() => {
                               if (!editDisplayName.trim()) return alert("Display Name cannot be empty!");
-                              setCurrentUser(prev => ({
-                                ...prev,
+                              const updatedUser = {
+                                ...currentUser,
                                 displayName: editDisplayName.trim(),
-                                clan: editClanName.trim() || 'None'
-                              }));
+                                clan: editClanName.trim() || 'None',
+                                avatarUrl: editAvatarUrl,
+                                bannerUrl: editBannerUrl
+                              };
+                              setCurrentUser(updatedUser);
+                              localStorage.setItem('clash_user', JSON.stringify(updatedUser));
                               setActiveSettingSubpage(null);
                               setToastMessage("Account settings updated successfully!");
                               setTimeout(() => setToastMessage(null), 3000);
@@ -2549,7 +2562,15 @@ ${watchErr.message} (retrying)`);
                     </div>
 
                     {/* 1. HERO PROFILE CARD */}
-                    <div className="runner-hq-card runner-hq-hero-bg card-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}>
+                    <div className="runner-hq-card runner-hq-hero-bg card-entrance" style={{ 
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: '14px', 
+                      padding: '20px',
+                      backgroundImage: currentUser.bannerUrl ? `url(${currentUser.bannerUrl})` : undefined,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center'
+                    }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', fontWeight: '800', letterSpacing: '0.8px', textTransform: 'uppercase' }}>
                           {(() => {
@@ -2584,7 +2605,7 @@ ${watchErr.message} (retrying)`);
                           width: '64px',
                           height: '64px',
                           borderRadius: '50%',
-                          background: 'rgba(11, 11, 13, 0.9)',
+                          background: currentUser.avatarUrl ? undefined : 'rgba(11, 11, 13, 0.9)',
                           border: '2px solid #FC4C02',
                           display: 'flex',
                           alignItems: 'center',
@@ -2592,9 +2613,12 @@ ${watchErr.message} (retrying)`);
                           fontSize: '22px',
                           fontWeight: '800',
                           color: 'white',
-                          boxShadow: '0 0 12px rgba(252, 76, 2, 0.2)'
+                          boxShadow: '0 0 12px rgba(252, 76, 2, 0.2)',
+                          backgroundImage: currentUser.avatarUrl ? `url(${currentUser.avatarUrl})` : undefined,
+                          backgroundSize: 'cover',
+                          backgroundPosition: 'center'
                         }}>
-                          {(currentUser.displayName || 'R')[0].toUpperCase()}
+                          {!currentUser.avatarUrl && (currentUser.displayName || 'R')[0].toUpperCase()}
                         </div>
                         
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -2619,7 +2643,13 @@ ${watchErr.message} (retrying)`);
                       {/* CTA Buttons */}
                       <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
                         <button 
-                          onClick={() => setActiveSettingSubpage('account')}
+                          onClick={() => {
+                            setEditDisplayName(currentUser.displayName || '');
+                            setEditClanName(currentUser.clan || '');
+                            setEditAvatarUrl(currentUser.avatarUrl || null);
+                            setEditBannerUrl(currentUser.bannerUrl || null);
+                            setActiveSettingSubpage('account');
+                          }}
                           className="clash-btn-secondary btn-sm"
                           style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
                         >
@@ -3805,13 +3835,6 @@ ${watchErr.message} (retrying)`);
                           {!isLandmark && (
                             <button 
                               onClick={() => {
-                                if (trackingMode === 'sim') {
-                                  const name = (renderedTerritory.name || '').toLowerCase();
-                                  let key = 'lake';
-                                  if (name.includes('foothills') || name.includes('sajjan')) key = 'foothills';
-                                  else if (name.includes('castle') || name.includes('park') || name.includes('monument')) key = 'monument';
-                                  setSimulationRouteKey(key);
-                                }
                                 setIsBottomSheetExpanded(false);
                                 startTracking();
                               }}
@@ -5191,6 +5214,10 @@ ${watchErr.message} (retrying)`);
 
           {/* Navigation Bar */}
           <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
             height: '60px',
             borderTop: '1px solid var(--clash-border)',
             background: '#151515',
@@ -5568,7 +5595,8 @@ ${watchErr.message} (retrying)`);
                           </button>
                           <button 
                             onClick={() => {
-                              alert(`Tactical chat channel with ${selectedProfileUser.displayName} loading...`);
+                              setToastMessage("🚧 Tactical chat channel coming soon!");
+                              setTimeout(() => setToastMessage(null), 3000);
                               setSelectedProfileUser(null);
                             }}
                             className="clash-btn-primary clash-btn-press"

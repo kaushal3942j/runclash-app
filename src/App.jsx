@@ -85,19 +85,42 @@ const INITIAL_PROFILES = [
   { id: 'user_arjun', displayName: 'Arjun', clan: 'None', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
 ];
 
-// Configurable Constants for GPS tracking, pausing, and anti-cheat
-const GPS_CONFIG = {
-  DRIFT_SPEED_THRESHOLD: 0.8,      // m/s (2.88 km/h) below which the runner is considered stationary
-  AUTO_PAUSE_SPEED: 0.8,            // m/s below which we auto-pause after sustained time
-  AUTO_RESUME_SPEED: 1.0,           // m/s above which we resume
-  AUTO_PAUSE_DELAY: 4.0,            // seconds stationary before auto-pause triggers
-  VEHICLE_SPEED_LIMIT: 7.0,         // m/s (25.2 km/h) maximum overall average speed allowed
-  SUSTAINED_HIGH_SPEED_LIMIT: 8.0,  // m/s (28.8 km/h) instantaneous limit for flagging cheats
-  SUSTAINED_HIGH_SPEED_MAX_DUR: 5,  // seconds allowed at sustained high speed before auto-invalidate
-  JITTER_DISTANCE_FILTER: 0.002,    // km (2 meters) distance jumps to discard
-  GPS_ACCURACY_THRESHOLD: 25.0,     // meters (discard points with poor accuracy)
-  MIN_TIME_COMPUTATION_WINDOW: 1.0  // seconds (buffer coordinate updates to compute speed)
+// ============================================================================
+// RUN ENGINE MODULE 1: CENTRALIZED CONFIGURATION & CONSTANTS
+// ============================================================================
+const RUN_ENGINE_CONFIG = {
+  // Geolocation & Signal Quality Thresholds
+  GPS_ACCURACY_THRESHOLD: 25.0,        // meters (discard points with poor accuracy)
+  MIN_TIME_COMPUTATION_WINDOW: 1.5,    // seconds (buffer coordinate updates to compute stable speed)
+  STATIONARY_WINDOW_DIST_METERS: 1.2,  // meters (minimum movement in window before treating as moving)
+  JITTER_DISTANCE_FILTER: 0.002,       // km (2 meters distance jump filter threshold)
+
+  // Speed & Motion Thresholds
+  DRIFT_SPEED_THRESHOLD: 0.8,         // m/s (2.88 km/h) below which runner is considered stationary
+  AUTO_PAUSE_SPEED: 0.8,               // m/s below which auto-pause triggers after delay
+  AUTO_RESUME_SPEED: 1.0,              // m/s above which tracking auto-resumes
+  MIN_VALID_SPEED_KMH: 2.88,           // km/h (minimum valid running/walking speed for accumulation)
+  EMA_SMOOTHING_ALPHA: 0.3,            // Exponential Moving Average filter smoothing factor
+
+  // Auto-Pause & Inactivity Timers
+  AUTO_PAUSE_DELAY: 4.0,               // seconds stationary before auto-pause triggers
+  INACTIVITY_PAUSE_TIMEOUT: 8.0,       // seconds without GPS update before auto-pausing
+
+  // Loop Detection & Territory Conquest Limits
+  MIN_LOOP_POINTS: 5,                  // minimum coordinates required before self-intersection check
+  MIN_LOOP_DISTANCE_KM: 0.05,          // minimum cumulative distance (km) required for valid loop
+  MIN_LOOP_AREA_SQM: 200,              // minimum enclosed area (m²) required for sector capture
+
+  // Anti-Cheat Engine Thresholds
+  MAX_INSTANT_SPEED_MS: 12.0,          // m/s (43.2 km/h) instant teleport jump cutoff
+  SUSTAINED_HIGH_SPEED_LIMIT: 8.0,     // m/s (28.8 km/h) vehicle detection limit
+  SUSTAINED_HIGH_SPEED_MAX_DUR: 5,     // max seconds allowed at vehicle speed before auto-invalidation
+  VEHICLE_SPEED_LIMIT: 7.0,            // m/s (25.2 km/h) maximum overall average speed allowed
+  SUSPICION_SCORE_CUTOFF: 80           // anti-cheat suspicion score cutoff (out of 100)
 };
+
+// Backward-compatibility alias
+const GPS_CONFIG = RUN_ENGINE_CONFIG;
 
 export default function App() {
   // Auth & Session State
@@ -847,6 +870,57 @@ export default function App() {
     }, 4000);
   };
 
+  // Sector & Territory Boundary Transition Processor
+  const processTerritoryTransition = (newPoint) => {
+    let currentEnteredTerritory = null;
+    for (const t of territories) {
+      if (t.coords && t.coords.length >= 3) {
+        if (isPointInPolygon(newPoint, t.coords)) {
+          currentEnteredTerritory = t;
+          break;
+        }
+      }
+    }
+
+    if (currentEnteredTerritory) {
+      if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
+        lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
+        let bannerType = 'entering_neutral';
+        if (currentEnteredTerritory.ownerId === currentUser.uid) {
+          bannerType = 'entering_friendly';
+        } else if (currentEnteredTerritory.ownerId) {
+          if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
+            bannerType = 'entering_friendly';
+          } else {
+            bannerType = 'entering_enemy';
+          }
+        }
+        triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
+      }
+    } else {
+      if (lastEnteredSectorIdRef.current !== null) {
+        const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
+        lastEnteredSectorIdRef.current = null;
+        if (prevTerritory) {
+          triggerTerritoryBanner('leaving', prevTerritory.name);
+        }
+      }
+    }
+  };
+
+  // Real-Time Leaflet Map & Runner Marker DOM Renderer Sync
+  const updateMapDisplay = (newPoint) => {
+    if (polylineRef.current) {
+      polylineRef.current.setLatLngs(gpsPathRef.current);
+    }
+    if (runnerMarkerRef.current) {
+      runnerMarkerRef.current.setLatLng(newPoint);
+    }
+    if (mapInstanceRef.current && mapAutoFollowRef.current) {
+      mapInstanceRef.current.panTo(newPoint);
+    }
+  };
+
   const startTracking = () => {
     if (runState.status !== 'idle') return;
 
@@ -994,7 +1068,7 @@ export default function App() {
         lastPointTimeRef.current = Date.now();
         setIsSearchingGps(false);
 
-        // Now start watchPosition tracking
+        // Now start watchPosition tracking pipeline
         const watchId = navigator.geolocation.watchPosition(
           (watchPos) => {
             if (runStateRef.current.status === 'paused') return;
@@ -1003,8 +1077,8 @@ export default function App() {
             const wLng = watchPos.coords.longitude;
             const wAccuracy = watchPos.coords.accuracy;
 
-            // 1. Accuracy criteria (poor signal filter)
-            if (wAccuracy > GPS_CONFIG.GPS_ACCURACY_THRESHOLD) {
+            // STAGE 1: GPS Signal & Accuracy Filter
+            if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
               addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
               gpsAccuracyRef.current = wAccuracy;
               gpsSpeedRef.current = 0;
@@ -1012,152 +1086,109 @@ export default function App() {
               smoothedSpeedRef.current = 0;
               return;
             }
-
             gpsAccuracyRef.current = wAccuracy;
 
-            // Check territory transition
+            // STAGE 2: Territory Boundary Check
             const newPoint = [wLat, wLng];
-            let currentEnteredTerritory = null;
-            for (const t of territories) {
-              if (t.coords && t.coords.length >= 3) {
-                if (isPointInPolygon(newPoint, t.coords)) {
-                  currentEnteredTerritory = t;
-                  break;
-                }
-              }
-            }
+            processTerritoryTransition(newPoint);
 
-            if (currentEnteredTerritory) {
-              if (lastEnteredSectorIdRef.current !== currentEnteredTerritory.id) {
-                lastEnteredSectorIdRef.current = currentEnteredTerritory.id;
-                let bannerType = 'entering_neutral';
-                if (currentEnteredTerritory.ownerId === currentUser.uid) {
-                  bannerType = 'entering_friendly';
-                } else if (currentEnteredTerritory.ownerId) {
-                  if (currentUser.clan && currentEnteredTerritory.clan === currentUser.clan) {
-                    bannerType = 'entering_friendly';
-                  } else {
-                    bannerType = 'entering_enemy';
-                  }
-                }
-                triggerTerritoryBanner(bannerType, currentEnteredTerritory.name);
-              }
-            } else {
-              if (lastEnteredSectorIdRef.current !== null) {
-                const prevTerritory = territories.find(t => t.id === lastEnteredSectorIdRef.current);
-                lastEnteredSectorIdRef.current = null;
-                if (prevTerritory) {
-                  triggerTerritoryBanner('leaving', prevTerritory.name);
-                }
-              }
-            }
-
+            // STAGE 3: Time & Distance Window Accumulation
             const nowTime = Date.now();
-            
-            // Initialize last point and time if missing
             if (lastPointTimeRef.current === null || !gpsLastPointRef.current) {
               lastPointTimeRef.current = nowTime;
-              gpsLastPointRef.current = [wLat, wLng];
+              gpsLastPointRef.current = newPoint;
               return;
             }
 
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
-            if (dtSeconds <= 0) return; // ignore duplicate or invalid timestamp
+            if (dtSeconds <= 0) return; // ignore duplicate or backwards timestamp
 
-            // Calculate step movement in METERS
             const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
 
-            // Accumulate distance (in meters) and time (in seconds) over window
             accumulatedDistanceRef.current += stepMeters;
             accumulatedDurationRef.current += dtSeconds;
             lastPointTimeRef.current = nowTime;
-            gpsLastPointRef.current = [wLat, wLng];
+            gpsLastPointRef.current = newPoint;
 
-            // Evaluate speed and movement once window reaches MIN_TIME_COMPUTATION_WINDOW (1.5 seconds)
-            if (accumulatedDurationRef.current >= 1.5) {
-              const windowDistMeters = accumulatedDistanceRef.current;
-              const windowTimeSec = accumulatedDurationRef.current;
-              const rawSpeedMS = windowDistMeters / windowTimeSec;
+            // Wait for window to reach computation threshold (1.5s)
+            if (accumulatedDurationRef.current < RUN_ENGINE_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
+              return;
+            }
 
-              // Reset window accumulators
-              accumulatedDistanceRef.current = 0;
-              accumulatedDurationRef.current = 0;
+            // STAGE 4: Speed & Motion Processing
+            const windowDistMeters = accumulatedDistanceRef.current;
+            const windowTimeSec = accumulatedDurationRef.current;
+            const rawSpeedMS = windowDistMeters / windowTimeSec;
 
-              // Teleport / Extreme Speed Anti-Cheat Check (> 12.0 m/s / 43.2 km/h)
-              if (rawSpeedMS > 12.0) {
-                addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                smoothedSpeedRef.current = 0;
-                return;
+            // Reset window accumulators
+            accumulatedDistanceRef.current = 0;
+            accumulatedDurationRef.current = 0;
+
+            // STAGE 5: Anti-Cheat Teleport Cutoff (> 12 m/s / 43.2 km/h)
+            if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
+              addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              smoothedSpeedRef.current = 0;
+              return;
+            }
+
+            // STAGE 6: Stationary Evaluation & Auto-Pause Management
+            const isStationary = rawSpeedMS < RUN_ENGINE_CONFIG.DRIFT_SPEED_THRESHOLD 
+              || windowDistMeters < RUN_ENGINE_CONFIG.STATIONARY_WINDOW_DIST_METERS;
+
+            if (isStationary) {
+              smoothedSpeedRef.current = 0;
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+
+              lowSpeedDurationRef.current += windowTimeSec;
+              if (lowSpeedDurationRef.current >= RUN_ENGINE_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
+                gpsAutoPausedRef.current = true;
+                addLog("GPS: Auto-paused (runner stopped).");
+              }
+            } else {
+              // Active Movement
+              lowSpeedDurationRef.current = 0;
+              if (gpsAutoPausedRef.current && rawSpeedMS >= RUN_ENGINE_CONFIG.AUTO_RESUME_SPEED) {
+                gpsAutoPausedRef.current = false;
+                addLog("GPS: Auto-resumed (runner restarted).");
               }
 
-              // Check if movement in window is stationary (< 0.8 m/s OR total distance < 1.2 meters over 1.5s window)
-              const isStationary = rawSpeedMS < GPS_CONFIG.DRIFT_SPEED_THRESHOLD || windowDistMeters < 1.2;
+              // STAGE 7: Speed Smoothing & Pace Derivation
+              const filterAlpha = RUN_ENGINE_CONFIG.EMA_SMOOTHING_ALPHA;
+              smoothedSpeedRef.current = smoothedSpeedRef.current === 0
+                ? rawSpeedMS
+                : (filterAlpha * rawSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
 
-              if (isStationary) {
-                smoothedSpeedRef.current = 0;
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
+              const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
 
-                // Auto-pause timer check
-                lowSpeedDurationRef.current += windowTimeSec;
-                if (lowSpeedDurationRef.current >= GPS_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
-                  gpsAutoPausedRef.current = true;
-                  addLog("GPS: Auto-paused (runner stopped).");
+              if (currentSpeedKmH >= RUN_ENGINE_CONFIG.MIN_VALID_SPEED_KMH && !gpsAutoPausedRef.current) {
+                // Valid movement!
+                gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
+                gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
+
+                // Commit distance in KM exactly once
+                const distanceIncKm = windowDistMeters / 1000;
+                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distanceIncKm).toFixed(3));
+                gpsPathRef.current.push(newPoint);
+
+                // STAGE 8: Real-Time Leaflet & Map Renderer Sync
+                updateMapDisplay(newPoint);
+
+                // STAGE 9: Loop Intersection & Territory Conquest Check
+                if (gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS 
+                    && gpsDistanceRef.current > RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM) {
+                  const intersectIdx = checkPathSelfIntersection(gpsPathRef.current);
+                  if (intersectIdx !== null) {
+                    setTimeout(() => {
+                      finishRealRun(gpsPathRef.current.slice(intersectIdx));
+                    }, 200);
+                  }
                 }
               } else {
-                // Runner is moving!
-                lowSpeedDurationRef.current = 0;
-                if (gpsAutoPausedRef.current && rawSpeedMS >= GPS_CONFIG.AUTO_RESUME_SPEED) {
-                  gpsAutoPausedRef.current = false;
-                  addLog("GPS: Auto-resumed (runner restarted).");
-                }
-
-                // Smooth speed using EMA filter
-                const filterAlpha = 0.3;
-                smoothedSpeedRef.current = smoothedSpeedRef.current === 0
-                  ? rawSpeedMS
-                  : (filterAlpha * rawSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
-
-                const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
-
-                if (currentSpeedKmH >= 2.88 && !gpsAutoPausedRef.current) {
-                  // Valid movement!
-                  gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
-                  gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
-
-                  // Accumulate distance in KM exactly once
-                  const distanceIncKm = windowDistMeters / 1000;
-                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distanceIncKm).toFixed(3));
-
-                  // Append path coordinate
-                  gpsPathRef.current.push(newPoint);
-
-                  // Real-time Leaflet DOM updates
-                  if (polylineRef.current) {
-                    polylineRef.current.setLatLngs(gpsPathRef.current);
-                  }
-                  if (runnerMarkerRef.current) {
-                    runnerMarkerRef.current.setLatLng(newPoint);
-                  }
-                  if (mapInstanceRef.current && mapAutoFollowRef.current) {
-                    mapInstanceRef.current.panTo(newPoint);
-                  }
-
-                  // Check self-intersection for territory capture
-                  if (gpsPathRef.current.length >= 5 && gpsDistanceRef.current > 0.05) {
-                    const intersectIdx = checkPathSelfIntersection(gpsPathRef.current);
-                    if (intersectIdx !== null) {
-                      setTimeout(() => {
-                        finishRealRun(gpsPathRef.current.slice(intersectIdx));
-                      }, 200);
-                    }
-                  }
-                } else {
-                  gpsSpeedRef.current = 0;
-                  gpsPaceRef.current = '--:--';
-                }
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
               }
             }
           },

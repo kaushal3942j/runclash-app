@@ -1003,16 +1003,17 @@ export default function App() {
             const wLng = watchPos.coords.longitude;
             const wAccuracy = watchPos.coords.accuracy;
 
-            // 1. Accuracy criteria
+            // 1. Accuracy criteria (poor signal filter)
             if (wAccuracy > GPS_CONFIG.GPS_ACCURACY_THRESHOLD) {
               addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
               gpsAccuracyRef.current = wAccuracy;
               gpsSpeedRef.current = 0;
               gpsPaceRef.current = '--:--';
               smoothedSpeedRef.current = 0;
-              lastSpeedRef.current = 0;
               return;
             }
+
+            gpsAccuracyRef.current = wAccuracy;
 
             // Check territory transition
             const newPoint = [wLat, wLng];
@@ -1051,165 +1052,111 @@ export default function App() {
               }
             }
 
-            gpsAccuracyRef.current = wAccuracy;
-
-            let incrementalDist = 0;
-            if (gpsPathRef.current.length > 0) {
-              const lastPoint = gpsPathRef.current[gpsPathRef.current.length - 1];
-              incrementalDist = getGeodeticDistance(lastPoint[0], lastPoint[1], wLat, wLng);
-            }
-
-            // 2. Ignore GPS Jitter (drift under threshold distance)
-            if (gpsPathRef.current.length > 0 && incrementalDist < GPS_CONFIG.JITTER_DISTANCE_FILTER) {
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
-              smoothedSpeedRef.current = 0;
-              lastSpeedRef.current = 0;
-              accumulatedDistanceRef.current = 0;
-              accumulatedDurationRef.current = 0;
+            const nowTime = Date.now();
+            
+            // Initialize last point and time if missing
+            if (lastPointTimeRef.current === null || !gpsLastPointRef.current) {
+              lastPointTimeRef.current = nowTime;
+              gpsLastPointRef.current = [wLat, wLng];
               return;
             }
 
-            const nowTime = Date.now();
-            let dt = 0;
-            if (lastPointTimeRef.current !== null) {
-              dt = (nowTime - lastPointTimeRef.current) / 1000;
-            }
+            const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
+            if (dtSeconds <= 0) return; // ignore duplicate or invalid timestamp
 
-            accumulatedDistanceRef.current += incrementalDist;
-            accumulatedDurationRef.current += dt;
+            // Calculate step movement in METERS
+            const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
+
+            // Accumulate distance (in meters) and time (in seconds) over window
+            accumulatedDistanceRef.current += stepMeters;
+            accumulatedDurationRef.current += dtSeconds;
             lastPointTimeRef.current = nowTime;
+            gpsLastPointRef.current = [wLat, wLng];
 
-            // Only recalculate speed and update path if accumulated time is at least 1.0 second
-            if (accumulatedDurationRef.current >= GPS_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
-              const totalAccTime = accumulatedDurationRef.current;
-              const distMeters = accumulatedDistanceRef.current * 1000;
-              const instantSpeedMS = distMeters / totalAccTime;
-              const wAcceleration = Math.abs(instantSpeedMS - lastSpeedRef.current) / totalAccTime;
+            // Evaluate speed and movement once window reaches MIN_TIME_COMPUTATION_WINDOW (1.5 seconds)
+            if (accumulatedDurationRef.current >= 1.5) {
+              const windowDistMeters = accumulatedDistanceRef.current;
+              const windowTimeSec = accumulatedDurationRef.current;
+              const rawSpeedMS = windowDistMeters / windowTimeSec;
 
-              // Track Max Speed in km/h
-              const speedKmh = instantSpeedMS * 3.6;
-              if (!cheatMetricsRef.current.maxSpeed || speedKmh > cheatMetricsRef.current.maxSpeed) {
-                cheatMetricsRef.current.maxSpeed = speedKmh;
-              }
-
-              // 4. Anti-Cheat spike validation (> 12.0 m/s / 43.2 km/h is a teleport jump)
-              if (instantSpeedMS > 12.0) {
-                addLog(`GPS: Extreme speed jump detected (${speedKmh.toFixed(1)} km/h). Discarding.`);
-                accumulatedDistanceRef.current = 0;
-                accumulatedDurationRef.current = 0;
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                smoothedSpeedRef.current = 0;
-                lastSpeedRef.current = 0;
-                return;
-              }
-
-              if (instantSpeedMS > GPS_CONFIG.SUSTAINED_HIGH_SPEED_LIMIT) {
-                cheatMetricsRef.current.speedSpikes = (cheatMetricsRef.current.speedSpikes || 0) + 1;
-                addLog(`GPS: High speed warning (${speedKmh.toFixed(1)} km/h).`);
-              }
-
-              if (instantSpeedMS > 6.0) {
-                cheatMetricsRef.current.repeatedJumps = (cheatMetricsRef.current.repeatedJumps || 0) + 1;
-              }
-
-              if (wAcceleration > 4.0) {
-                cheatMetricsRef.current.unrealisticAcceleration = (cheatMetricsRef.current.unrealisticAcceleration || 0) + 1;
-              }
-
-              // Apply Exponential Moving Average (EMA) to smooth speed
-              const filterAlpha = 0.25;
-              smoothedSpeedRef.current = smoothedSpeedRef.current === 0 
-                ? instantSpeedMS 
-                : (filterAlpha * instantSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
-
-              lastSpeedRef.current = smoothedSpeedRef.current;
-
-              // 5. Automatic Pause & Resume detection based on smoothed speed
-              const isStationary = smoothedSpeedRef.current < GPS_CONFIG.DRIFT_SPEED_THRESHOLD;
-              let nextAutoPaused = gpsAutoPausedRef.current;
-              if (isStationary) {
-                lowSpeedDurationRef.current += totalAccTime;
-                if (lowSpeedDurationRef.current >= GPS_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
-                  nextAutoPaused = true;
-                  gpsAutoPausedRef.current = true;
-                  addLog("GPS: Auto-paused (runner stopped).");
-                }
-              } else if (smoothedSpeedRef.current >= GPS_CONFIG.AUTO_RESUME_SPEED) {
-                lowSpeedDurationRef.current = 0;
-                if (gpsAutoPausedRef.current) {
-                  nextAutoPaused = false;
-                  gpsAutoPausedRef.current = false;
-                  addLog("GPS: Auto-resumed (runner restarted).");
-                }
-              }
-
-              // Vehicle Anti-Cheat: Sustained High Speed Detection
-              if (smoothedSpeedRef.current > GPS_CONFIG.SUSTAINED_HIGH_SPEED_LIMIT) {
-                // Count how long we run at sustained speed (totalAccTime)
-                cheatMetricsRef.current.sustainedHighSpeedTime = (cheatMetricsRef.current.sustainedHighSpeedTime || 0) + totalAccTime;
-                if (cheatMetricsRef.current.sustainedHighSpeedTime >= GPS_CONFIG.SUSTAINED_HIGH_SPEED_MAX_DUR) {
-                  setTimeout(() => {
-                    setToastMessage("Anti-Cheat Triggered: Sustained high speed exceeds running limits!");
-                    setTimeout(() => setToastMessage(null), 4000);
-                    stopTracking("Anti-Cheat Sustained High Speed Invalidation");
-                  }, 100);
-                  return;
-                }
-              } else {
-                // Slowly decay high speed time when running normally
-                cheatMetricsRef.current.sustainedHighSpeedTime = Math.max(0, (cheatMetricsRef.current.sustainedHighSpeedTime || 0) - totalAccTime);
-              }
-
-              // Format current speed & pace
-              const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
-              let currentPaceStr = '--:--';
-              if (smoothedSpeedRef.current >= GPS_CONFIG.DRIFT_SPEED_THRESHOLD) {
-                const paceDec = 60 / currentSpeedKmH;
-                const pMins = Math.floor(paceDec);
-                const pSecs = Math.floor((paceDec - pMins) * 60);
-                if (pMins <= 30) {
-                  currentPaceStr = `${pMins}:${pSecs.toString().padStart(2, '0')}`;
-                }
-              }
-
-              // If auto-paused or stationary (GPS drift/shaking), do NOT accumulate distance or path coordinates
-              if (!nextAutoPaused && !isStationary) {
-                gpsPathRef.current.push(newPoint);
-                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + accumulatedDistanceRef.current).toFixed(3));
-                gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
-                gpsPaceRef.current = currentPaceStr;
-              } else {
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                smoothedSpeedRef.current = 0;
-              }
-
-              // Reset accumulation registers
+              // Reset window accumulators
               accumulatedDistanceRef.current = 0;
               accumulatedDurationRef.current = 0;
 
-              // Real-time Leaflet DOM updates (Direct manipulation bypasses React render cycle!)
-              if (polylineRef.current && !nextAutoPaused && !isStationary) {
-                polylineRef.current.setLatLngs(gpsPathRef.current);
-              }
-              if (runnerMarkerRef.current) {
-                runnerMarkerRef.current.setLatLng(newPoint);
-              }
-              if (mapInstanceRef.current && mapAutoFollowRef.current) {
-                mapInstanceRef.current.panTo(newPoint);
+              // Teleport / Extreme Speed Anti-Cheat Check (> 12.0 m/s / 43.2 km/h)
+              if (rawSpeedMS > 12.0) {
+                addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+                smoothedSpeedRef.current = 0;
+                return;
               }
 
-              // Self-intersection check
-              const currentDist = gpsDistanceRef.current;
-              const currentPath = gpsPathRef.current;
-              if (currentPath.length >= 5 && currentDist > 0.05) {
-                const intersectIdx = checkPathSelfIntersection(currentPath);
-                if (intersectIdx !== null) {
-                  setTimeout(() => {
-                    finishRealRun(currentPath.slice(intersectIdx));
-                  }, 200);
+              // Check if movement in window is stationary (< 0.8 m/s OR total distance < 1.2 meters over 1.5s window)
+              const isStationary = rawSpeedMS < GPS_CONFIG.DRIFT_SPEED_THRESHOLD || windowDistMeters < 1.2;
+
+              if (isStationary) {
+                smoothedSpeedRef.current = 0;
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+
+                // Auto-pause timer check
+                lowSpeedDurationRef.current += windowTimeSec;
+                if (lowSpeedDurationRef.current >= GPS_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
+                  gpsAutoPausedRef.current = true;
+                  addLog("GPS: Auto-paused (runner stopped).");
+                }
+              } else {
+                // Runner is moving!
+                lowSpeedDurationRef.current = 0;
+                if (gpsAutoPausedRef.current && rawSpeedMS >= GPS_CONFIG.AUTO_RESUME_SPEED) {
+                  gpsAutoPausedRef.current = false;
+                  addLog("GPS: Auto-resumed (runner restarted).");
+                }
+
+                // Smooth speed using EMA filter
+                const filterAlpha = 0.3;
+                smoothedSpeedRef.current = smoothedSpeedRef.current === 0
+                  ? rawSpeedMS
+                  : (filterAlpha * rawSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
+
+                const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
+
+                if (currentSpeedKmH >= 2.88 && !gpsAutoPausedRef.current) {
+                  // Valid movement!
+                  gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
+                  gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
+
+                  // Accumulate distance in KM exactly once
+                  const distanceIncKm = windowDistMeters / 1000;
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distanceIncKm).toFixed(3));
+
+                  // Append path coordinate
+                  gpsPathRef.current.push(newPoint);
+
+                  // Real-time Leaflet DOM updates
+                  if (polylineRef.current) {
+                    polylineRef.current.setLatLngs(gpsPathRef.current);
+                  }
+                  if (runnerMarkerRef.current) {
+                    runnerMarkerRef.current.setLatLng(newPoint);
+                  }
+                  if (mapInstanceRef.current && mapAutoFollowRef.current) {
+                    mapInstanceRef.current.panTo(newPoint);
+                  }
+
+                  // Check self-intersection for territory capture
+                  if (gpsPathRef.current.length >= 5 && gpsDistanceRef.current > 0.05) {
+                    const intersectIdx = checkPathSelfIntersection(gpsPathRef.current);
+                    if (intersectIdx !== null) {
+                      setTimeout(() => {
+                        finishRealRun(gpsPathRef.current.slice(intersectIdx));
+                      }, 200);
+                    }
+                  }
+                } else {
+                  gpsSpeedRef.current = 0;
+                  gpsPaceRef.current = '--:--';
                 }
               }
             }
@@ -1545,6 +1492,35 @@ export default function App() {
       const percentage = totalArea > 0 ? Math.round((clanAreas[name] / totalArea) * 100) : 0;
       return { name, percentage };
     }).sort((a, b) => b.percentage - a.percentage);
+  };
+
+  // Distance computation (Haversine formula in meters)
+  const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000; // Earth radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Convert speed in km/h to pace string (MM:SS)
+  const calculatePaceFromSpeed = (speedKmH) => {
+    if (!speedKmH || speedKmH <= 0.8) {
+      return '--:--';
+    }
+    const paceMinutesPerKm = 60 / speedKmH;
+    let mins = Math.floor(paceMinutesPerKm);
+    let secs = Math.round((paceMinutesPerKm - mins) * 60);
+    if (secs >= 60) {
+      mins += 1;
+      secs = 0;
+    }
+    if (mins > 30 || mins < 2) return '--:--';
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   // Distance computation (Haversine formula in km)

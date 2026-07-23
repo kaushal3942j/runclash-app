@@ -1007,6 +1007,10 @@ export default function App() {
             if (wAccuracy > GPS_CONFIG.GPS_ACCURACY_THRESHOLD) {
               addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
               gpsAccuracyRef.current = wAccuracy;
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              smoothedSpeedRef.current = 0;
+              lastSpeedRef.current = 0;
               return;
             }
 
@@ -1057,6 +1061,12 @@ export default function App() {
 
             // 2. Ignore GPS Jitter (drift under threshold distance)
             if (gpsPathRef.current.length > 0 && incrementalDist < GPS_CONFIG.JITTER_DISTANCE_FILTER) {
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              smoothedSpeedRef.current = 0;
+              lastSpeedRef.current = 0;
+              accumulatedDistanceRef.current = 0;
+              accumulatedDurationRef.current = 0;
               return;
             }
 
@@ -1088,6 +1098,10 @@ export default function App() {
                 addLog(`GPS: Extreme speed jump detected (${speedKmh.toFixed(1)} km/h). Discarding.`);
                 accumulatedDistanceRef.current = 0;
                 accumulatedDurationRef.current = 0;
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+                smoothedSpeedRef.current = 0;
+                lastSpeedRef.current = 0;
                 return;
               }
 
@@ -1169,6 +1183,7 @@ export default function App() {
               } else {
                 gpsSpeedRef.current = 0;
                 gpsPaceRef.current = '--:--';
+                smoothedSpeedRef.current = 0;
               }
 
               // Reset accumulation registers

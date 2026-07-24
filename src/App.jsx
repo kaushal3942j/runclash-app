@@ -77,13 +77,7 @@ const SIMULATION_ROUTES = {
 };
 
 // Database of profiles for social system discovery/search
-const INITIAL_PROFILES = [
-  { id: 'user_lakshya', displayName: 'Lakshya', clan: 'None', level: 12, xp: 5800, distance: '112.5 km', territories: 5, bio: 'Conquering lake sectors one run at a time.', online: true, postsCount: 24, friendsCount: 31 },
-  { id: 'user_sam', displayName: 'Sam', clan: 'None', level: 10, xp: 4500, distance: '74.8 km', territories: 3, bio: 'Pacing Sajjan Garh foothills daily.', online: false, postsCount: 15, friendsCount: 22 },
-  { id: 'user_rohan', displayName: 'Rohan', clan: 'None', level: 8, xp: 3200, distance: '48.2 km', territories: 2, bio: 'Sprinting through the old city gates.', online: true, postsCount: 8, friendsCount: 14 },
-  { id: 'user_divya', displayName: 'Divya', clan: 'None', level: 7, xp: 2900, distance: '35.4 km', territories: 1, bio: 'Run, capture, defend, repeat.', online: true, postsCount: 5, friendsCount: 19 },
-  { id: 'user_arjun', displayName: 'Arjun', clan: 'None', level: 6, xp: 2300, distance: '28.1 km', territories: 0, bio: 'New to Udaipur, looking for run buddies.', online: false, postsCount: 2, friendsCount: 4 }
-];
+const INITIAL_PROFILES = [];
 
 // ============================================================================
 // RUN ENGINE MODULE 1: CENTRALIZED CONFIGURATION & CONSTANTS
@@ -368,25 +362,22 @@ export default function App() {
 
   // Persisted Social arrays
   const [friendsList, setFriendsList] = useState(() => {
-    return JSON.parse(localStorage.getItem('clash_friends_list')) || ['user_rohan'];
+    return JSON.parse(localStorage.getItem('clash_friends_list')) || [];
   });
   const [friendRequestsReceived, setFriendRequestsReceived] = useState(() => {
-    return JSON.parse(localStorage.getItem('clash_requests_received')) || ['user_sam'];
+    return JSON.parse(localStorage.getItem('clash_requests_received')) || [];
   });
   const [friendRequestsSent, setFriendRequestsSent] = useState(() => {
     return JSON.parse(localStorage.getItem('clash_requests_sent')) || [];
   });
   const [followersList, setFollowersList] = useState(() => {
-    return JSON.parse(localStorage.getItem('clash_followers_list')) || ['user_lakshya', 'user_rohan'];
+    return JSON.parse(localStorage.getItem('clash_followers_list')) || [];
   });
   const [userBio, setUserBio] = useState(() => {
-    return localStorage.getItem('clash_user_bio') || 'Strategic operative ready to claim territories.';
+    return localStorage.getItem('clash_user_bio') || 'Runner on RunClash.';
   });
   const [socialNotifications, setSocialNotifications] = useState(() => {
-    return JSON.parse(localStorage.getItem('clash_social_notifications')) || [
-      { id: 'n1', type: 'friend_request', senderName: 'Sam', timestamp: '2h ago', read: false },
-      { id: 'n2', type: 'new_follower', senderName: 'Lakshya', timestamp: '5h ago', read: true }
-    ];
+    return JSON.parse(localStorage.getItem('clash_social_notifications')) || [];
   });
 
   // LocalStorage Synchronizers
@@ -455,6 +446,24 @@ export default function App() {
     mapAutoFollowRef.current = mapAutoFollow;
   }, [mapAutoFollow]);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoadingLeaderboard(true);
+    getLeaderboard().then(data => {
+      if (active) {
+        setLeaderboard(data || []);
+        setIsLoadingLeaderboard(false);
+      }
+    }).catch(err => {
+      if (active) {
+        setLeaderboard([]);
+        setIsLoadingLeaderboard(false);
+      }
+    });
+    return () => { active = false; };
+  }, [currentUser]);
   
   const runStateRef = useRef(runState);
   useEffect(() => {
@@ -1538,19 +1547,50 @@ export default function App() {
     return R * c;
   };
 
-  // Convert speed in km/h to pace string (MM:SS)
+  // ============================================================================
+  // RUN ENGINE MODULE: SPEED & PACE PROCESSOR
+  // ============================================================================
+  /**
+   * Converts speed in meters per second (m/s) to kilometers per hour (km/h).
+   */
+  const convertMSToKmH = (speedMS) => {
+    if (!speedMS || speedMS < 0) return 0;
+    return parseFloat((speedMS * 3.6).toFixed(1));
+  };
+
+  /**
+   * Applies Exponential Moving Average (EMA) smoothing to raw speed in m/s.
+   */
+  const smoothSpeed = (rawSpeedMS, prevSmoothedSpeedMS, alpha = RUN_ENGINE_CONFIG.EMA_SMOOTHING_ALPHA || 0.3) => {
+    if (rawSpeedMS <= 0) return 0;
+    if (!prevSmoothedSpeedMS || prevSmoothedSpeedMS === 0) return rawSpeedMS;
+    return alpha * rawSpeedMS + (1 - alpha) * prevSmoothedSpeedMS;
+  };
+
+  /**
+   * Converts instantaneous speed in km/h to pace string formatted as MM:SS per km.
+   * Returns '--:--' if stationary, zero, or out of valid human pace bounds (2:00 to 30:00 min/km).
+   */
   const calculatePaceFromSpeed = (speedKmH) => {
-    if (!speedKmH || speedKmH <= 0.8) {
+    const minSpeedThresholdKmH = (RUN_ENGINE_CONFIG.DRIFT_SPEED_THRESHOLD || 0.8) * 3.6;
+    if (!speedKmH || speedKmH < minSpeedThresholdKmH) {
       return '--:--';
     }
+
     const paceMinutesPerKm = 60 / speedKmH;
     let mins = Math.floor(paceMinutesPerKm);
     let secs = Math.round((paceMinutesPerKm - mins) * 60);
+
     if (secs >= 60) {
       mins += 1;
       secs = 0;
     }
-    if (mins > 30 || mins < 2) return '--:--';
+
+    // Validate human pace bounds (2:00 /km to 30:00 /km)
+    if (mins < 2 || mins > 30 || (mins === 30 && secs > 0)) {
+      return '--:--';
+    }
+
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
@@ -1589,24 +1629,27 @@ export default function App() {
     return Math.round(Math.abs(area / 2));
   };
 
+  /**
+   * Calculates overall average pace string (MM:SS) from cumulative duration (seconds) and distance (km).
+   * Returns '--:--' if duration < 10s, distance < 0.02 km, or out of valid human pace range.
+   */
   const calculatePaceStr = (elapsedSeconds, distanceKm) => {
-    if (elapsedSeconds < 10 || !distanceKm || distanceKm < 0.02) {
+    if (!elapsedSeconds || elapsedSeconds < 10 || !distanceKm || distanceKm < 0.02) {
       return '--:--';
     }
 
     const distanceMeters = distanceKm * 1000;
     const paceMinutesPerKm = (elapsedSeconds / 60) / (distanceMeters / 1000);
 
-    const paceMin = Math.floor(paceMinutesPerKm);
-    let paceSec = Math.round((paceMinutesPerKm - paceMin) * 60);
+    let finalMin = Math.floor(paceMinutesPerKm);
+    let paceSec = Math.round((paceMinutesPerKm - finalMin) * 60);
 
-    let finalMin = paceMin;
-    if (paceSec === 60) {
+    if (paceSec >= 60) {
       finalMin += 1;
       paceSec = 0;
     }
 
-    // Validate range: 2:00 min/km to 30:00 min/km
+    // Validate human pace range (2:00 min/km to 30:00 min/km)
     if (finalMin < 2 || finalMin > 30 || (finalMin === 30 && paceSec > 0)) {
       return '--:--';
     }
@@ -1957,8 +2000,6 @@ export default function App() {
                 <Settings size={14} style={{ transition: 'transform 0.3s ease', transform: showSettingsDrawer ? 'rotate(90deg)' : 'rotate(0)' }} />
               </button>
             </div>
-          </div>
-
           {/* Active Tab Screen Content */}
           <div style={{ flex: 1, position: 'relative', overflowY: activeTab === 'map' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column', paddingBottom: '60px' }}>
             
@@ -4730,8 +4771,21 @@ export default function App() {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {getClanStandings().length === 0 ? (
-                        <div className="clash-card p-4 text-center" style={{ color: 'var(--clash-text-secondary)', fontSize: '11px' }}>
-                          No claimed sectors by any crew yet. Capture territories to establish dominance!
+                        <div className="clash-card p-6 text-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', borderStyle: 'dashed', borderColor: 'var(--clash-border)' }}>
+                          <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(0, 240, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Shield size={24} style={{ color: '#00F0FF' }} />
+                          </div>
+                          <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '15px' }}>No clans have been created yet</h4>
+                          <p className="clash-body" style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)', maxWidth: '280px' }}>
+                            Create the first clan and dominate your city.
+                          </p>
+                          <button 
+                            onClick={() => setShowClanModal(true)} 
+                            className="clash-btn-primary clash-btn-press" 
+                            style={{ height: '34px', borderRadius: '17px', fontSize: '11px', padding: '0 20px', marginTop: '4px', fontWeight: '800', background: '#00F0FF', color: '#0B0B0B' }}
+                          >
+                            Create Clan
+                          </button>
                         </div>
                       ) : (
                         getClanStandings().map((c, index) => {
@@ -4759,12 +4813,16 @@ export default function App() {
                     <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>
                       <Award size={14} style={{ color: '#FC4C02' }} /> Elite Runners Leaderboard
                     </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
                       {(() => {
+                        if (isLoadingLeaderboard) {
+                          return <SkeletonCard count={3} />;
+                        }
+
                         const displayLeaderboard = [...leaderboard];
                         if (currentUser) {
                           const userInBoard = displayLeaderboard.some(p => p.displayName === currentUser.displayName);
-                          if (!userInBoard) {
+                          if (!userInBoard && (currentUser.xp > 0 || currentUser.level > 1)) {
                             displayLeaderboard.push({
                               displayName: currentUser.displayName,
                               clan: currentUser.clan || 'None',
@@ -4777,8 +4835,21 @@ export default function App() {
 
                         if (displayLeaderboard.length === 0) {
                           return (
-                            <div className="clash-card p-4 text-center">
-                              No active tactical runners synced.
+                            <div className="clash-card p-6 text-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', borderStyle: 'dashed', borderColor: 'var(--clash-border)' }}>
+                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(252, 76, 2, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Trophy size={24} style={{ color: '#FC4C02' }} />
+                              </div>
+                              <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '15px' }}>🏆 No runners yet</h4>
+                              <p className="clash-body" style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)', maxWidth: '260px' }}>
+                                Complete your first run to appear on the leaderboard.
+                              </p>
+                              <button 
+                                onClick={() => setActiveTab('map')} 
+                                className="clash-btn-primary clash-btn-press" 
+                                style={{ height: '34px', borderRadius: '17px', fontSize: '11px', padding: '0 20px', marginTop: '4px', fontWeight: '800' }}
+                              >
+                                Start Running
+                              </button>
                             </div>
                           );
                         }
@@ -5095,6 +5166,20 @@ export default function App() {
                     </div>
 
                     {(() => {
+                      if (friendsList.length === 0) {
+                        return (
+                          <div className="clash-card p-6 text-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', margin: '6px 0', borderStyle: 'dashed', borderColor: 'var(--clash-border)' }}>
+                            <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: 'rgba(255, 255, 255, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <Users size={22} style={{ color: 'var(--clash-text-secondary)' }} />
+                            </div>
+                            <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '14px' }}>You haven't added any friends</h4>
+                            <p className="clash-body" style={{ margin: 0, fontSize: '11px', color: 'var(--clash-text-secondary)', maxWidth: '240px' }}>
+                              Search for runners after they join RunClash.
+                            </p>
+                          </div>
+                        );
+                      }
+
                       const filteredFriends = friendsList.filter(id => {
                         const profile = INITIAL_PROFILES.find(p => p.id === id);
                         return profile && profile.displayName.toLowerCase().includes(friendsSearchQuery.toLowerCase());
@@ -5111,7 +5196,7 @@ export default function App() {
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                           {filteredFriends.map(friendId => {
-                            const friend = INITIAL_PROFILES.find(p => p.id === friendId);
+                            const friend = INITIAL_PROFILES.find(p => p.id === friendId) || { id: friendId, displayName: 'Runner', level: 1, clan: 'None' };
                             return (
                               <div 
                                 key={friendId} 
@@ -5169,7 +5254,7 @@ export default function App() {
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                       <h3 className="text-sm m-0" style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                        <Sparkles size={14} style={{ color: '#FC4C02' }} /> Discover Udaipur Runners
+                        <Sparkles size={14} style={{ color: '#FC4C02' }} /> Discover Runners
                       </h3>
                       <input 
                         type="text" 
@@ -5187,8 +5272,11 @@ export default function App() {
 
                       if (filteredDiscover.length === 0) {
                         return (
-                          <div className="clash-card p-4 text-center clash-body" style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
-                            All active runners are already in your network!
+                          <div className="clash-card p-5 text-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', margin: '6px 0', borderStyle: 'dashed', borderColor: 'var(--clash-border)' }}>
+                            <Sparkles size={20} style={{ color: 'var(--clash-text-secondary)', opacity: 0.6 }} />
+                            <span className="clash-body" style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                              No other runners registered in network.
+                            </span>
                           </div>
                         );
                       }
@@ -5926,6 +6014,7 @@ export default function App() {
         </div>
       </div>
  
+    </div>
     </div>
   );
 }

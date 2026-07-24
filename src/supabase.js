@@ -301,9 +301,9 @@ export const loginUser = async (email, password) => {
       email: email,
       displayName: email.split('@')[0],
       clan: 'None',
-      level: 4,
-      xp: 1420,
-      coins: 350,
+      level: 1,
+      xp: 0,
+      coins: 0,
       premium: false
     };
     localStorage.setItem('clash_user', JSON.stringify(profile));
@@ -611,12 +611,7 @@ export const getLeaderboard = async () => {
       return [];
     }
   } else {
-    return [
-      { displayName: 'Lakshya', clan: 'None', level: 12, xp: 5800 },
-      { displayName: 'Sam', clan: 'None', level: 10, xp: 4500 },
-      { displayName: 'Rohan', clan: 'None', level: 8, xp: 3200 },
-      { displayName: 'Divya', clan: 'None', level: 7, xp: 2900 }
-    ];
+    return [];
   }
 };
 

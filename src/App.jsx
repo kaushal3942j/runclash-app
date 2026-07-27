@@ -56,21 +56,6 @@ function SkeletonCard({ count = 3 }) {
 
 // Predefined Simulation Routes for Udaipur (Developer Mode)
 const SIMULATION_ROUTES = {
-  lake: {
-    name: "Fateh Sagar Lake Loop",
-    distance: "3.2 km",
-    points: [
-      [24.6042, 73.6805],
-      [24.6015, 73.6762],
-      [24.5975, 73.6750],
-      [24.5948, 73.6781],
-      [24.5932, 73.6825],
-      [24.5961, 73.6865],
-      [24.6010, 73.6870],
-      [24.6030, 73.6845],
-      [24.6042, 73.6805]
-    ]
-  },
   foothills: {
     name: "Sajjan Garh Foothills Base",
     distance: "2.1 km",
@@ -115,20 +100,22 @@ const INITIAL_PROFILES = [];
 // ============================================================================
 const RUN_ENGINE_CONFIG = {
   // Geolocation & Signal Quality Thresholds
-  GPS_ACCURACY_THRESHOLD: 25.0,        // meters (discard points with poor accuracy)
-  MIN_TIME_COMPUTATION_WINDOW: 1.5,    // seconds (buffer coordinate updates to compute stable speed)
-  STATIONARY_WINDOW_DIST_METERS: 1.2,  // meters (minimum movement in window before treating as moving)
+  GPS_ACCURACY_THRESHOLD: 25.0,        // meters (discard points with poor accuracy > 25m)
+  MIN_TIME_COMPUTATION_WINDOW: 1.8,    // seconds (buffer coordinate updates to compute stable speed)
   JITTER_DISTANCE_FILTER: 0.002,       // km (2 meters distance jump filter threshold)
 
-  // Speed & Motion Thresholds
-  DRIFT_SPEED_THRESHOLD: 0.8,         // m/s (2.88 km/h) below which runner is considered stationary
-  AUTO_PAUSE_SPEED: 0.8,               // m/s below which auto-pause triggers after delay
-  AUTO_RESUME_SPEED: 1.0,              // m/s above which tracking auto-resumes
-  MIN_VALID_SPEED_KMH: 2.88,           // km/h (minimum valid running/walking speed for accumulation)
-  EMA_SMOOTHING_ALPHA: 0.3,            // Exponential Moving Average filter smoothing factor
+  // Speed & Motion Processing Thresholds
+  STATIONARY_SPEED_THRESHOLD: 0.65,    // m/s (2.34 km/h) below which runner is considered stationary
+  RESUME_SPEED_THRESHOLD: 0.80,        // m/s (2.88 km/h) required to confirm walking movement
+  STATIONARY_DISPLACEMENT_MIN: 1.0,    // meters (minimum displacement in window)
+  AUTO_PAUSE_DELAY: 4.0,               // seconds stationary before auto-pause triggers
+  SETTLING_DURATION_SEC: 4.0,          // seconds after start run to filter initial acquisition drift
+  SETTLING_MIN_SAMPLES: 3,             // minimum samples required before leaving settling phase
+  REQUIRED_MOVING_WINDOWS: 2,          // consecutive moving windows required to enter TRACKING
+  MIN_VALID_SPEED_KMH: 2.50,           // km/h (minimum valid running/walking speed for accumulation)
+  EMA_SMOOTHING_ALPHA: 0.35,           // Exponential Moving Average filter smoothing factor
 
   // Auto-Pause & Inactivity Timers
-  AUTO_PAUSE_DELAY: 4.0,               // seconds stationary before auto-pause triggers
   INACTIVITY_PAUSE_TIMEOUT: 8.0,       // seconds without GPS update before auto-pausing
 
   // Loop Detection & Territory Conquest Limits
@@ -168,7 +155,7 @@ export default function App() {
 
   const DEBUG_MODE = false;
   const [trackingMode, setTrackingMode] = useState('gps'); // Enforced 'gps' in production
-  const [simulationRouteKey, setSimulationRouteKey] = useState('lake');
+  const [simulationRouteKey, setSimulationRouteKey] = useState('foothills');
   const [isSearchingGps, setIsSearchingGps] = useState(false);
   
   // Tracking Run State
@@ -525,6 +512,14 @@ export default function App() {
   const accumulatedDistanceRef = useRef(0);
   const accumulatedDurationRef = useRef(0);
 
+  // Settling Phase & Hysteresis State Machine References
+  const settlingStartTimeRef = useRef(null);
+  const settlingSamplesCountRef = useRef(0);
+  const consecutiveMovingWindowsRef = useRef(0);
+  const consecutiveStationaryWindowsRef = useRef(0);
+  const activeMovingDurationRef = useRef(0);
+  const totalSessionDurationRef = useRef(0);
+
   const shopCosts = { shield: 80, boots: 120, decoy: 200 };
 
   // Logs and Chats
@@ -864,15 +859,19 @@ export default function App() {
 
   const togglePauseResume = () => {
     setRunState(prev => {
-      const nextStatus = prev.status === 'tracking' ? 'paused' : prev.status === 'paused' ? 'tracking' : prev.status;
-      console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: ${nextStatus}\nwatchId: ${watchIdRef.current || 'null'}`);
-      
       if (prev.status === 'tracking') {
-        addLog("System: Run paused.");
-        return { ...prev, status: 'paused' };
-      } else if (prev.status === 'paused') {
-        addLog("System: Run resumed.");
-        return { ...prev, status: 'tracking' };
+        gpsAutoPausedRef.current = false;
+        gpsSpeedRef.current = 0;
+        gpsPaceRef.current = '--:--';
+        addLog("System: Run paused manually.");
+        console.log(`[RUN ENGINE] Phase: TRACKING -> PAUSED (Manually Paused)`);
+        return { ...prev, status: 'paused', isAutoPaused: false };
+      } else if (prev.status === 'paused' || prev.status === 'waiting') {
+        gpsAutoPausedRef.current = false;
+        consecutiveMovingWindowsRef.current = 2; // Immediate manual resume confirmation
+        addLog("System: Run resumed manually.");
+        console.log(`[RUN ENGINE] Phase: ${prev.status.toUpperCase()} -> TRACKING (Manually Resumed)`);
+        return { ...prev, status: 'tracking', isAutoPaused: false };
       }
       return prev;
     });
@@ -962,7 +961,7 @@ export default function App() {
   };
 
   const startTracking = () => {
-    if (runState.status !== 'idle') return;
+    if (runState.status !== 'idle' && runState.status !== 'finished') return;
 
     requestWakeLock();
 
@@ -970,11 +969,17 @@ export default function App() {
     startTimeRef.current = new Date();
     endTimeRef.current = null;
     lowSpeedDurationRef.current = 0;
+    settlingStartTimeRef.current = Date.now();
+    settlingSamplesCountRef.current = 0;
+    consecutiveMovingWindowsRef.current = 0;
+    consecutiveStationaryWindowsRef.current = 0;
+    activeMovingDurationRef.current = 0;
+    totalSessionDurationRef.current = 0;
 
     // Auto-configure route key if territory/landmark is selected and simulating
     if (trackingMode === 'sim' && renderedTerritory) {
       const name = (renderedTerritory.name || '').toLowerCase();
-      let key = 'lake';
+      let key = 'foothills';
       if (name.includes('foothills') || name.includes('sajjan')) key = 'foothills';
       else if (name.includes('castle') || name.includes('park') || name.includes('monument')) key = 'monument';
       else if (name.includes('micro')) key = 'micro';
@@ -1001,8 +1006,34 @@ export default function App() {
       return;
     }
 
+    // Reset all tracking refs to clean zero state
+    gpsPathRef.current = [];
+    gpsDistanceRef.current = 0;
+    gpsSpeedRef.current = 0;
+    gpsPaceRef.current = '--:--';
+    gpsAccuracyRef.current = null;
+    gpsAutoPausedRef.current = false;
+    gpsLastPointRef.current = null;
+    smoothedSpeedRef.current = 0;
+    accumulatedDistanceRef.current = 0;
+    accumulatedDurationRef.current = 0;
+
     setIsSearchingGps(true);
     addLog("GPS: Calibrating tracking device... Searching for GPS satellites...");
+
+    setRunState({
+      status: 'acquiring',
+      path: [],
+      distance: 0,
+      duration: 0,
+      pace: '--:--',
+      gpsAccuracy: null,
+      speed: 0,
+      avgSpeed: 0,
+      avgPace: '--:--',
+      calories: 0,
+      isAutoPaused: false
+    });
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
@@ -1012,17 +1043,9 @@ export default function App() {
 
         addLog(`GPS: Lock acquired. Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)} (Accuracy: ${Math.round(accuracy)}m).`);
 
-        // Center the map on user position
         if (mapInstanceRef.current) {
           mapInstanceRef.current.setView([lat, lng], 15.5);
-        }
-
-        // Initial Path Polyline
-        if (mapInstanceRef.current) {
-          polylineRef.current = L.polyline([[lat, lng]], {
-            color: '#FC4C02',
-            weight: 4
-          }).addTo(mapInstanceRef.current);
+          polylineRef.current = L.polyline([], { color: '#FC4C02', weight: 4 }).addTo(mapInstanceRef.current);
 
           const runnerIcon = L.divIcon({
             className: 'custom-runner-icon',
@@ -1032,107 +1055,105 @@ export default function App() {
           runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
         }
 
-        // Initialize tracking refs
-        gpsPathRef.current = [[lat, lng]];
-        gpsDistanceRef.current = 0;
-        gpsSpeedRef.current = 0;
-        gpsPaceRef.current = '--:--';
-        gpsAccuracyRef.current = accuracy;
-        gpsAutoPausedRef.current = false;
+        // Set baseline position (ADDS EXACTLY 0 METERS & 0 PATH POINTS)
         gpsLastPointRef.current = [lat, lng];
-        smoothedSpeedRef.current = 0;
-        accumulatedDistanceRef.current = 0;
-        accumulatedDurationRef.current = 0;
+        gpsAccuracyRef.current = accuracy;
         lastPointTimeRef.current = Date.now();
-        lastSpeedRef.current = 0;
+        settlingStartTimeRef.current = Date.now();
+        settlingSamplesCountRef.current = 0;
 
-        setRunState({
-          status: 'tracking',
-          path: [[lat, lng]],
-          distance: 0,
-          duration: 0,
-          pace: '--:--',
-          gpsAccuracy: accuracy,
-          speed: 0,
-          avgSpeed: 0,
-          avgPace: '--:--',
-          calories: 0,
-          isAutoPaused: false
-        });
-
-        // Start Clock timer
-        timerIntervalRef.current = setInterval(() => {
-          // Stationary fallback check: if no coordinate is received for > 8s, trigger auto-pause
-          if (lastPointTimeRef.current !== null) {
-            const timeSinceLastPoint = (Date.now() - lastPointTimeRef.current) / 1000;
-            if (timeSinceLastPoint > 8 && !gpsAutoPausedRef.current) {
-              gpsAutoPausedRef.current = true;
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
-              addLog("GPS: Auto-paused (no satellite activity).");
-            }
-          }
-
-          setRunState(prev => {
-            if (prev.status === 'paused') return prev;
-
-            const nextAutoPaused = gpsAutoPausedRef.current;
-            // Only increment active duration if not paused/auto-paused
-            const newDuration = nextAutoPaused ? prev.duration : prev.duration + 1;
-            const currentDistance = gpsDistanceRef.current;
-            const currentPath = gpsPathRef.current;
-            const currentSpeed = gpsSpeedRef.current;
-            const currentPace = gpsPaceRef.current;
-            const currentAccuracy = gpsAccuracyRef.current;
-
-            const avgSpeed = currentDistance > 0 ? (currentDistance * 3600) / newDuration : 0;
-            const avgPaceStr = calculatePaceStr(newDuration, currentDistance);
-            const caloriesEst = Math.round(currentDistance * 75 * 1.03);
-
-            return {
-              ...prev,
-              duration: newDuration,
-              path: currentPath,
-              distance: currentDistance,
-              speed: currentSpeed,
-              pace: currentPace,
-              gpsAccuracy: currentAccuracy,
-              isAutoPaused: nextAutoPaused,
-              avgSpeed: parseFloat(avgSpeed.toFixed(1)),
-              avgPace: avgPaceStr,
-              calories: caloriesEst
-            };
-          });
-        }, 1000);
-
-        lastPointTimeRef.current = Date.now();
         setIsSearchingGps(false);
 
-        // Now start watchPosition tracking pipeline
+        // Transition from ACQUIRING -> WAITING FOR MOVEMENT
+        setRunState(prev => ({
+          ...prev,
+          status: 'waiting',
+          gpsAccuracy: accuracy
+        }));
+
+        // Start 1-second Clock Timer
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = setInterval(() => {
+          totalSessionDurationRef.current += 1;
+          const currentStatus = runStateRef.current.status;
+
+          // Only increment activeMovingDuration when in active TRACKING phase
+          if (currentStatus === 'tracking' && !gpsAutoPausedRef.current) {
+            activeMovingDurationRef.current += 1;
+          }
+
+          const activeTime = activeMovingDurationRef.current;
+          const currentDistance = gpsDistanceRef.current;
+          const currentPath = gpsPathRef.current;
+          const currentSpeed = gpsSpeedRef.current;
+          const currentPace = gpsPaceRef.current;
+          const currentAccuracy = gpsAccuracyRef.current;
+
+          const avgSpeed = (currentDistance > 0 && activeTime > 0) ? (currentDistance * 3600) / activeTime : 0;
+          let avgPaceStr = '--:--';
+          if (currentDistance >= 0.02 && activeTime >= 5) {
+            const paceMinPerKm = (activeTime / 60) / currentDistance;
+            const pMin = Math.floor(paceMinPerKm);
+            const pSec = Math.round((paceMinPerKm - pMin) * 60);
+            if (pMin >= 2 && pMin <= 30) {
+              avgPaceStr = `${pMin}:${pSec.toString().padStart(2, '0')}`;
+            }
+          }
+          const caloriesEst = Math.round(currentDistance * 75 * 1.03);
+
+          setRunState(prev => ({
+            ...prev,
+            duration: totalSessionDurationRef.current,
+            path: currentPath,
+            distance: currentDistance,
+            speed: currentSpeed,
+            pace: currentPace,
+            gpsAccuracy: currentAccuracy,
+            isAutoPaused: currentStatus === 'paused',
+            avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+            avgPace: avgPaceStr,
+            calories: caloriesEst
+          }));
+        }, 1000);
+
+        // Start watchPosition pipeline
+        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
         const watchId = navigator.geolocation.watchPosition(
           (watchPos) => {
-            if (runStateRef.current.status === 'paused') return;
+            const wStatus = runStateRef.current.status;
+            if (wStatus === 'paused' && gpsAutoPausedRef.current === false) return; // User manually paused
 
             const wLat = watchPos.coords.latitude;
             const wLng = watchPos.coords.longitude;
             const wAccuracy = watchPos.coords.accuracy;
+            gpsAccuracyRef.current = wAccuracy;
 
-            // STAGE 1: GPS Signal & Accuracy Filter
+            // STAGE 1: Accuracy Filter
             if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
-              addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m). Discarding point.`);
-              gpsAccuracyRef.current = wAccuracy;
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
-              smoothedSpeedRef.current = 0;
+              addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m > 25m). Discarding point.`);
+              console.log(`[RUN ENGINE] Phase: ${wStatus.toUpperCase()} | Discarded poor accuracy: ${Math.round(wAccuracy)}m`);
               return;
             }
-            gpsAccuracyRef.current = wAccuracy;
 
             // STAGE 2: Territory Boundary Check
             const newPoint = [wLat, wLng];
             processTerritoryTransition(newPoint);
 
-            // STAGE 3: Time & Distance Window Accumulation
+            // STAGE 3: Settling Phase (First 4s or < 3 samples)
+            const elapsedSettlingSec = (Date.now() - settlingStartTimeRef.current) / 1000;
+            settlingSamplesCountRef.current += 1;
+
+            if (elapsedSettlingSec < RUN_ENGINE_CONFIG.SETTLING_DURATION_SEC || settlingSamplesCountRef.current < RUN_ENGINE_CONFIG.SETTLING_MIN_SAMPLES) {
+              gpsLastPointRef.current = newPoint;
+              if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+              if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              console.log(`[RUN ENGINE] Phase: SETTLING (${elapsedSettlingSec.toFixed(1)}s, ${settlingSamplesCountRef.current} samples) | Position updated | Speed: 0 | Dist: 0.000km`);
+              return;
+            }
+
+            // STAGE 4: Time & Distance Window Accumulation
             const nowTime = Date.now();
             if (lastPointTimeRef.current === null || !gpsLastPointRef.current) {
               lastPointTimeRef.current = nowTime;
@@ -1141,21 +1162,19 @@ export default function App() {
             }
 
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
-            if (dtSeconds <= 0) return; // ignore duplicate or backwards timestamp
+            if (dtSeconds <= 0) return;
 
             const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
-
             accumulatedDistanceRef.current += stepMeters;
             accumulatedDurationRef.current += dtSeconds;
             lastPointTimeRef.current = nowTime;
             gpsLastPointRef.current = newPoint;
 
-            // Wait for window to reach computation threshold (1.5s)
             if (accumulatedDurationRef.current < RUN_ENGINE_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
               return;
             }
 
-            // STAGE 4: Speed & Motion Processing
+            // STAGE 5: Shared Window Motion Evaluation
             const windowDistMeters = accumulatedDistanceRef.current;
             const windowTimeSec = accumulatedDurationRef.current;
             const rawSpeedMS = windowDistMeters / windowTimeSec;
@@ -1164,71 +1183,101 @@ export default function App() {
             accumulatedDistanceRef.current = 0;
             accumulatedDurationRef.current = 0;
 
-            // STAGE 5: Anti-Cheat Teleport Cutoff (> 12 m/s / 43.2 km/h)
+            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h)
             if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
               addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
-              smoothedSpeedRef.current = 0;
+              console.log(`[RUN ENGINE] Phase: ${wStatus.toUpperCase()} | Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h`);
               return;
             }
 
-            // STAGE 6: Stationary Evaluation & Auto-Pause Management
-            const isStationary = rawSpeedMS < RUN_ENGINE_CONFIG.DRIFT_SPEED_THRESHOLD 
-              || windowDistMeters < RUN_ENGINE_CONFIG.STATIONARY_WINDOW_DIST_METERS;
+            // Candidate Motion Check
+            const isCandidateMoving = (rawSpeedMS >= RUN_ENGINE_CONFIG.RESUME_SPEED_THRESHOLD)
+              && (windowDistMeters >= RUN_ENGINE_CONFIG.STATIONARY_DISPLACEMENT_MIN)
+              && (wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD);
 
-            if (isStationary) {
-              smoothedSpeedRef.current = 0;
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
+            const currStatus = runStateRef.current.status;
 
-              lowSpeedDurationRef.current += windowTimeSec;
-              if (lowSpeedDurationRef.current >= RUN_ENGINE_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
-                gpsAutoPausedRef.current = true;
-                addLog("GPS: Auto-paused (runner stopped).");
-              }
-            } else {
-              // Active Movement
-              lowSpeedDurationRef.current = 0;
-              if (gpsAutoPausedRef.current && rawSpeedMS >= RUN_ENGINE_CONFIG.AUTO_RESUME_SPEED) {
-                gpsAutoPausedRef.current = false;
-                addLog("GPS: Auto-resumed (runner restarted).");
-              }
+            // STAGE 6: State Machine & Hysteresis Transitions
+            if (currStatus === 'waiting' || currStatus === 'paused') {
+              if (isCandidateMoving) {
+                consecutiveMovingWindowsRef.current += 1;
+                consecutiveStationaryWindowsRef.current = 0;
 
-              // STAGE 7: Speed Smoothing & Pace Derivation
-              const filterAlpha = RUN_ENGINE_CONFIG.EMA_SMOOTHING_ALPHA;
-              smoothedSpeedRef.current = smoothedSpeedRef.current === 0
-                ? rawSpeedMS
-                : (filterAlpha * rawSpeedMS + (1 - filterAlpha) * smoothedSpeedRef.current);
+                if (consecutiveMovingWindowsRef.current >= RUN_ENGINE_CONFIG.REQUIRED_MOVING_WINDOWS) {
+                  // TRANSITION ➔ TRACKING
+                  gpsAutoPausedRef.current = false;
+                  smoothedSpeedRef.current = rawSpeedMS;
+                  const speedKmH = parseFloat((rawSpeedMS * 3.6).toFixed(1));
+                  gpsSpeedRef.current = speedKmH;
+                  gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
 
-              const currentSpeedKmH = smoothedSpeedRef.current * 3.6;
+                  const distIncKm = windowDistMeters / 1000;
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+                  gpsPathRef.current.push(newPoint);
+                  updateMapDisplay(newPoint);
 
-              if (currentSpeedKmH >= RUN_ENGINE_CONFIG.MIN_VALID_SPEED_KMH && !gpsAutoPausedRef.current) {
-                // Valid movement!
-                gpsSpeedRef.current = parseFloat(currentSpeedKmH.toFixed(1));
-                gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
+                  setRunState(prev => ({
+                    ...prev,
+                    status: 'tracking',
+                    isAutoPaused: false
+                  }));
 
-                // Commit distance in KM exactly once
-                const distanceIncKm = windowDistMeters / 1000;
-                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distanceIncKm).toFixed(3));
-                gpsPathRef.current.push(newPoint);
-
-                // STAGE 8: Real-Time Leaflet & Map Renderer Sync
-                updateMapDisplay(newPoint);
-
-                // STAGE 9: Loop Intersection & Territory Conquest Check
-                if (gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS 
-                    && gpsDistanceRef.current > RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM) {
-                  const intersectIdx = checkPathSelfIntersection(gpsPathRef.current);
-                  if (intersectIdx !== null) {
-                    setTimeout(() => {
-                      finishRealRun(gpsPathRef.current.slice(intersectIdx));
-                    }, 200);
-                  }
+                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} -> TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${speedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
+                  addLog(`GPS: Motion confirmed. Tracking resumed at ${speedKmH} km/h.`);
+                } else {
+                  gpsSpeedRef.current = 0;
+                  gpsPaceRef.current = '--:--';
+                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Validating motion (Window 1/2) | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h`);
                 }
               } else {
+                consecutiveMovingWindowsRef.current = 0;
+                consecutiveStationaryWindowsRef.current += 1;
                 gpsSpeedRef.current = 0;
                 gpsPaceRef.current = '--:--';
+                console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Stationary | Dist: ${windowDistMeters.toFixed(2)}m | Acc: ${Math.round(wAccuracy)}m | Speed: 0`);
+              }
+            } else if (currStatus === 'tracking') {
+              if (isCandidateMoving) {
+                consecutiveMovingWindowsRef.current += 1;
+                consecutiveStationaryWindowsRef.current = 0;
+                lowSpeedDurationRef.current = 0;
+
+                const alpha = RUN_ENGINE_CONFIG.EMA_SMOOTHING_ALPHA;
+                smoothedSpeedRef.current = (alpha * rawSpeedMS) + ((1 - alpha) * smoothedSpeedRef.current);
+                const currentSpeedKmH = parseFloat((smoothedSpeedRef.current * 3.6).toFixed(1));
+
+                if (currentSpeedKmH >= 2.5) {
+                  gpsSpeedRef.current = currentSpeedKmH;
+                  gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
+
+                  const distIncKm = windowDistMeters / 1000;
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+                  gpsPathRef.current.push(newPoint);
+                  updateMapDisplay(newPoint);
+
+                  console.log(`[RUN ENGINE] Phase: TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${currentSpeedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
+                } else {
+                  gpsSpeedRef.current = 0;
+                  gpsPaceRef.current = '--:--';
+                }
+              } else {
+                // Stationary in tracking
+                consecutiveStationaryWindowsRef.current += 1;
+                consecutiveMovingWindowsRef.current = 0;
+                lowSpeedDurationRef.current += windowTimeSec;
+
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+
+                if (lowSpeedDurationRef.current >= RUN_ENGINE_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
+                  gpsAutoPausedRef.current = true;
+                  smoothedSpeedRef.current = 0;
+                  setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
+                  addLog("GPS: Auto-paused (runner stopped).");
+                  console.log(`[RUN ENGINE] Phase: TRACKING -> AUTO_PAUSED | Stationary for ${lowSpeedDurationRef.current.toFixed(1)}s`);
+                } else {
+                  console.log(`[RUN ENGINE] Phase: TRACKING | Low speed window (${lowSpeedDurationRef.current.toFixed(1)}s / 4s) | Dist: ${windowDistMeters.toFixed(2)}m`);
+                }
               }
             }
           },
@@ -1243,6 +1292,7 @@ export default function App() {
       },
       (error) => {
         setIsSearchingGps(false);
+        setRunState(prev => ({ ...prev, status: 'idle' }));
         console.error("GPS Initial Error", error);
         setToastMessage(`GPS Signal Acquisition Failed: ${error.message}`);
         setTimeout(() => setToastMessage(null), 5000);
@@ -1291,6 +1341,24 @@ export default function App() {
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+    // Reset tracking refs
+    gpsPathRef.current = [];
+    gpsDistanceRef.current = 0;
+    gpsSpeedRef.current = 0;
+    gpsPaceRef.current = '--:--';
+    gpsAccuracyRef.current = null;
+    gpsAutoPausedRef.current = false;
+    gpsLastPointRef.current = null;
+    smoothedSpeedRef.current = 0;
+    accumulatedDistanceRef.current = 0;
+    accumulatedDurationRef.current = 0;
+    settlingStartTimeRef.current = null;
+    settlingSamplesCountRef.current = 0;
+    consecutiveMovingWindowsRef.current = 0;
+    consecutiveStationaryWindowsRef.current = 0;
+    activeMovingDurationRef.current = 0;
+    totalSessionDurationRef.current = 0;
 
     setRunState({
       status: 'idle',
@@ -1406,7 +1474,7 @@ export default function App() {
 
     const sectorName = trackingMode === 'gps' 
       ? `Sector_${Math.floor(100 + Math.random() * 900)}` 
-      : SIMULATION_ROUTES[simulationRouteKey].name;
+      : (SIMULATION_ROUTES[simulationRouteKey]?.name || 'Simulated Sector');
 
     addLog(`System: Submitting territory '${sectorName}' to cloud...`);
 
@@ -1839,7 +1907,7 @@ export default function App() {
                   value={authPassword} 
                   onChange={e => setAuthPassword(e.target.value)}
                   required={authMode !== 'guest'}
-                  placeholder={authMode === 'guest' ? 'e.g. Lakshya' : '••••••••'}
+                  placeholder={authMode === 'guest' ? 'e.g. Runner' : '••••••••'}
                   className="cyber-input cyber-input-with-icon focus-ring"
                 />
               </div>
@@ -1853,7 +1921,7 @@ export default function App() {
                   value={authName} 
                   onChange={e => setAuthName(e.target.value)}
                   required
-                  placeholder="e.g. Lakshya"
+                  placeholder="e.g. Runner"
                   className="cyber-input focus-ring"
                 />
               </div>
@@ -4061,7 +4129,7 @@ export default function App() {
               )}
 
               {/* COMPACT TOP HUD */}
-              {(runState.status === 'tracking' || runState.status === 'paused') && (
+              {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
                 <div 
                   className="clash-glass-panel animate-fade-in-down"
                   style={{
@@ -4107,12 +4175,12 @@ export default function App() {
                       width: '6px',
                       height: '6px',
                       borderRadius: '50%',
-                      background: '#FC4C02',
+                      background: runState.status === 'paused' ? '#FBBF24' : '#FC4C02',
                       display: 'inline-block',
                       animation: 'pulse 1.2s infinite'
                     }}></span>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', letterSpacing: '0.5px' }}>
-                      LIVE REC
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: runState.status === 'paused' ? '#FBBF24' : '#FC4C02', letterSpacing: '0.5px' }}>
+                      {runState.status === 'acquiring' ? 'ACQUIRING GPS' : runState.status === 'waiting' ? 'WAITING MOVEMENT' : runState.status === 'paused' ? 'AUTO-PAUSED' : 'LIVE REC'}
                     </span>
                   </div>
 
@@ -4345,7 +4413,7 @@ export default function App() {
               )}
 
               {/* MULTI-STAGE BOTTOM HUD */}
-              {(runState.status === 'tracking' || runState.status === 'paused') && (
+              {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
                 <div 
                   className="clash-bottom-sheet"
                   style={{
@@ -4365,7 +4433,7 @@ export default function App() {
                       if (bottomHudState === 'medium') baseHeight = 155;
                       else if (bottomHudState === 'expanded') baseHeight = 310;
                       
-                      if (runState.distance === 0) {
+                      if (runState.distance === 0 || ['acquiring', 'waiting', 'paused'].includes(runState.status)) {
                         return `${baseHeight + 35}px`;
                       }
                       return `${baseHeight}px`;
@@ -4405,23 +4473,23 @@ export default function App() {
                     }}
                   />
 
-                  {runState.distance === 0 && (
+                  {(['acquiring', 'waiting', 'paused'].includes(runState.status) || runState.distance === 0) && (
                     <div style={{ 
                       display: 'flex', 
                       alignItems: 'center', 
                       justifyContent: 'center', 
                       gap: '8px', 
                       padding: '6px 12px', 
-                      background: 'rgba(252, 76, 2, 0.08)', 
+                      background: runState.status === 'paused' ? 'rgba(251, 191, 36, 0.08)' : 'rgba(252, 76, 2, 0.08)', 
                       borderRadius: '12px', 
-                      border: '1px solid rgba(252, 76, 2, 0.15)',
+                      border: runState.status === 'paused' ? '1px solid rgba(251, 191, 36, 0.2)' : '1px solid rgba(252, 76, 2, 0.15)',
                       marginBottom: '10px',
                       width: '100%',
                       boxSizing: 'border-box'
                     }}>
-                      <Radio size={12} className="gps-pulse" style={{ color: '#FC4C02' }} />
-                      <span style={{ fontSize: '10px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Waiting for movement...
+                      <Radio size={12} className="gps-pulse" style={{ color: runState.status === 'paused' ? '#FBBF24' : '#FC4C02' }} />
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: runState.status === 'paused' ? '#FBBF24' : 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {runState.status === 'acquiring' ? 'Acquiring GPS satellites...' : runState.status === 'waiting' ? 'Waiting for movement...' : runState.status === 'paused' ? 'Auto-paused (runner stopped)' : 'Waiting for movement...'}
                       </span>
                     </div>
                   )}

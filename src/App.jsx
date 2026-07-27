@@ -170,7 +170,8 @@ export default function App() {
     avgSpeed: 0,
     avgPace: '--:--',
     calories: 0,
-    isAutoPaused: false
+    isAutoPaused: false,
+    manualPaused: false
   });
 
   const [completedRunData, setCompletedRunData] = useState(null);
@@ -484,9 +485,8 @@ export default function App() {
   }, [currentUser]);
   
   const runStateRef = useRef(runState);
-  useEffect(() => {
-    runStateRef.current = runState;
-  }, [runState]);
+  runStateRef.current = runState;
+  const manualPausedRef = useRef(false);
 
   const wakeLockRef = useRef(null);
 
@@ -515,6 +515,7 @@ export default function App() {
   // Settling Phase & Hysteresis State Machine References
   const settlingStartTimeRef = useRef(null);
   const settlingSamplesCountRef = useRef(0);
+  const lastRunStartInteractionRef = useRef(0);
   const consecutiveMovingWindowsRef = useRef(0);
   const consecutiveStationaryWindowsRef = useRef(0);
   const activeMovingDurationRef = useRef(0);
@@ -857,23 +858,50 @@ export default function App() {
     }
   };
 
-  const togglePauseResume = () => {
+  const togglePauseResume = (e) => {
+    if (e) {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+
+    console.trace("[MANUAL TOGGLE INVOKED]", {
+      status: runStateRef.current.status,
+      manualPaused: manualPausedRef.current || runStateRef.current.manualPaused,
+      timestamp: Date.now()
+    });
+
+    const timeSinceStart = Date.now() - lastRunStartInteractionRef.current;
+    if (timeSinceStart < 900) {
+      console.warn(`[TOGGLE PAUSE RESUME] Ignored accidental invocation within ${timeSinceStart}ms of Start Run.`);
+      return;
+    }
+
     setRunState(prev => {
-      if (prev.status === 'tracking') {
+      if (prev.manualPaused || manualPausedRef.current) {
+        manualPausedRef.current = false;
+        gpsAutoPausedRef.current = false;
+        addLog("System: Run resumed manually.");
+        console.log(`[RUN ENGINE] Phase: ${prev.status.toUpperCase()} -> RESUMED (Manually Resumed)`);
+        return {
+          ...prev,
+          status: consecutiveMovingWindowsRef.current >= 2 ? 'tracking' : 'waiting',
+          isAutoPaused: false,
+          manualPaused: false
+        };
+      } else {
+        manualPausedRef.current = true;
         gpsAutoPausedRef.current = false;
         gpsSpeedRef.current = 0;
         gpsPaceRef.current = '--:--';
         addLog("System: Run paused manually.");
-        console.log(`[RUN ENGINE] Phase: TRACKING -> PAUSED (Manually Paused)`);
-        return { ...prev, status: 'paused', isAutoPaused: false };
-      } else if (prev.status === 'paused' || prev.status === 'waiting') {
-        gpsAutoPausedRef.current = false;
-        consecutiveMovingWindowsRef.current = 2; // Immediate manual resume confirmation
-        addLog("System: Run resumed manually.");
-        console.log(`[RUN ENGINE] Phase: ${prev.status.toUpperCase()} -> TRACKING (Manually Resumed)`);
-        return { ...prev, status: 'tracking', isAutoPaused: false };
+        console.log(`[RUN ENGINE] Phase: ${prev.status.toUpperCase()} -> PAUSED (Manually Paused)`);
+        return {
+          ...prev,
+          status: 'paused',
+          isAutoPaused: false,
+          manualPaused: true
+        };
       }
-      return prev;
     });
   };
 
@@ -960,7 +988,13 @@ export default function App() {
     }
   };
 
-  const startTracking = () => {
+  const startTracking = (e) => {
+    if (e) {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    }
+    lastRunStartInteractionRef.current = Date.now();
+
     if (runState.status !== 'idle' && runState.status !== 'finished') return;
 
     requestWakeLock();
@@ -968,6 +1002,7 @@ export default function App() {
     // Reset timing reference timestamps
     startTimeRef.current = new Date();
     endTimeRef.current = null;
+    manualPausedRef.current = false;
     lowSpeedDurationRef.current = 0;
     settlingStartTimeRef.current = Date.now();
     settlingSamplesCountRef.current = 0;
@@ -1032,7 +1067,8 @@ export default function App() {
       avgSpeed: 0,
       avgPace: '--:--',
       calories: 0,
-      isAutoPaused: false
+      isAutoPaused: false,
+      manualPaused: false
     });
 
     navigator.geolocation.getCurrentPosition(
@@ -1074,7 +1110,23 @@ export default function App() {
         // Start 1-second Clock Timer
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         timerIntervalRef.current = setInterval(() => {
+          const isPausedNow = manualPausedRef.current || runStateRef.current.manualPaused;
+          const durationBefore = runStateRef.current.duration;
+          const totalBefore = totalSessionDurationRef.current;
+
+          if (isPausedNow) {
+            console.log('[TIMER DIAGNOSTIC]', {
+              manualPaused: true,
+              'duration before': durationBefore,
+              'duration after': durationBefore,
+              'totalSessionDurationRef before': totalBefore,
+              'totalSessionDurationRef after': totalBefore
+            });
+            return;
+          }
+
           totalSessionDurationRef.current += 1;
+          const totalAfter = totalSessionDurationRef.current;
           const currentStatus = runStateRef.current.status;
 
           // Only increment activeMovingDuration when in active TRACKING phase
@@ -1109,19 +1161,27 @@ export default function App() {
             speed: currentSpeed,
             pace: currentPace,
             gpsAccuracy: currentAccuracy,
-            isAutoPaused: currentStatus === 'paused',
+            isAutoPaused: currentStatus === 'paused' && !prev.manualPaused,
             avgSpeed: parseFloat(avgSpeed.toFixed(1)),
             avgPace: avgPaceStr,
             calories: caloriesEst
           }));
+
+          console.log('[TIMER DIAGNOSTIC]', {
+            manualPaused: false,
+            'duration before': durationBefore,
+            'duration after': totalAfter,
+            'totalSessionDurationRef before': totalBefore,
+            'totalSessionDurationRef after': totalAfter
+          });
         }, 1000);
 
         // Start watchPosition pipeline
         if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
         const watchId = navigator.geolocation.watchPosition(
           (watchPos) => {
-            const wStatus = runStateRef.current.status;
-            if (wStatus === 'paused' && gpsAutoPausedRef.current === false) return; // User manually paused
+            console.log(`[WATCH POSITION GUARD] Checking runStateRef.current.manualPaused: ${runStateRef.current.manualPaused}, status: ${runStateRef.current.status}`);
+            if (runStateRef.current.manualPaused) return; // User manually paused
 
             const wLat = watchPos.coords.latitude;
             const wLng = watchPos.coords.longitude;
@@ -1371,7 +1431,8 @@ export default function App() {
       avgSpeed: 0,
       avgPace: '--:--',
       calories: 0,
-      isAutoPaused: false
+      isAutoPaused: false,
+      manualPaused: false
     });
     addLog(`System: Run tracking halted. Reason: ${reason}`);
   };
@@ -4107,7 +4168,7 @@ export default function App() {
 
                   <button 
                     disabled={!isGpsReady}
-                    onClick={startTracking}
+                    onClick={(e) => startTracking(e)}
                     className="clash-btn-primary clash-btn-press"
                     style={{ 
                       width: '100%', 
@@ -4179,8 +4240,8 @@ export default function App() {
                       display: 'inline-block',
                       animation: 'pulse 1.2s infinite'
                     }}></span>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: runState.status === 'paused' ? '#FBBF24' : '#FC4C02', letterSpacing: '0.5px' }}>
-                      {runState.status === 'acquiring' ? 'ACQUIRING GPS' : runState.status === 'waiting' ? 'WAITING MOVEMENT' : runState.status === 'paused' ? 'AUTO-PAUSED' : 'LIVE REC'}
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : '#FC4C02', letterSpacing: '0.5px' }}>
+                      {runState.manualPaused ? 'MANUALLY PAUSED' : runState.status === 'acquiring' ? 'ACQUIRING GPS' : runState.status === 'waiting' ? 'WAITING MOVEMENT' : runState.status === 'paused' ? 'AUTO-PAUSED' : 'LIVE REC'}
                     </span>
                   </div>
 
@@ -4473,23 +4534,23 @@ export default function App() {
                     }}
                   />
 
-                  {(['acquiring', 'waiting', 'paused'].includes(runState.status) || runState.distance === 0) && (
+                  {(runState.manualPaused || ['acquiring', 'waiting', 'paused'].includes(runState.status) || runState.distance === 0) && (
                     <div style={{ 
                       display: 'flex', 
                       alignItems: 'center', 
                       justifyContent: 'center', 
                       gap: '8px', 
                       padding: '6px 12px', 
-                      background: runState.status === 'paused' ? 'rgba(251, 191, 36, 0.08)' : 'rgba(252, 76, 2, 0.08)', 
+                      background: (runState.manualPaused || runState.status === 'paused') ? 'rgba(251, 191, 36, 0.08)' : 'rgba(252, 76, 2, 0.08)', 
                       borderRadius: '12px', 
-                      border: runState.status === 'paused' ? '1px solid rgba(251, 191, 36, 0.2)' : '1px solid rgba(252, 76, 2, 0.15)',
+                      border: (runState.manualPaused || runState.status === 'paused') ? '1px solid rgba(251, 191, 36, 0.2)' : '1px solid rgba(252, 76, 2, 0.15)',
                       marginBottom: '10px',
                       width: '100%',
                       boxSizing: 'border-box'
                     }}>
-                      <Radio size={12} className="gps-pulse" style={{ color: runState.status === 'paused' ? '#FBBF24' : '#FC4C02' }} />
-                      <span style={{ fontSize: '10px', fontWeight: '800', color: runState.status === 'paused' ? '#FBBF24' : 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        {runState.status === 'acquiring' ? 'Acquiring GPS satellites...' : runState.status === 'waiting' ? 'Waiting for movement...' : runState.status === 'paused' ? 'Auto-paused (runner stopped)' : 'Waiting for movement...'}
+                      <Radio size={12} className="gps-pulse" style={{ color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : '#FC4C02' }} />
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        {runState.manualPaused ? 'Run paused manually' : runState.status === 'acquiring' ? 'Acquiring GPS satellites...' : runState.status === 'waiting' ? 'Waiting for movement...' : runState.status === 'paused' ? 'Auto-paused (runner stopped)' : 'Waiting for movement...'}
                       </span>
                     </div>
                   )}
@@ -4540,11 +4601,11 @@ export default function App() {
 
                       <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                         <button 
-                          onClick={togglePauseResume}
+                          onClick={(e) => togglePauseResume(e)}
                           className="clash-btn-secondary"
                           style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
                         >
-                          {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                          {runState.manualPaused ? 'Resume' : 'Pause'}
                         </button>
                         <button 
                           onClick={() => stopTracking("Explicit User Request")}
@@ -4611,11 +4672,11 @@ export default function App() {
 
                       <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px' }}>
                         <button 
-                          onClick={togglePauseResume}
+                          onClick={(e) => togglePauseResume(e)}
                           className="clash-btn-secondary"
                           style={{ height: '40px', flex: 1, borderRadius: '20px', fontSize: '11px', border: '1px solid #2A2A2A', fontWeight: '800' }}
                         >
-                          {runState.status === 'tracking' ? 'Pause' : 'Resume'}
+                          {runState.manualPaused ? 'Resume' : 'Pause'}
                         </button>
                         <button 
                           onClick={() => stopTracking("Explicit User Request")}

@@ -122,6 +122,7 @@ const RUN_ENGINE_CONFIG = {
   MIN_LOOP_POINTS: 5,                  // minimum coordinates required before self-intersection check
   MIN_LOOP_DISTANCE_KM: 0.05,          // minimum cumulative distance (km) required for valid loop
   MIN_LOOP_AREA_SQM: 200,              // minimum enclosed area (m²) required for sector capture
+  LOOP_CLOSURE_DISTANCE_METERS: 25.0,  // maximum distance (m) between end and start point for loop closure
 
   // Anti-Cheat Engine Thresholds
   MAX_INSTANT_SPEED_MS: 12.0,          // m/s (43.2 km/h) instant teleport jump cutoff
@@ -515,6 +516,7 @@ export default function App() {
   // Settling Phase & Hysteresis State Machine References
   const settlingStartTimeRef = useRef(null);
   const settlingSamplesCountRef = useRef(0);
+  const stableBaselinePointRef = useRef(null);
   const lastRunStartInteractionRef = useRef(0);
   const consecutiveMovingWindowsRef = useRef(0);
   const consecutiveStationaryWindowsRef = useRef(0);
@@ -1003,6 +1005,7 @@ export default function App() {
     startTimeRef.current = new Date();
     endTimeRef.current = null;
     manualPausedRef.current = false;
+    stableBaselinePointRef.current = null;
     lowSpeedDurationRef.current = 0;
     settlingStartTimeRef.current = Date.now();
     settlingSamplesCountRef.current = 0;
@@ -1093,6 +1096,7 @@ export default function App() {
 
         // Set baseline position (ADDS EXACTLY 0 METERS & 0 PATH POINTS)
         gpsLastPointRef.current = [lat, lng];
+        stableBaselinePointRef.current = [lat, lng];
         gpsAccuracyRef.current = accuracy;
         lastPointTimeRef.current = Date.now();
         settlingStartTimeRef.current = Date.now();
@@ -1272,7 +1276,9 @@ export default function App() {
                   gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
 
                   const distIncKm = windowDistMeters / 1000;
-                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+                  if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
+                    gpsPathRef.current.push(stableBaselinePointRef.current);
+                  }
                   gpsPathRef.current.push(newPoint);
                   updateMapDisplay(newPoint);
 
@@ -1311,7 +1317,9 @@ export default function App() {
                   gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
 
                   const distIncKm = windowDistMeters / 1000;
-                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+                  if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
+                    gpsPathRef.current.push(stableBaselinePointRef.current);
+                  }
                   gpsPathRef.current.push(newPoint);
                   updateMapDisplay(newPoint);
 
@@ -1359,6 +1367,140 @@ export default function App() {
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
+  };
+
+  // Helper to check 2D line segment intersection
+  const doSegmentsIntersect = (p1, q1, p2, q2) => {
+    const orientation = (p, q, r) => {
+      const val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]);
+      if (Math.abs(val) < 1e-9) return 0;
+      return val > 0 ? 1 : 2;
+    };
+    const o1 = orientation(p1, q1, p2);
+    const o2 = orientation(p1, q1, q2);
+    const o3 = orientation(p2, q2, p1);
+    const o4 = orientation(p2, q2, q1);
+    if (o1 !== o2 && o3 !== o4) return true;
+    return false;
+  };
+
+  const hasSelfIntersection = (path) => {
+    if (!path || path.length < 4) return false;
+    const n = path.length;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 2; j < n - 1; j++) {
+        if (i === 0 && j === n - 2) continue;
+        if (doSegmentsIntersect(path[i], path[i + 1], path[j], path[j + 1])) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const validateLoopRoute = (path, distanceKm) => {
+    const minPoints = RUN_ENGINE_CONFIG.MIN_LOOP_POINTS || 5;
+    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM || 0.05;
+    const minAreaSqm = RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM || 200;
+    const closureThreshold = RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS || 25.0;
+
+    const diag = {
+      pathPointCount: path ? path.length : 0,
+      totalDistanceKm: distanceKm || 0,
+      firstPoint: (path && path.length > 0) ? path[0] : null,
+      lastPoint: (path && path.length > 0) ? path[path.length - 1] : null,
+      distanceFromEndToStartMeters: 0,
+      closureThresholdMeters: closureThreshold,
+      selfIntersectionDetected: false,
+      minimumPointsPassed: false,
+      minimumDistancePassed: false,
+      polygonAreaSqm: 0,
+      minimumAreaSqm: minAreaSqm,
+      coordinatesClosed: false,
+      validationFailureReason: null
+    };
+
+    if (!path || path.length < minPoints) {
+      diag.validationFailureReason = `Insufficient points: ${path ? path.length : 0} recorded (minimum ${minPoints} required).`;
+      return { valid: false, diagnostic: diag };
+    }
+
+    diag.minimumPointsPassed = true;
+
+    if (distanceKm < minDistanceKm) {
+      diag.validationFailureReason = `Route distance too short: ${distanceKm.toFixed(2)} km (minimum ${minDistanceKm} km required).`;
+      return { valid: false, diagnostic: diag };
+    }
+
+    diag.minimumDistancePassed = true;
+
+    const firstP = path[0];
+    const lastP = path[path.length - 1];
+    const distEndToStart = getDistanceInMeters(lastP[0], lastP[1], firstP[0], firstP[1]);
+    diag.distanceFromEndToStartMeters = parseFloat(distEndToStart.toFixed(1));
+
+    const selfIntersected = hasSelfIntersection(path);
+    diag.selfIntersectionDetected = selfIntersected;
+
+    const isClosed = distEndToStart <= closureThreshold || selfIntersected;
+
+    if (!isClosed) {
+      diag.validationFailureReason = `Loop not closed — finish within ${closureThreshold}m of your starting point (currently ${distEndToStart.toFixed(1)}m away).`;
+      return { valid: false, diagnostic: diag };
+    }
+
+    // Append first coordinate to end of polygon exactly once before area calculation and database insertion
+    const closedCoords = [...path, firstP];
+    diag.coordinatesClosed = true;
+
+    const areaSqM = calculatePolygonArea(closedCoords);
+    diag.polygonAreaSqm = areaSqM;
+
+    if (areaSqM < minAreaSqm) {
+      diag.validationFailureReason = `Territory area too small: ${areaSqM.toLocaleString()} m² (minimum ${minAreaSqm} m² required).`;
+      return { valid: false, diagnostic: diag };
+    }
+
+    return { valid: true, diagnostic: diag, closedCoords };
+  };
+
+  const handleStopAndClaim = async () => {
+    const currentPath = (gpsPathRef.current && gpsPathRef.current.length > 0)
+      ? gpsPathRef.current
+      : (runState.path && runState.path.length > 0 ? runState.path : []);
+    const currentDistance = gpsDistanceRef.current || runState.distance || 0;
+
+    const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
+
+    // Structured Log Diagnostic (PART 2)
+    console.log('[CLAIM DIAGNOSTIC]', {
+      pathPointCount: diagnostic.pathPointCount,
+      totalDistanceKm: diagnostic.totalDistanceKm,
+      firstPoint: diagnostic.firstPoint,
+      lastPoint: diagnostic.lastPoint,
+      distanceFromEndToStartMeters: diagnostic.distanceFromEndToStartMeters,
+      closureThresholdMeters: diagnostic.closureThresholdMeters,
+      selfIntersectionDetected: diagnostic.selfIntersectionDetected,
+      minimumPointsPassed: diagnostic.minimumPointsPassed,
+      minimumDistancePassed: diagnostic.minimumDistancePassed,
+      polygonAreaSqm: diagnostic.polygonAreaSqm,
+      minimumAreaSqm: diagnostic.minimumAreaSqm,
+      coordinatesClosed: diagnostic.coordinatesClosed,
+      validationFailureReason: diagnostic.validationFailureReason,
+      supabaseInsertAttempted: false,
+      supabaseInsertResult: null,
+      supabaseError: null
+    });
+
+    if (!valid) {
+      addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
+      setToastMessage(diagnostic.validationFailureReason);
+      setTimeout(() => setToastMessage(null), 5000);
+      stopTracking(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
+      return;
+    }
+
+    await finishRealRun(closedCoords, diagnostic);
   };
 
   const stopTracking = (reason = "Explicit User Request") => {
@@ -1452,20 +1594,9 @@ export default function App() {
     }
   };
 
-  const finishRealRun = async (loopCoordinates) => {
-    const areaSqM = calculatePolygonArea(loopCoordinates);
+  const finishRealRun = async (loopCoordinates, claimDiagnostic = {}) => {
+    const areaSqM = claimDiagnostic.polygonAreaSqm || calculatePolygonArea(loopCoordinates);
     const formattedArea = `${areaSqM.toLocaleString()} m²`;
-
-    if (areaSqM < 200) {
-      addLog(`GeoCalc: Loop area is too small (${formattedArea} < 200 m²). Territory not recorded.`);
-      const now = Date.now();
-      if (now - lastLoopWarningTimeRef.current > 20000) {
-        lastLoopWarningTimeRef.current = now;
-        setToastMessage("Loop too small. Continue running to create a larger loop.");
-        setTimeout(() => setToastMessage(null), 4000);
-      }
-      return;
-    }
 
     if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     if (simIntervalRef.current) {
@@ -1570,9 +1701,39 @@ export default function App() {
     await saveCompletedRun(runSummary);
     addLog(`System: Run history successfully saved.`);
 
-    // Save to Database (Firestore / LocalStorage)
-    await saveNewTerritory(newTerritory);
-    addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
+    // Save to Database (Supabase / LocalStorage)
+    const supabaseAttempted = isFirebaseActive() && currentUser && !currentUser.uid.startsWith('local_');
+    let supabaseResult = null;
+    let supabaseErr = null;
+
+    try {
+      const res = await saveNewTerritory(newTerritory);
+      if (res && res.error) {
+        supabaseErr = res.error.message || JSON.stringify(res.error);
+        supabaseResult = 'error';
+      } else {
+        supabaseResult = 'success';
+      }
+    } catch (err) {
+      supabaseErr = err.message;
+      supabaseResult = 'error';
+    }
+
+    // Print full structured CLAIM DIAGNOSTIC (PART 2)
+    console.log('[CLAIM DIAGNOSTIC]', {
+      ...claimDiagnostic,
+      supabaseInsertAttempted: supabaseAttempted,
+      supabaseInsertResult: supabaseResult,
+      supabaseError: supabaseErr
+    });
+
+    if (supabaseErr) {
+      addLog(`System: Supabase territory registration failed: ${supabaseErr}`);
+      setToastMessage(`Backend Error: ${supabaseErr}`);
+      setTimeout(() => setToastMessage(null), 5000);
+    } else {
+      addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
+    }
 
     // Reward Stats
     const coinReward = Math.ceil(areaSqM / 100) + 20;
@@ -4608,7 +4769,7 @@ export default function App() {
                           {runState.manualPaused ? 'Resume' : 'Pause'}
                         </button>
                         <button 
-                          onClick={() => stopTracking("Explicit User Request")}
+                          onClick={handleStopAndClaim}
                           className="clash-btn-primary"
                           style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
                         >
@@ -4679,7 +4840,7 @@ export default function App() {
                           {runState.manualPaused ? 'Resume' : 'Pause'}
                         </button>
                         <button 
-                          onClick={() => stopTracking("Explicit User Request")}
+                          onClick={handleStopAndClaim}
                           className="clash-btn-primary"
                           style={{ height: '40px', flex: 1.2, borderRadius: '20px', fontSize: '11px', fontWeight: '800' }}
                         >

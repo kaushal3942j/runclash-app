@@ -530,13 +530,14 @@ export const saveNewTerritory = async (territory) => {
       expires_at: expiresAt.toISOString()
     };
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('territories')
       .insert(dbTerr);
 
     console.log(`[SUPABASE]\noperation: INSERT\ntable: territories\nuser: ${territory.ownerId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
 
     if (error) console.error("RunClash: Supabase error inserting territory", error);
+    return { success: !error, error, data };
   } else {
     const list = getMockTerritories();
     const newTerr = {
@@ -549,6 +550,7 @@ export const saveNewTerritory = async (territory) => {
     if (activeLoadTerritories) {
       activeLoadTerritories();
     }
+    return { success: true, local: true, data: newTerr };
   }
 };
 

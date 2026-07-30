@@ -1464,43 +1464,64 @@ export default function App() {
     return { valid: true, diagnostic: diag, closedCoords };
   };
 
-  const handleStopAndClaim = async () => {
-    const currentPath = (gpsPathRef.current && gpsPathRef.current.length > 0)
-      ? gpsPathRef.current
-      : (runState.path && runState.path.length > 0 ? runState.path : []);
-    const currentDistance = gpsDistanceRef.current || runState.distance || 0;
-
-    const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
-
-    // Structured Log Diagnostic (PART 2)
-    console.log('[CLAIM DIAGNOSTIC]', {
-      pathPointCount: diagnostic.pathPointCount,
-      totalDistanceKm: diagnostic.totalDistanceKm,
-      firstPoint: diagnostic.firstPoint,
-      lastPoint: diagnostic.lastPoint,
-      distanceFromEndToStartMeters: diagnostic.distanceFromEndToStartMeters,
-      closureThresholdMeters: diagnostic.closureThresholdMeters,
-      selfIntersectionDetected: diagnostic.selfIntersectionDetected,
-      minimumPointsPassed: diagnostic.minimumPointsPassed,
-      minimumDistancePassed: diagnostic.minimumDistancePassed,
-      polygonAreaSqm: diagnostic.polygonAreaSqm,
-      minimumAreaSqm: diagnostic.minimumAreaSqm,
-      coordinatesClosed: diagnostic.coordinatesClosed,
-      validationFailureReason: diagnostic.validationFailureReason,
-      supabaseInsertAttempted: false,
-      supabaseInsertResult: null,
-      supabaseError: null
-    });
-
-    if (!valid) {
-      addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
-      setToastMessage(diagnostic.validationFailureReason);
-      setTimeout(() => setToastMessage(null), 5000);
-      stopTracking(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
-      return;
+  const handleStopAndClaim = async (e) => {
+    if (e) {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
+    console.log('[CLAIM FLOW] 1 button clicked');
 
-    await finishRealRun(closedCoords, diagnostic);
+    try {
+      console.log('[CLAIM FLOW] 2 handleStopAndClaim entered');
+
+      const currentPath = (gpsPathRef.current && gpsPathRef.current.length > 0)
+        ? [...gpsPathRef.current]
+        : (runState.path && runState.path.length > 0 ? [...runState.path] : []);
+      const currentDistance = gpsDistanceRef.current || runState.distance || 0;
+
+      console.log('[CLAIM FLOW] 3 path captured', { points: currentPath.length, distanceKm: currentDistance });
+
+      const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
+
+      console.log('[CLAIM FLOW] 4 validation completed', { valid, reason: diagnostic.validationFailureReason });
+
+      // Structured Log Diagnostic (PART 2)
+      console.log('[CLAIM DIAGNOSTIC]', {
+        pathPointCount: diagnostic.pathPointCount,
+        totalDistanceKm: diagnostic.totalDistanceKm,
+        firstPoint: diagnostic.firstPoint,
+        lastPoint: diagnostic.lastPoint,
+        distanceFromEndToStartMeters: diagnostic.distanceFromEndToStartMeters,
+        closureThresholdMeters: diagnostic.closureThresholdMeters,
+        selfIntersectionDetected: diagnostic.selfIntersectionDetected,
+        minimumPointsPassed: diagnostic.minimumPointsPassed,
+        minimumDistancePassed: diagnostic.minimumDistancePassed,
+        polygonAreaSqm: diagnostic.polygonAreaSqm,
+        minimumAreaSqm: diagnostic.minimumAreaSqm,
+        coordinatesClosed: diagnostic.coordinatesClosed,
+        validationFailureReason: diagnostic.validationFailureReason,
+        supabaseInsertAttempted: false,
+        supabaseInsertResult: null,
+        supabaseError: null
+      });
+
+      if (!valid) {
+        addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
+        setToastMessage(diagnostic.validationFailureReason);
+        setTimeout(() => setToastMessage(null), 6000);
+        stopTracking(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
+        return;
+      }
+
+      console.log('[CLAIM FLOW] 5 finishRealRun entered', { areaSqM: diagnostic.polygonAreaSqm });
+      await finishRealRun(closedCoords, diagnostic);
+    } catch (err) {
+      console.error('[CLAIM FLOW ERROR] Exception in handleStopAndClaim:', err);
+      const errMsg = `Claim Exception: ${err.message || 'Unknown Error'}`;
+      addLog(errMsg);
+      setToastMessage(errMsg);
+      setTimeout(() => setToastMessage(null), 6000);
+    }
   };
 
   const stopTracking = (reason = "Explicit User Request") => {
@@ -1542,7 +1563,7 @@ export default function App() {
     }
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
-    if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+    // Keep runnerMarkerRef visible on map after stopping run (PART 5)
 
     // Reset tracking refs
     gpsPathRef.current = [];
@@ -1706,6 +1727,7 @@ export default function App() {
     let supabaseResult = null;
     let supabaseErr = null;
 
+    console.log('[CLAIM FLOW] 6 saveNewTerritory called', { name: sectorName });
     try {
       const res = await saveNewTerritory(newTerritory);
       if (res && res.error) {
@@ -1719,6 +1741,8 @@ export default function App() {
       supabaseResult = 'error';
     }
 
+    console.log('[CLAIM FLOW] 7 saveNewTerritory returned', { success: !supabaseErr, result: supabaseResult, error: supabaseErr });
+
     // Print full structured CLAIM DIAGNOSTIC (PART 2)
     console.log('[CLAIM DIAGNOSTIC]', {
       ...claimDiagnostic,
@@ -1730,7 +1754,7 @@ export default function App() {
     if (supabaseErr) {
       addLog(`System: Supabase territory registration failed: ${supabaseErr}`);
       setToastMessage(`Backend Error: ${supabaseErr}`);
-      setTimeout(() => setToastMessage(null), 5000);
+      setTimeout(() => setToastMessage(null), 6000);
     } else {
       addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
     }
@@ -1753,9 +1777,28 @@ export default function App() {
 
     addLog(`Economy: Gained +${coinReward} Coins and +${xpReward} XP.`);
 
-    // Clean tracking layers
+    // Clean polyline layer only (Keep runnerMarkerRef visible on map - PART 5)
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
-    if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+    // Show Conquest Success Modal (PART 4)
+    console.log('[CLAIM FLOW] 8 success modal requested');
+    setCompletedRunData({
+      territoryName: sectorName,
+      area: formattedArea,
+      distance: runState.distance,
+      duration: runState.duration,
+      pace: runState.avgPace !== '--:--' ? runState.avgPace : runState.pace,
+      speed: runState.avgSpeed,
+      calories: runState.calories || Math.round(runState.distance * 75 * 1.03),
+      startTime: startTimeRef.current ? startTimeRef.current.toISOString() : new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      summaryStatistics: {
+        conqueredTerritoryName: sectorName,
+        originalTrackingMode: trackingMode
+      }
+    });
+    setShowSummaryModal(true);
+    console.log('[CLAIM FLOW] 9 territory subscription refreshed');
 
     console.log(`[TRACKING]\ntrackingMode: ${trackingMode}\nrunState: idle\nwatchId: null\nterminationReason: Successful Conquest Completion`);
 
@@ -1877,6 +1920,21 @@ export default function App() {
   const convertMSToKmH = (speedMS) => {
     if (!speedMS || speedMS < 0) return 0;
     return parseFloat((speedMS * 3.6).toFixed(1));
+  };
+
+  /**
+   * Formats distance for UI display:
+   * - below 1 km: metres rounded to nearest whole metre (e.g. 420 m)
+   * - 1 km or more: kilometres with two decimals (e.g. 1.26 km)
+   */
+  const formatDisplayDistance = (distKm) => {
+    if (distKm === null || distKm === undefined || isNaN(distKm)) return '0 m';
+    const km = Number(distKm);
+    if (km < 1.0) {
+      const meters = Math.round(km * 1000);
+      return `${meters} m`;
+    }
+    return `${km.toFixed(2)} km`;
   };
 
   /**
@@ -2368,7 +2426,7 @@ export default function App() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                   <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
                     <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Distance</span>
-                    <span style={{ fontSize: '20px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{completedRunData.distance} <span style={{ fontSize: '12px' }}>KM</span></span>
+                    <span style={{ fontSize: '20px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{formatDisplayDistance(completedRunData.distance)}</span>
                   </div>
                   <div style={{ background: '#151515', border: '1px solid #2A2A2A', padding: '16px', borderRadius: '16px' }}>
                     <span className="clash-label" style={{ fontSize: '8px', display: 'block', marginBottom: '4px' }}>Duration</span>
@@ -4721,7 +4779,7 @@ export default function App() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flex: 1 }}>
                       <div>
                         <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                        <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '9px' }}>KM</span></span>
+                        <span style={{ fontSize: '16px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{formatDisplayDistance(runState.distance)}</span>
                       </div>
                       <div>
                         <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
@@ -4742,7 +4800,7 @@ export default function App() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', textAlign: 'center' }}>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{formatDisplayDistance(runState.distance)}</span>
                         </div>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>
@@ -4785,7 +4843,7 @@ export default function App() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px 6px', textAlign: 'center' }}>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Distance</span>
-                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{runState.distance} <span style={{ fontSize: '8px' }}>KM</span></span>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#FC4C02', fontFamily: 'var(--clash-font-mono)' }}>{formatDisplayDistance(runState.distance)}</span>
                         </div>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Time</span>

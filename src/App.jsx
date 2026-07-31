@@ -120,7 +120,7 @@ const RUN_ENGINE_CONFIG = {
 
   // Loop Detection & Territory Conquest Limits
   MIN_LOOP_POINTS: 5,                  // minimum coordinates required before self-intersection check
-  MIN_LOOP_DISTANCE_KM: 0.05,          // minimum cumulative distance (km) required for valid loop
+  MIN_LOOP_DISTANCE_KM: 0,             // minimum cumulative distance (km) required for valid loop (0 = no distance cutoff)
   MIN_LOOP_AREA_SQM: 200,              // minimum enclosed area (m²) required for sector capture
   LOOP_CLOSURE_DISTANCE_METERS: 25.0,  // maximum distance (m) between end and start point for loop closure
 
@@ -517,6 +517,8 @@ export default function App() {
   const settlingStartTimeRef = useRef(null);
   const settlingSamplesCountRef = useRef(0);
   const stableBaselinePointRef = useRef(null);
+  const startMarkerRef = useRef(null);
+  const [distanceToStartMeters, setDistanceToStartMeters] = useState(null);
   const lastRunStartInteractionRef = useRef(0);
   const consecutiveMovingWindowsRef = useRef(0);
   const consecutiveStationaryWindowsRef = useRef(0);
@@ -988,6 +990,24 @@ export default function App() {
     if (mapInstanceRef.current && mapAutoFollowRef.current) {
       mapInstanceRef.current.panTo(newPoint);
     }
+
+    // PART 3 & 4: Render Start-Point Marker & calculate distance-to-start
+    if (gpsPathRef.current && gpsPathRef.current.length > 0 && mapInstanceRef.current) {
+      const startCoord = gpsPathRef.current[0];
+      if (!startMarkerRef.current) {
+        const startIcon = L.divIcon({
+          className: 'custom-start-icon',
+          html: `<div style="background-color: #10B981; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);"></div>`,
+          iconSize: [16, 16]
+        });
+        startMarkerRef.current = L.marker(startCoord, { icon: startIcon }).addTo(mapInstanceRef.current);
+      } else {
+        startMarkerRef.current.setLatLng(startCoord);
+      }
+
+      const distM = getDistanceInMeters(newPoint[0], newPoint[1], startCoord[0], startCoord[1]);
+      setDistanceToStartMeters(Math.round(distM));
+    }
   };
 
   const startTracking = (e) => {
@@ -1400,7 +1420,7 @@ export default function App() {
 
   const validateLoopRoute = (path, distanceKm) => {
     const minPoints = RUN_ENGINE_CONFIG.MIN_LOOP_POINTS || 5;
-    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM || 0.05;
+    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM ?? 0;
     const minAreaSqm = RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM || 200;
     const closureThreshold = RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS || 25.0;
 
@@ -1413,7 +1433,7 @@ export default function App() {
       closureThresholdMeters: closureThreshold,
       selfIntersectionDetected: false,
       minimumPointsPassed: false,
-      minimumDistancePassed: false,
+      minimumDistancePassed: true,
       polygonAreaSqm: 0,
       minimumAreaSqm: minAreaSqm,
       coordinatesClosed: false,
@@ -1421,13 +1441,14 @@ export default function App() {
     };
 
     if (!path || path.length < minPoints) {
-      diag.validationFailureReason = `Insufficient points: ${path ? path.length : 0} recorded (minimum ${minPoints} required).`;
+      diag.validationFailureReason = `Not enough GPS points recorded (${path ? path.length : 0} of ${minPoints} required).`;
       return { valid: false, diagnostic: diag };
     }
 
     diag.minimumPointsPassed = true;
 
-    if (distanceKm < minDistanceKm) {
+    if (minDistanceKm > 0 && distanceKm < minDistanceKm) {
+      diag.minimumDistancePassed = false;
       diag.validationFailureReason = `Route distance too short: ${distanceKm.toFixed(2)} km (minimum ${minDistanceKm} km required).`;
       return { valid: false, diagnostic: diag };
     }
@@ -1445,7 +1466,7 @@ export default function App() {
     const isClosed = distEndToStart <= closureThreshold || selfIntersected;
 
     if (!isClosed) {
-      diag.validationFailureReason = `Loop not closed — finish within ${closureThreshold}m of your starting point (currently ${distEndToStart.toFixed(1)}m away).`;
+      diag.validationFailureReason = `Loop not closed — you are ${Math.round(distEndToStart)} m from your starting point. Finish within ${Math.round(closureThreshold)} m.`;
       return { valid: false, diagnostic: diag };
     }
 
@@ -1457,7 +1478,7 @@ export default function App() {
     diag.polygonAreaSqm = areaSqM;
 
     if (areaSqM < minAreaSqm) {
-      diag.validationFailureReason = `Territory area too small: ${areaSqM.toLocaleString()} m² (minimum ${minAreaSqm} m² required).`;
+      diag.validationFailureReason = `Territory area too small — minimum ${minAreaSqm} m² (currently ${areaSqM.toLocaleString()} m²).`;
       return { valid: false, diagnostic: diag };
     }
 
@@ -1563,7 +1584,12 @@ export default function App() {
     }
 
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
-    // Keep runnerMarkerRef visible on map after stopping run (PART 5)
+    if (startMarkerRef.current && mapInstanceRef.current) {
+      mapInstanceRef.current.removeLayer(startMarkerRef.current);
+      startMarkerRef.current = null;
+    }
+    setDistanceToStartMeters(null);
+    // Keep runnerMarkerRef visible on map after stopping run (PART 5 & 6)
 
     // Reset tracking refs
     gpsPathRef.current = [];
@@ -1777,8 +1803,13 @@ export default function App() {
 
     addLog(`Economy: Gained +${coinReward} Coins and +${xpReward} XP.`);
 
-    // Clean polyline layer only (Keep runnerMarkerRef visible on map - PART 5)
+    // Clean polyline and start marker layers (Keep runnerMarkerRef visible on map - PART 5 & 6)
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+    if (startMarkerRef.current && mapInstanceRef.current) {
+      mapInstanceRef.current.removeLayer(startMarkerRef.current);
+      startMarkerRef.current = null;
+    }
+    setDistanceToStartMeters(null);
 
     // Show Conquest Success Modal (PART 4)
     console.log('[CLAIM FLOW] 8 success modal requested');
@@ -3572,8 +3603,7 @@ export default function App() {
                 {runState.distance > 0 || runState.status === 'tracking' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-                      <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>{runState.distance.toFixed(2)}</span>
-                      <span className="clash-body" style={{ fontSize: '14px', fontWeight: '700' }}>km</span>
+                      <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>{formatDisplayDistance(runState.distance)}</span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
                       <div>
@@ -4770,6 +4800,43 @@ export default function App() {
                       <Radio size={12} className="gps-pulse" style={{ color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : '#FC4C02' }} />
                       <span style={{ fontSize: '10px', fontWeight: '800', color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                         {runState.manualPaused ? 'Run paused manually' : runState.status === 'acquiring' ? 'Acquiring GPS satellites...' : runState.status === 'waiting' ? 'Waiting for movement...' : runState.status === 'paused' ? 'Auto-paused (runner stopped)' : 'Waiting for movement...'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* LIVE START-POINT PROXIMITY INDICATOR (PART 4) */}
+                  {(runState.status === 'tracking' || runState.status === 'paused') && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      borderRadius: '12px',
+                      background: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS)
+                        ? 'rgba(16, 185, 129, 0.15)'
+                        : 'rgba(255, 255, 255, 0.05)',
+                      border: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS)
+                        ? '1px solid #10B981'
+                        : '1px solid rgba(255, 255, 255, 0.1)',
+                      marginBottom: '10px',
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      transition: 'all 0.3s ease'
+                    }}>
+                      <MapPin size={12} style={{ color: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS) ? '#10B981' : '#FC4C02' }} />
+                      <span style={{
+                        fontSize: '10px',
+                        fontWeight: '800',
+                        color: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS) ? '#10B981' : 'white',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px'
+                      }}>
+                        {(distanceToStartMeters === null || !gpsPathRef.current || gpsPathRef.current.length === 0)
+                          ? "Start point pending"
+                          : distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS
+                            ? `Loop closable — ${distanceToStartMeters} m from start`
+                            : `Start: ${distanceToStartMeters} m away`}
                       </span>
                     </div>
                   )}

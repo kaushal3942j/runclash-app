@@ -427,6 +427,32 @@ export const syncUserStats = async (profile) => {
   }
 };
 
+export const updateUserProfile = async (updates, profileUid) => {
+  if (useSupabase && profileUid && !profileUid.startsWith('local_')) {
+    const mapped = {};
+    if (updates.clan !== undefined) mapped.clan_name = updates.clan;
+    if (updates.displayName !== undefined) mapped.display_name = updates.displayName;
+    if (updates.level !== undefined) mapped.level = updates.level;
+    if (updates.xp !== undefined) mapped.xp = updates.xp;
+    if (updates.coins !== undefined) mapped.coins = updates.coins;
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(mapped)
+      .eq('id', profileUid);
+
+    console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${profileUid}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+  } else {
+    const localUser = JSON.parse(localStorage.getItem('clash_user'));
+    if (localUser) {
+      const updated = { ...localUser, ...updates };
+      localStorage.setItem('clash_user', JSON.stringify(updated));
+      mockCurrentUser = updated;
+    }
+  }
+};
+
+
 let activeLoadTerritories = null;
 
 // 3. Territories Database & Realtime
@@ -680,17 +706,16 @@ export const reportError = async (message, stack = '', component = '', metadata 
 };
 
 export const saveCompletedRun = async (runData) => {
-  // Always update local storage first for instant UI responsiveness across tabs
   const localRunsKey = 'clash_runs';
   const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
   const localRun = {
-    id: `run_local_${Date.now()}`,
+    id: 'run_local_' + Date.now(),
     ...runData,
     createdAt: new Date().toISOString()
   };
   const updatedRuns = [...existingRuns, localRun];
   localStorage.setItem(localRunsKey, JSON.stringify(updatedRuns));
-  console.log("Database: Run saved to local cache for instant UI rendering.");
+  console.log('Database: Run saved to local cache for instant UI rendering.');
 
   const isLocalGuest = !runData.userId || runData.userId.startsWith('local_');
   if (useSupabase && !isLocalGuest) {
@@ -712,14 +737,191 @@ export const saveCompletedRun = async (runData) => {
         .from('runs')
         .insert(dbRun);
 
-      console.log(`[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ${runData.userId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+      console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + runData.userId + '\nstatus: ' + (error ? 'error: ' + error.message : 'success'));
 
-      if (error) console.warn("Supabase insert run warning:", error.message);
+      if (error) console.warn('Supabase insert run warning:', error.message);
       return { success: !error, data: data || localRun, local: false };
     } catch (err) {
-      console.warn("Supabase insert run failed, using local copy:", err.message);
+      console.warn('Supabase insert run failed, using local copy:', err.message);
     }
   }
 
   return { success: true, local: true, data: localRun };
+};
+
+export const fetchClans = async () => {
+  if (useSupabase) {
+    try {
+      const { data, error } = await supabase
+        .from('clans')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      console.log(`[SUPABASE]\noperation: SELECT\ntable: clans\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
+      if (error) {
+        return { success: false, data: [], error: error.message };
+      }
+      return { success: true, data: data || [], error: null };
+    } catch (err) {
+      console.error("fetchClans exception:", err);
+      return { success: false, data: [], error: err.message };
+    }
+  }
+
+  try {
+    const stored = JSON.parse(localStorage.getItem('clash_clans')) || [];
+    return { success: true, data: stored, error: null };
+  } catch (e) {
+    return { success: true, data: [], error: null };
+  }
+};
+
+export const createClanInCloud = async (clanName, userUid) => {
+  if (!clanName || !clanName.trim()) {
+    return { success: false, data: null, error: "Clan name is required." };
+  }
+
+  const nameTrimmed = clanName.trim();
+
+  if (useSupabase && userUid && !userUid.startsWith('local_')) {
+    try {
+      const { data: existing } = await supabase
+        .from('clans')
+        .select('id, name')
+        .ilike('name', nameTrimmed)
+        .limit(1);
+
+      if (existing && existing.length > 0) {
+        return { success: false, data: null, error: `Clan name '${nameTrimmed}' is already taken.` };
+      }
+
+      const { data: newClan, error: insertError } = await supabase
+        .from('clans')
+        .insert({ name: nameTrimmed, domain_percentage: 0 })
+        .select()
+        .single();
+
+      console.log(`[SUPABASE]\noperation: INSERT\ntable: clans\nstatus: ${insertError ? `error: ${insertError.message}` : 'success'}`);
+
+      if (insertError) {
+        return { success: false, data: null, error: insertError.message };
+      }
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ clan_name: nameTrimmed })
+        .eq('id', userUid);
+
+      console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${userUid}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
+
+      if (profileError) {
+        await supabase.from('clans').delete().eq('id', newClan.id);
+        return { success: false, data: null, error: `Profile update failed: ${profileError.message}` };
+      }
+
+      return { success: true, data: newClan, error: null };
+    } catch (err) {
+      console.error("createClanInCloud exception:", err);
+      return { success: false, data: null, error: err.message };
+    }
+  }
+
+  try {
+    const existingList = JSON.parse(localStorage.getItem('clash_clans')) || [];
+    if (existingList.some(c => c.name.toLowerCase() === nameTrimmed.toLowerCase())) {
+      return { success: false, data: null, error: `Clan name '${nameTrimmed}' is already taken.` };
+    }
+    const newClan = {
+      id: 'clan_' + Date.now(),
+      name: nameTrimmed,
+      domain_percentage: 0,
+      created_at: new Date().toISOString()
+    };
+    const updated = [newClan, ...existingList];
+    localStorage.setItem('clash_clans', JSON.stringify(updated));
+
+    const localUser = JSON.parse(localStorage.getItem('clash_user'));
+    if (localUser) {
+      localUser.clan = nameTrimmed;
+      localStorage.setItem('clash_user', JSON.stringify(localUser));
+    }
+
+    return { success: true, data: newClan, error: null };
+  } catch (e) {
+    return { success: false, data: null, error: e.message };
+  }
+};
+
+export const joinClanInCloud = async (clanName, userUid) => {
+  if (!clanName || !clanName.trim()) {
+    return { success: false, data: null, error: "Clan name is required." };
+  }
+
+  const nameTrimmed = clanName.trim();
+
+  if (useSupabase && userUid && !userUid.startsWith('local_')) {
+    try {
+      const { data: clanData, error: clanSearchError } = await supabase
+        .from('clans')
+        .select('*')
+        .ilike('name', nameTrimmed)
+        .single();
+
+      if (clanSearchError || !clanData) {
+        return { success: false, data: null, error: `Clan '${nameTrimmed}' does not exist.` };
+      }
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ clan_name: clanData.name })
+        .eq('id', userUid);
+
+      console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${userUid}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
+
+      if (profileError) {
+        return { success: false, data: null, error: profileError.message };
+      }
+
+      return { success: true, data: clanData, error: null };
+    } catch (err) {
+      console.error("joinClanInCloud exception:", err);
+      return { success: false, data: null, error: err.message };
+    }
+  }
+
+  const localUser = JSON.parse(localStorage.getItem('clash_user'));
+  if (localUser) {
+    localUser.clan = nameTrimmed;
+    localStorage.setItem('clash_user', JSON.stringify(localUser));
+  }
+  return { success: true, data: { name: nameTrimmed }, error: null };
+};
+
+export const leaveClanInCloud = async (userUid) => {
+  if (useSupabase && userUid && !userUid.startsWith('local_')) {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ clan_name: 'None' })
+        .eq('id', userUid);
+
+      console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${userUid}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      return { success: true, error: null };
+    } catch (err) {
+      console.error("leaveClanInCloud exception:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  const localUser = JSON.parse(localStorage.getItem('clash_user'));
+  if (localUser) {
+    localUser.clan = 'None';
+    localStorage.setItem('clash_user', JSON.stringify(localUser));
+  }
+  return { success: true, error: null };
 };

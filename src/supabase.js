@@ -436,8 +436,7 @@ export const subscribeToTerritories = (onUpdate) => {
     const loadTerritories = async () => {
       const { data, error } = await supabase
         .from('territories')
-        .select('*')
-        .eq('is_active', true);
+        .select('*');
 
       console.log(`[SUPABASE]\noperation: SELECT\ntable: territories\nuser: public\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
 
@@ -507,51 +506,94 @@ export const subscribeToTerritories = (onUpdate) => {
   }
 };
 
+const isValidUUID = (str) => {
+  if (!str || typeof str !== 'string') return false;
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str);
+};
+
 export const saveNewTerritory = async (territory) => {
-  const isLocalGuest = !territory.ownerId || territory.ownerId.startsWith('local_');
-  if (useSupabase && !isLocalGuest) {
-    // Map frontend structure to SQL columns
-    const areaVal = parseFloat(territory.area.replace(/[^\d.]/g, '')) || 0;
-    
-    // Set expires_at to 72 hours from now
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 72);
+  const areaVal = typeof territory.area === 'number'
+    ? territory.area
+    : parseFloat(String(territory.area).replace(/[^\d.]/g, '')) || 0;
+  
+  const expiresAt = new Date();
+  expiresAt.setHours(expiresAt.getHours() + 72);
 
-    const dbTerr = {
-      name: territory.name,
-      owner_id: territory.ownerId,
-      owner_name: territory.ownerName,
-      clan_name: territory.clan,
-      area_sqm: areaVal,
-      decay_hours: territory.decayHours,
-      max_decay_hours: territory.maxDecayHours,
-      rate: territory.rate,
-      coords: territory.coords,
-      expires_at: expiresAt.toISOString()
-    };
+  // Validate ownerId to avoid PostgreSQL 22P02 invalid UUID type error
+  const rawOwnerId = territory.ownerId || territory.userId;
+  const validOwnerId = isValidUUID(rawOwnerId) ? rawOwnerId : null;
 
-    const { data, error } = await supabase
-      .from('territories')
-      .insert(dbTerr);
+  const dbTerr = {
+    name: territory.name,
+    owner_id: validOwnerId,
+    owner_name: territory.ownerName || 'Unclaimed',
+    clan_name: territory.clan || 'None',
+    area_sqm: areaVal,
+    decay_hours: territory.decayHours || 72,
+    max_decay_hours: territory.maxDecayHours || 72,
+    rate: territory.rate || 1.0,
+    coords: territory.coords,
+    expires_at: expiresAt.toISOString()
+  };
 
-    console.log(`[SUPABASE]\noperation: INSERT\ntable: territories\nuser: ${territory.ownerId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+  let insertData = null;
+  let insertError = null;
+  let cloudSuccess = false;
 
-    if (error) console.error("RunClash: Supabase error inserting territory", error);
-    return { success: !error, error, data };
-  } else {
-    const list = getMockTerritories();
-    const newTerr = {
-      ...territory,
-      id: territory.id || `t_local_${Date.now()}`
-    };
-    const updated = [...list, newTerr];
-    localStorage.setItem('clash_territories', JSON.stringify(updated));
-    triggerListeners(updated);
-    if (activeLoadTerritories) {
-      activeLoadTerritories();
+  if (useSupabase) {
+    try {
+      const { data, error } = await supabase
+        .from('territories')
+        .insert(dbTerr)
+        .select()
+        .single();
+
+      insertData = data;
+      insertError = error;
+      cloudSuccess = !error && !!data;
+    } catch (err) {
+      insertError = err;
     }
-    return { success: true, local: true, data: newTerr };
   }
+
+  // Structured Log Diagnostic (TASK 2)
+  console.log('[TERRITORY INSERT]', {
+    isSupabaseActive: useSupabase,
+    currentUserId: rawOwnerId,
+    currentUserIdType: typeof rawOwnerId,
+    territoryOwnerId: validOwnerId,
+    territoryOwnerIdType: typeof validOwnerId,
+    payload: dbTerr,
+    insertAttempted: useSupabase,
+    insertData: insertData,
+    insertError: insertError ? insertError.message || JSON.stringify(insertError) : null,
+    insertErrorCode: insertError ? insertError.code : null,
+    insertErrorDetails: insertError ? insertError.details : null,
+    localFallbackUsed: !cloudSuccess
+  });
+
+  // Always mirror to LocalStorage for instant UI responsiveness
+  const list = getMockTerritories();
+  const newTerr = {
+    ...territory,
+    id: insertData ? insertData.id : (territory.id || `t_local_${Date.now()}`),
+    ownerId: validOwnerId || rawOwnerId
+  };
+  const updated = [...list.filter(t => t.id !== newTerr.id), newTerr];
+  localStorage.setItem('clash_territories', JSON.stringify(updated));
+  triggerListeners(updated);
+  if (activeLoadTerritories) activeLoadTerritories();
+
+  if (useSupabase && !cloudSuccess) {
+    return {
+      success: false,
+      cloud: false,
+      error: insertError ? (insertError.message || JSON.stringify(insertError)) : 'Database insert failed',
+      data: newTerr
+    };
+  }
+
+  return { success: true, cloud: cloudSuccess, data: insertData || newTerr };
 };
 
 export const updateTerritory = async (id, updates) => {

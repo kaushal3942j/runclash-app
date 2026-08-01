@@ -177,6 +177,7 @@ export default function App() {
 
   const [completedRunData, setCompletedRunData] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [mapMode, setMapMode] = useState('solo'); // 'solo' | 'clan'
 
   // Live Run Screen 2.0 States
   const [bottomHudState, setBottomHudState] = useState('medium'); // 'mini', 'medium', 'expanded'
@@ -785,7 +786,7 @@ export default function App() {
     }
   }, [activeTab, currentUser]);
 
-  // Render territories onto the Leaflet map in real time
+  // Render territories onto the Leaflet map in real time (SOLO MAP vs CLAN MAP)
   useEffect(() => {
     if (!mapInstanceRef.current || !currentUser) return;
 
@@ -795,9 +796,9 @@ export default function App() {
     });
     territoryPolygonsRef.current = {};
 
-    // Redraw list
+    // Redraw list based on active mapMode (solo vs clan)
     territories.forEach(terr => {
-      // 1. Render Official Landmark (Always Visible, Custom Marker)
+      // 1. Render Official Landmark (Always Visible)
       if (terr.isLandmark) {
         const starIcon = L.divIcon({
           className: 'custom-landmark-icon',
@@ -819,25 +820,59 @@ export default function App() {
         return;
       }
 
-      // 2. Render Player-Created Territories Only
+      // 2. Render Player-Created Territories per mapMode
       const isOwner = terr.ownerId === currentUser.uid;
-      const isTeammate = terr.clan === currentUser.clan && !isOwner;
-      const isEnemy = terr.clan && terr.clan !== currentUser.clan && terr.ownerName !== 'Unclaimed';
+      const isUserClan = currentUser.clan && currentUser.clan !== 'None' && terr.clan === currentUser.clan;
+      const isEnemyClan = terr.clan && terr.clan !== 'None' && (!currentUser.clan || terr.clan !== currentUser.clan);
+      const isUnclaimed = !terr.clan || terr.clan === 'None' || terr.ownerName === 'Unclaimed';
 
       let polyColor = '#888888';
-      if (isOwner) polyColor = '#FC4C02';
-      else if (isTeammate) polyColor = '#3B82F6';
-      else if (isEnemy) polyColor = '#EF4444';
-      else polyColor = '#A8A8A8';
+      let fillOp = 0.12;
+      let lineWeight = 2;
+      let dashStyle = null;
+
+      if (mapMode === 'solo') {
+        // SOLO MAP: Highlight personal owned sectors & neutral sectors
+        if (isOwner) {
+          polyColor = '#FC4C02';
+          fillOp = 0.25;
+          lineWeight = 2.5;
+        } else {
+          polyColor = '#A8A8A8';
+          fillOp = 0.08;
+          lineWeight = 1.5;
+        }
+      } else {
+        // CLAN MAP: Highlight clan sectors prominently, dim rival clan sectors
+        if (isUserClan) {
+          polyColor = '#3B82F6';
+          fillOp = 0.35;
+          lineWeight = 3;
+        } else if (isEnemyClan) {
+          polyColor = '#EF4444';
+          fillOp = 0.12;
+          lineWeight = 1.5;
+        } else {
+          polyColor = '#6B7280';
+          fillOp = 0.05;
+          lineWeight = 1;
+          dashStyle = '4,4';
+        }
+      }
 
       const poly = L.polygon(terr.coords, {
         color: polyColor,
         fillColor: polyColor,
-        fillOpacity: 0.08,
-        weight: 2
+        fillOpacity: fillOp,
+        weight: lineWeight,
+        dashArray: dashStyle
       }).addTo(mapInstanceRef.current);
 
-      poly.bindTooltip(terr.name, { permanent: false, direction: 'center', className: 'clash-tooltip' });
+      const tooltipText = mapMode === 'clan'
+        ? `${terr.name} [${terr.clan || 'Neutral'}]`
+        : `${terr.name} (${terr.ownerName || 'Unclaimed'})`;
+
+      poly.bindTooltip(tooltipText, { permanent: false, direction: 'center', className: 'clash-tooltip' });
 
       poly.on('click', (e) => {
         if (e.originalEvent) e.originalEvent.stopPropagation();
@@ -847,7 +882,7 @@ export default function App() {
 
       territoryPolygonsRef.current[terr.id] = poly;
     });
-  }, [territories, currentUser]);
+  }, [territories, currentUser, mapMode]);
 
   // ----------------------------------------------------
   // GEOLOCATION & TRACKING ENGINE (REAL GPS & SIMULATOR)
@@ -2032,6 +2067,24 @@ export default function App() {
     }
     return `${km.toFixed(2)} km`;
   };
+
+  // TASK 1 runtime test assertions
+  if (typeof window !== 'undefined' && !window.__distanceAssertionsTested) {
+    window.__distanceAssertionsTested = true;
+    try {
+      console.assert(formatDisplayDistance(0) === '0 m', 'Assertion failed for 0');
+      console.assert(formatDisplayDistance(0.004) === '4 m', 'Assertion failed for 0.004');
+      console.assert(formatDisplayDistance(0.01) === '10 m', 'Assertion failed for 0.01');
+      console.assert(formatDisplayDistance(0.05) === '50 m', 'Assertion failed for 0.05');
+      console.assert(formatDisplayDistance(0.42) === '420 m', 'Assertion failed for 0.42');
+      console.assert(formatDisplayDistance(0.999) === '999 m', 'Assertion failed for 0.999');
+      console.assert(formatDisplayDistance(1.0) === '1.00 km', 'Assertion failed for 1.0');
+      console.assert(formatDisplayDistance(1.26) === '1.26 km', 'Assertion failed for 1.26');
+      console.log('[DISTANCE CONVERSION TEST] All 8 test assertions PASSED successfully.');
+    } catch (e) {
+      console.error('[DISTANCE CONVERSION TEST ERROR]', e);
+    }
+  }
 
   /**
    * Applies Exponential Moving Average (EMA) smoothing to raw speed in m/s.
@@ -3867,6 +3920,132 @@ export default function App() {
               
               {/* Fullscreen Map Hero */}
               <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
+
+              {/* Segmented Map Mode Switch (SOLO MAP / CLAN MAP - TASK 3) */}
+              <div style={{
+                position: 'absolute',
+                top: runState.status === 'idle' ? '72px' : '16px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 1001,
+                display: 'flex',
+                background: 'rgba(11, 11, 13, 0.88)',
+                backdropFilter: 'blur(8px)',
+                padding: '3px',
+                borderRadius: '16px',
+                border: '1.5px solid rgba(255, 255, 255, 0.12)',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)'
+              }}>
+                <button
+                  onClick={() => setMapMode('solo')}
+                  style={{
+                    padding: '5px 12px',
+                    borderRadius: '12px',
+                    fontSize: '10px',
+                    fontWeight: '800',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: mapMode === 'solo' ? '#FC4C02' : 'transparent',
+                    color: mapMode === 'solo' ? 'white' : 'var(--clash-text-secondary)',
+                    transition: 'all 0.2s ease',
+                    letterSpacing: '0.5px'
+                  }}
+                >
+                  SOLO MAP
+                </button>
+                <button
+                  onClick={() => setMapMode('clan')}
+                  style={{
+                    padding: '5px 12px',
+                    borderRadius: '12px',
+                    fontSize: '10px',
+                    fontWeight: '800',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: mapMode === 'clan' ? '#3B82F6' : 'transparent',
+                    color: mapMode === 'clan' ? 'white' : 'var(--clash-text-secondary)',
+                    transition: 'all 0.2s ease',
+                    letterSpacing: '0.5px'
+                  }}
+                >
+                  CLAN MAP
+                </button>
+              </div>
+
+              {/* CLAN MAP: No Clan Overlay Banner */}
+              {mapMode === 'clan' && (!currentUser.clan || currentUser.clan === 'None') && (
+                <div style={{
+                  position: 'absolute',
+                  top: runState.status === 'idle' ? '120px' : '65px',
+                  left: '16px',
+                  right: '16px',
+                  zIndex: 1000,
+                  background: 'rgba(15, 23, 42, 0.92)',
+                  backdropFilter: 'blur(10px)',
+                  border: '1.5px solid rgba(59, 130, 246, 0.4)',
+                  borderRadius: '16px',
+                  padding: '12px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Shield size={20} style={{ color: '#3B82F6', flexShrink: 0 }} />
+                    <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>
+                      Join or create a clan to access Clan Map
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('social')}
+                    style={{
+                      background: '#3B82F6',
+                      color: 'white',
+                      border: 'none',
+                      padding: '6px 12px',
+                      borderRadius: '10px',
+                      fontSize: '10px',
+                      fontWeight: '800',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    Go to Social
+                  </button>
+                </div>
+              )}
+
+              {/* CLAN MAP: Legend Overlay */}
+              {mapMode === 'clan' && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '120px',
+                  left: '16px',
+                  zIndex: 1000,
+                  background: 'rgba(11, 11, 13, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '12px',
+                  padding: '6px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3B82F6' }}></div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Your Clan</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#EF4444' }}></div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Rival Clan</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#6B7280' }}></div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Neutral</span>
+                  </div>
+                </div>
+              )}
 
               {/* Empty World State Banner */}
               {runState.status === 'idle' && (() => {

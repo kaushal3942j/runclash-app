@@ -638,6 +638,18 @@ export const reportError = async (message, stack = '', component = '', metadata 
 };
 
 export const saveCompletedRun = async (runData) => {
+  // Always update local storage first for instant UI responsiveness across tabs
+  const localRunsKey = 'clash_runs';
+  const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
+  const localRun = {
+    id: `run_local_${Date.now()}`,
+    ...runData,
+    createdAt: new Date().toISOString()
+  };
+  const updatedRuns = [...existingRuns, localRun];
+  localStorage.setItem(localRunsKey, JSON.stringify(updatedRuns));
+  console.log("Database: Run saved to local cache for instant UI rendering.");
+
   const isLocalGuest = !runData.userId || runData.userId.startsWith('local_');
   if (useSupabase && !isLocalGuest) {
     try {
@@ -660,28 +672,12 @@ export const saveCompletedRun = async (runData) => {
 
       console.log(`[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ${runData.userId}\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
 
-      if (error) throw error;
-      return { success: true, data };
+      if (error) console.warn("Supabase insert run warning:", error.message);
+      return { success: !error, data: data || localRun, local: false };
     } catch (err) {
-      console.warn("Supabase insert run failed, saving locally as fallback:", err.message);
+      console.warn("Supabase insert run failed, using local copy:", err.message);
     }
   }
 
-  // Fallback to local storage
-  try {
-    const localRunsKey = 'clash_runs';
-    const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
-    const localRun = {
-      id: `run_local_${Date.now()}`,
-      ...runData,
-      createdAt: new Date().toISOString()
-    };
-    existingRuns.push(localRun);
-    localStorage.setItem(localRunsKey, JSON.stringify(existingRuns));
-    console.log("Local Database: Run successfully saved locally.");
-    return { success: true, local: true, data: localRun };
-  } catch (err) {
-    console.error("Local database save run failed:", err);
-    return { success: false, error: err.message };
-  }
+  return { success: true, local: true, data: localRun };
 };

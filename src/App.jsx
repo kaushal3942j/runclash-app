@@ -276,7 +276,21 @@ export default function App() {
     }
   };
 
-
+  const getTodayLatestRun = () => {
+    try {
+      const runs = JSON.parse(localStorage.getItem('clash_runs')) || [];
+      if (runs.length === 0) return null;
+      const todayStr = new Date().toISOString().split('T')[0];
+      const todayRuns = runs.filter(r => {
+        if (!r.startTime && !r.endTime && !r.createdAt && !r.date) return true;
+        const rDate = (r.endTime || r.startTime || r.createdAt || r.date || '').split('T')[0];
+        return rDate === todayStr;
+      });
+      return todayRuns.length > 0 ? todayRuns[todayRuns.length - 1] : runs[runs.length - 1];
+    } catch (e) {
+      return null;
+    }
+  };
 
   useEffect(() => {
     setIsInspectingTransition(true);
@@ -1248,11 +1262,17 @@ export default function App() {
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
             if (dtSeconds <= 0) return;
 
+            // Reject inaccurate raw GPS samples early (PART 3)
+            if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+              console.log(`[GPS REJECTED] Bad accuracy sample discarded: ${Math.round(wAccuracy)}m (threshold: ${RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD}m).`);
+              lastPointTimeRef.current = nowTime;
+              return;
+            }
+
             const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
             accumulatedDistanceRef.current += stepMeters;
             accumulatedDurationRef.current += dtSeconds;
             lastPointTimeRef.current = nowTime;
-            gpsLastPointRef.current = newPoint;
 
             if (accumulatedDurationRef.current < RUN_ENGINE_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
               return;
@@ -1267,12 +1287,15 @@ export default function App() {
             accumulatedDistanceRef.current = 0;
             accumulatedDurationRef.current = 0;
 
-            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h)
+            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h) (PART 3 & 4)
             if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
               addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
-              console.log(`[RUN ENGINE] Phase: ${wStatus.toUpperCase()} | Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h`);
-              return;
+              console.log(`[GPS REJECTED] Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h, dist: ${windowDistMeters.toFixed(1)}m. Retaining last valid coordinate.`);
+              return; // Do NOT update gpsLastPointRef.current to bad coordinate
             }
+
+            // Valid window accepted — update last valid point reference
+            gpsLastPointRef.current = newPoint;
 
             // Candidate Motion Check
             const isCandidateMoving = (rawSpeedMS >= RUN_ENGINE_CONFIG.RESUME_SPEED_THRESHOLD)
@@ -1296,6 +1319,11 @@ export default function App() {
                   gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
 
                   const distIncKm = windowDistMeters / 1000;
+                  const gpsDistBefore = gpsDistanceRef.current;
+                  const runStateDistBefore = runStateRef.current.distance;
+
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+
                   if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
                     gpsPathRef.current.push(stableBaselinePointRef.current);
                   }
@@ -1305,8 +1333,22 @@ export default function App() {
                   setRunState(prev => ({
                     ...prev,
                     status: 'tracking',
+                    distance: gpsDistanceRef.current,
                     isAutoPaused: false
                   }));
+
+                  console.log('[DISTANCE ENGINE]', {
+                    windowDistMeters: parseFloat(windowDistMeters.toFixed(2)),
+                    distanceIncKm: parseFloat(distIncKm.toFixed(3)),
+                    gpsDistanceBefore: gpsDistBefore,
+                    gpsDistanceAfter: gpsDistanceRef.current,
+                    runStateDistanceBefore: runStateDistBefore,
+                    runStateDistanceAfter: gpsDistanceRef.current,
+                    candidateMoving: isCandidateMoving,
+                    status: currStatus,
+                    manualPaused: runStateRef.current.manualPaused,
+                    isAutoPaused: gpsAutoPausedRef.current
+                  });
 
                   console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} -> TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${speedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
                   addLog(`GPS: Motion confirmed. Tracking resumed at ${speedKmH} km/h.`);
@@ -1337,11 +1379,34 @@ export default function App() {
                   gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
 
                   const distIncKm = windowDistMeters / 1000;
+                  const gpsDistBefore = gpsDistanceRef.current;
+                  const runStateDistBefore = runStateRef.current.distance;
+
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+
                   if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
                     gpsPathRef.current.push(stableBaselinePointRef.current);
                   }
                   gpsPathRef.current.push(newPoint);
                   updateMapDisplay(newPoint);
+
+                  setRunState(prev => ({
+                    ...prev,
+                    distance: gpsDistanceRef.current
+                  }));
+
+                  console.log('[DISTANCE ENGINE]', {
+                    windowDistMeters: parseFloat(windowDistMeters.toFixed(2)),
+                    distanceIncKm: parseFloat(distIncKm.toFixed(3)),
+                    gpsDistanceBefore: gpsDistBefore,
+                    gpsDistanceAfter: gpsDistanceRef.current,
+                    runStateDistanceBefore: runStateDistBefore,
+                    runStateDistanceAfter: gpsDistanceRef.current,
+                    candidateMoving: isCandidateMoving,
+                    status: currStatus,
+                    manualPaused: runStateRef.current.manualPaused,
+                    isAutoPaused: gpsAutoPausedRef.current
+                  });
 
                   console.log(`[RUN ENGINE] Phase: TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${currentSpeedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
                 } else {
@@ -3625,6 +3690,43 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                ) : getTodayLatestRun() ? (
+                  (() => {
+                    const latestRun = getTodayLatestRun();
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '9px', color: '#10B981', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            ✓ Operation Completed Today
+                          </span>
+                          <span style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                            {new Date(latestRun.endTime || latestRun.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                          <span style={{ fontSize: '32px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
+                            {formatDisplayDistance(latestRun.distance)}
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', borderTop: '1px solid var(--clash-border)', paddingTop: '10px' }}>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '9px' }}>Duration</span>
+                            <div style={{ fontSize: '13px', fontWeight: '800', color: 'white', marginTop: '2px' }}>
+                              {Math.floor(latestRun.duration / 60)}:{(latestRun.duration % 60).toString().padStart(2, '0')}
+                            </div>
+                          </div>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '9px' }}>Avg Pace</span>
+                            <div style={{ fontSize: '13px', fontWeight: '800', color: 'white', marginTop: '2px' }}>{latestRun.pace}</div>
+                          </div>
+                          <div>
+                            <span className="clash-label" style={{ fontSize: '9px' }}>Calories</span>
+                            <div style={{ fontSize: '13px', fontWeight: '800', color: 'white', marginTop: '2px' }}>{latestRun.calories} kcal</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px 0', textAlign: 'center', gap: '8px' }}>
                     <Compass size={24} className="clash-body" style={{ opacity: 0.4 }} />

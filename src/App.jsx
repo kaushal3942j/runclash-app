@@ -11,6 +11,17 @@ import {
   syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
   saveCompletedRun
 } from './supabase';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { CoachScreen } from './screens/CoachScreen';
+import { PremiumScreen } from './screens/PremiumScreen';
+import { RankBadge } from './components/profile/RankBadge';
+import { DailyMissionCard } from './components/missions/DailyMissionCard';
+import { TerritoryHealthBar } from './components/territory/TerritoryHealthBar';
+import { usePremiumAccess } from './hooks/usePremiumAccess';
+import { FEATURE_KEYS } from './config/premiumConfig';
+import { DEFAULT_DAILY_MISSIONS } from './utils/missions';
+import { getRankFromXp } from './utils/ranks';
+import { formatDisplayDistance, getDistanceInMeters } from './utils/distance';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -2394,10 +2405,11 @@ export default function App() {
   }
   // ACTIVE GAMEPLAY DASHBOARD
   return (
-    <div 
-      className="sim-container fade-in"
-      style={{ display: 'flex', justifyContent: 'center', padding: '24px 0', minHeight: '100vh', alignItems: 'center' }}
-    >
+    <ErrorBoundary>
+      <div 
+        className="sim-container fade-in"
+        style={{ display: 'flex', justifyContent: 'center', padding: '24px 0', minHeight: '100vh', alignItems: 'center' }}
+      >
       {/* MOBILE DEVICE FRAME SIMULATION */}
       <div className="phone-frame">
         <div className="phone-notch">
@@ -6085,39 +6097,17 @@ export default function App() {
             </div>
 
             {/* TAB: AI COACH */}
-            <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', gap: '14px', padding: '16px', height: '100%' }} className="fade-in">
-              
-              {/* Coach Header Banner */}
-              <div className="clash-card p-3" style={{ display: 'flex', alignItems: 'center', gap: '12px', borderLeft: '4px solid #FC4C02' }}>
-                <div style={{
-                  width: '40px',
-                  height: '40px',
-                  borderRadius: '50%',
-                  background: '#0B0B0B',
-                  border: '1.5px solid #FC4C02',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <Sparkles size={18} style={{ color: '#FC4C02' }} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <h4 className="clash-subtitle" style={{ margin: '0', fontSize: '14px' }}>Synergy AI Coach</h4>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02' }}></span>
-                  </div>
-                  <p className="clash-body" style={{ margin: '2px 0 0 0', fontSize: '11px' }}>
-                    Tactical Route Assistant • Online
-                  </p>
-                </div>
-              </div>
+            <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
+              <CoachScreen currentUser={currentUser} onUpgradeClick={() => setActiveTab('premium')} />
+            </div>
 
-              {/* Chat Thread Panel */}
-              <div className="clash-card text-center p-6" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                <Sparkles size={36} style={{ color: '#FC4C02', opacity: 0.7 }} />
-                <h4 className="m-0 text-sm" style={{ fontWeight: '800', color: 'white', textTransform: 'uppercase' }}>Synergy AI Coach</h4>
-                <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>🚧 Coming Soon in Alpha 2.0. Receive personalized route planning, safety calibration, and pace suggestions based on your performance history.</span>
-              </div>
+            {/* TAB: PREMIUM */}
+            <div style={{ display: activeTab === 'premium' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
+              <PremiumScreen currentUser={currentUser} onUpgrade={() => {
+                setCurrentUser(prev => ({ ...prev, subscription_tier: 'premium' }));
+                setToastMessage('Success: Upgraded to RunClash Pro Membership!');
+                setTimeout(() => setToastMessage(null), 5000);
+              }} />
             </div>
 
           </div>
@@ -6744,6 +6734,7 @@ export default function App() {
       </div>
  
     </div>
+    </ErrorBoundary>
   );
 }
 

@@ -12,7 +12,7 @@ export const HomeScreen = ({
   leaderboard = []
 }) => {
   return (
-    <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px', height: '100%', overflowY: 'auto' }} className="fade-in">
+    <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px' }} className="fade-in">
       
       {/* Greeting Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>

@@ -1,11 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 import { syncQueueService, generateUUID } from './services/syncQueueService';
 
-// 1. Supabase Configuration Check
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// 1. Supabase Configuration & Credential Check
+const rawUrl = import.meta.env.VITE_SUPABASE_URL;
+const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const hasSupabaseKeys = !!supabaseUrl && supabaseUrl !== 'your_supabase_url_here' && !!supabaseAnonKey;
+const supabaseUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+const supabaseAnonKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+
+const isValidUrl = !!supabaseUrl && supabaseUrl !== 'your_supabase_url_here' && /^https?:\/\//i.test(supabaseUrl);
+const isValidKey = !!supabaseAnonKey && supabaseAnonKey !== 'your_supabase_anon_key_here' && supabaseAnonKey.length > 20;
+
+const hasSupabaseKeys = isValidUrl && isValidKey;
+const viteMode = import.meta.env.MODE || (import.meta.env.DEV ? 'development' : 'production');
 
 let supabase = null;
 let useSupabase = false;
@@ -21,12 +28,26 @@ if (hasSupabaseKeys) {
       }
     });
     useSupabase = true;
-    console.log("RunClash: Supabase client initialized successfully (Instance ID: single-instance-v1).");
+    console.log('[SUPABASE INIT]', {
+      status: 'connected',
+      viteMode: viteMode,
+      urlPresent: true,
+      urlDomain: supabaseUrl.replace(/^https?:\/\//, '').split('/')[0],
+      keyPresent: true,
+      keyLength: supabaseAnonKey.length,
+      keyPrefix: supabaseAnonKey.substring(0, 6) + '...'
+    });
   } catch (error) {
-    console.error("RunClash: Supabase initialization failed. Falling back to LocalStorage.", error);
+    console.error('[SUPABASE INIT] Initialization exception. Falling back to LocalStorage:', error.message);
   }
 } else {
-  console.log("RunClash: No Supabase credentials found. Running in LocalStorage Fallback Mode.");
+  console.log('[SUPABASE INIT]', {
+    status: 'fallback',
+    viteMode: viteMode,
+    urlPresent: !!supabaseUrl,
+    keyPresent: !!supabaseAnonKey,
+    reason: !supabaseUrl ? 'VITE_SUPABASE_URL missing' : (!supabaseAnonKey ? 'VITE_SUPABASE_ANON_KEY missing' : 'Invalid credential format')
+  });
 }
 
 export { supabase, useSupabase };

@@ -68,7 +68,7 @@ export const useIdentity = () => {
         localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
         setIdentityMode('authenticated');
         setAuthErrorMessage(null);
-        setTimeout(() => syncQueueService.syncAll(), 100);
+        setTimeout(() => syncQueueService.syncAll(), 3000);
 
         if (isLegacyLocal) {
           localStorage.setItem('clash_identity_migrated_v1', new Date().toISOString());
@@ -96,27 +96,53 @@ export const useIdentity = () => {
     if (isInitializingRef.current) return;
     isInitializingRef.current = true;
 
-    setIsLoadingIdentity(true);
-    setAuthErrorMessage(null);
-
     const cachedProfile = getSafeCachedProfile();
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
+    // OPTIMIZATION 1: If cached profile exists, render UI INSTANTLY (<50ms)
+    if (cachedProfile) {
+      setCurrentProfile(cachedProfile);
+      setIdentityMode('authenticated');
+      setIsLoadingIdentity(false);
+    } else {
+      setIsLoadingIdentity(true);
+    }
+
+    setAuthErrorMessage(null);
+
     if (!useSupabase || !isOnline) {
       setIdentityMode('offline-local');
-      const fallback = cachedProfile || {
-        uid: 'local_offline_' + Date.now(),
-        displayName: 'Offline Runner',
-        level: 1,
-        xp: 0,
-        coins: 0,
-        clan: 'None'
-      };
-      setCurrentProfile(fallback);
+      if (!cachedProfile) {
+        const fallback = {
+          uid: 'local_offline_' + Date.now(),
+          displayName: 'Offline Runner',
+          level: 1,
+          xp: 0,
+          coins: 0,
+          clan: 'None'
+        };
+        setCurrentProfile(fallback);
+      }
       setIsLoadingIdentity(false);
       isInitializingRef.current = false;
       return;
     }
+
+    // Fast fallback timer: Guarantee UI appears within 1.5s even if network is slow
+    const fastFallbackTimer = setTimeout(() => {
+      if (!cachedProfile) {
+        console.warn('[AUTH] Slow network detected. Rendering local guest state while cloud completes.');
+        setCurrentProfile({
+          uid: 'local_guest_' + Date.now(),
+          displayName: 'Guest Runner',
+          level: 1,
+          xp: 0,
+          coins: 0,
+          clan: 'None'
+        });
+        setIsLoadingIdentity(false);
+      }
+    }, 1500);
 
     try {
       // 1. Check existing active session
@@ -138,15 +164,16 @@ export const useIdentity = () => {
             setIdentityMode('error');
           }
 
-          const localCached = cachedProfile || {
-            uid: 'local_offline_' + Date.now(),
-            displayName: 'Guest Runner',
-            level: 1,
-            xp: 0,
-            coins: 0,
-            clan: 'None'
-          };
-          setCurrentProfile(localCached);
+          if (!cachedProfile) {
+            setCurrentProfile({
+              uid: 'local_offline_' + Date.now(),
+              displayName: 'Guest Runner',
+              level: 1,
+              xp: 0,
+              coins: 0,
+              clan: 'None'
+            });
+          }
           return;
         }
       }
@@ -160,11 +187,11 @@ export const useIdentity = () => {
     } catch (err) {
       console.error('[IDENTITY] Initialization exception:', err);
       setAuthErrorMessage(err.message || 'Identity initialization error.');
-      setIdentityMode('error');
-      if (cachedProfile) {
-        setCurrentProfile(cachedProfile);
+      if (!cachedProfile) {
+        setIdentityMode('error');
       }
     } finally {
+      clearTimeout(fastFallbackTimer);
       setIsLoadingIdentity(false);
       isInitializingRef.current = false;
     }

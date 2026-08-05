@@ -347,15 +347,7 @@ export const loginGuest = async (name, clan) => {
         premium: false
       };
 
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert(profile);
-
-      console.log(`[SUPABASE]\noperation: UPSERT\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
-
-      if (profileError) throw profileError;
-
-      return {
+      const normalizedProfile = {
         uid: user.id,
         displayName: profile.display_name,
         clan: profile.clan_name,
@@ -365,6 +357,20 @@ export const loginGuest = async (name, clan) => {
         premium: false,
         isAnonymous: true
       };
+
+      // Save to localStorage immediately so UI renders guest profile instantly (<50ms)
+      localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
+
+      // Background cloud profile upsert (non-blocking)
+      supabase
+        .from('profiles')
+        .upsert(profile)
+        .then(({ error: profileError }) => {
+          if (profileError) console.warn('[SUPABASE] Background profile upsert warning:', profileError.message);
+        })
+        .catch(err => console.warn('[SUPABASE] Background profile upsert exception:', err));
+
+      return normalizedProfile;
     } catch (err) {
       console.warn("Supabase anonymous auth failed/disabled. Falling back to local offline guest mode:", err);
       const profile = {
@@ -468,7 +474,17 @@ let activeLoadTerritories = null;
 // 3. Territories Database & Realtime
 export const subscribeToTerritories = (onUpdate) => {
   if (useSupabase) {
-    // 1. Initial load
+    // 0. Synchronous local cache emission (< 5ms) for instant map rendering
+    try {
+      const localData = localStorage.getItem('clash_territories');
+      if (localData) {
+        onUpdate(JSON.parse(localData));
+      }
+    } catch (e) {
+      console.warn("Failed to parse initial local territories:", e);
+    }
+
+    // 1. Initial load from Supabase
     const loadTerritories = async () => {
       const { data, error } = await supabase
         .from('territories')

@@ -671,7 +671,7 @@ export const getLeaderboard = async () => {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('display_name, clan_name, level, xp')
+        .select('id, display_name, clan_name, level, xp')
         .order('xp', { ascending: false })
         .limit(10);
 
@@ -680,6 +680,8 @@ export const getLeaderboard = async () => {
       if (error) throw error;
       
       return data.map(p => ({
+        id: p.id,
+        uid: p.id,
         displayName: p.display_name,
         clan: p.clan_name,
         level: p.level,

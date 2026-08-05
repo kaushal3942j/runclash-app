@@ -222,7 +222,7 @@ export const SocialScreen = ({
                 }
 
                 return displayLeaderboard.map((player, idx) => {
-                  const isSelf = player.displayName === currentUser?.displayName;
+                  const isSelf = !!(currentUser?.uid && (player.id === currentUser.uid || player.uid === currentUser.uid));
                   
                   let rankBorder = 'var(--clash-border)';
                   let rankColor = 'var(--clash-text-secondary)';

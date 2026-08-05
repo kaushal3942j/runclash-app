@@ -1,5 +1,39 @@
-import { supabase, useSupabase } from '../supabase';
-import { isValidAuthenticatedUser } from './authService';
+import { supabase, useSupabase } from '../supabase.js';
+import { isValidAuthenticatedUser } from './authService.js';
+
+// Validate clan referential integrity against real public.clans table
+export const validateClanIntegrity = async (userUuid, rawClanName) => {
+  if (!rawClanName || rawClanName === 'None' || rawClanName === 'null') {
+    return 'None';
+  }
+
+  if (!useSupabase || !userUuid) return 'None';
+
+  try {
+    const { data: matchingClan, error } = await supabase
+      .from('clans')
+      .select('id, name')
+      .eq('name', rawClanName)
+      .maybeSingle();
+
+    if (error || !matchingClan) {
+      console.warn(`[CLAN INTEGRITY] Ghost clan "${rawClanName}" detected for user ${userUuid}. Repairing profile to "None".`);
+
+      // Repair profile in public.profiles for authenticated user only
+      await supabase
+        .from('profiles')
+        .update({ clan_name: 'None', updated_at: new Date().toISOString() })
+        .eq('id', userUuid);
+
+      return 'None';
+    }
+
+    return matchingClan.name;
+  } catch (err) {
+    console.error('[CLAN INTEGRITY] Error validating clan integrity:', err);
+    return 'None';
+  }
+};
 
 export const loadProfile = async (userId) => {
   if (!useSupabase || !userId) {
@@ -16,6 +50,11 @@ export const loadProfile = async (userId) => {
     if (error) {
       return { success: false, data: null, error: error.message };
     }
+
+    // Validate clan referential integrity against public.clans
+    const validClan = await validateClanIntegrity(userId, data.clan_name);
+    data.clan_name = validClan;
+
     return { success: true, data, error: null };
   } catch (err) {
     return { success: false, data: null, error: err.message };
@@ -36,10 +75,15 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
       .maybeSingle();
 
     if (existing) {
+      const validClan = await validateClanIntegrity(user.id, existing.clan_name);
+      existing.clan_name = validClan;
       return { success: true, data: existing, created: false, error: null };
     }
 
-    // 2. Build safe profile payload
+    // 2. Build safe profile payload — validate clan first!
+    const legacyClanCandidate = legacyData?.clan || legacyData?.clan_name || 'None';
+    const validClan = await validateClanIntegrity(user.id, legacyClanCandidate);
+
     const profilePayload = {
       id: user.id,
       display_name: legacyData?.displayName || preferredDisplayName || 'Guest Runner',
@@ -47,7 +91,7 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
       xp: legacyData?.xp || 0,
       coins: legacyData?.coins || 0,
       premium: legacyData?.premium || false,
-      clan_name: legacyData?.clan || 'None',
+      clan_name: validClan,
       updated_at: new Date().toISOString()
     };
 
@@ -84,7 +128,9 @@ export const updateOwnProfile = async (userId, activeSessionUserId, patch) => {
   try {
     const mapped = { updated_at: new Date().toISOString() };
     if (patch.displayName !== undefined) mapped.display_name = patch.displayName;
-    if (patch.clan !== undefined) mapped.clan_name = patch.clan;
+    if (patch.clan !== undefined) {
+      mapped.clan_name = await validateClanIntegrity(userId, patch.clan);
+    }
     if (patch.level !== undefined) mapped.level = patch.level;
     if (patch.xp !== undefined) mapped.xp = patch.xp;
     if (patch.coins !== undefined) mapped.coins = patch.coins;

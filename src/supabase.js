@@ -11,15 +11,24 @@ let useSupabase = false;
 
 if (hasSupabaseKeys) {
   try {
-    supabase = createClient(supabaseUrl, supabaseAnonKey);
+    supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storageKey: 'runclash-supabase-auth'
+      }
+    });
     useSupabase = true;
-    console.log("RunClash: Supabase client initialized successfully.");
+    console.log("RunClash: Supabase client initialized successfully (Instance ID: single-instance-v1).");
   } catch (error) {
     console.error("RunClash: Supabase initialization failed. Falling back to LocalStorage.", error);
   }
 } else {
   console.log("RunClash: No Supabase credentials found. Running in LocalStorage Fallback Mode.");
 }
+
+export { supabase, useSupabase };
 
 // ----------------------------------------------------
 // LOCALSTORAGE FALLBACK SERVICE IMPLEMENTATION

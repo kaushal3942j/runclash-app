@@ -22,30 +22,53 @@ export const getCurrentSession = async () => {
   }
 };
 
+let pendingAnonSessionPromise = null;
+
 export const createAnonymousSession = async () => {
   if (!useSupabase) {
     return { success: false, data: null, error: 'Supabase client disabled.' };
   }
 
+  // 1. Double check existing session first
   try {
-    const { data, error } = await supabase.auth.signInAnonymously();
-    if (error) {
-      const isProviderDisabled = error.code === 'anonymous_provider_disabled' || 
-                                 (error.message && error.message.toLowerCase().includes('anonymous'));
-      
-      return { 
-        success: false, 
-        data: null, 
-        error: isProviderDisabled ? 'anonymous_provider_disabled' : error.message,
-        message: isProviderDisabled 
-          ? 'Enable Supabase Dashboard → Authentication → Providers → Anonymous Sign-Ins' 
-          : error.message 
-      };
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.user) {
+      return { success: true, data: sessionData.session, user: sessionData.session.user, error: null };
     }
-    return { success: true, data: data?.session || null, user: data?.user || null, error: null };
-  } catch (err) {
-    return { success: false, data: null, error: err.message };
+  } catch (e) {
+    console.warn('[AUTH] Error checking session before anonymous sign-in:', e);
   }
+
+  // 2. Single-flight request deduplication: reuse in-flight promise if active
+  if (pendingAnonSessionPromise) {
+    return await pendingAnonSessionPromise;
+  }
+
+  pendingAnonSessionPromise = (async () => {
+    try {
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (error) {
+        const isProviderDisabled = error.code === 'anonymous_provider_disabled' ||
+                                   (error.message && error.message.toLowerCase().includes('anonymous'));
+
+        return {
+          success: false,
+          data: null,
+          error: isProviderDisabled ? 'anonymous_provider_disabled' : error.message,
+          message: isProviderDisabled
+            ? 'Enable Supabase Dashboard → Authentication → Providers → Anonymous Sign-Ins'
+            : error.message
+        };
+      }
+      return { success: true, data: data?.session || null, user: data?.user || null, error: null };
+    } catch (err) {
+      return { success: false, data: null, error: err.message };
+    } finally {
+      pendingAnonSessionPromise = null;
+    }
+  })();
+
+  return await pendingAnonSessionPromise;
 };
 
 export const recoverSession = async () => {

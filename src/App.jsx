@@ -22,6 +22,7 @@ import { RankBadge } from './components/profile/RankBadge';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
 import { TerritoryHealthBar } from './components/territory/TerritoryHealthBar';
 import { usePremiumAccess } from './hooks/usePremiumAccess';
+import { useIdentity } from './hooks/useIdentity';
 import { FEATURE_KEYS } from './config/premiumConfig';
 import { DEFAULT_DAILY_MISSIONS } from './utils/missions';
 import { getRankFromXp } from './utils/ranks';
@@ -810,38 +811,42 @@ export default function App() {
   // Leaflet Map Setup
   // ----------------------------------------------------
   useEffect(() => {
-    if (currentUser && !mapInstanceRef.current) {
-      // Setup map container DOM correction
-      const container = L.DomUtil.get('map');
-      if (container) {
-        container._leaflet_id = null;
-      }
+    if (isLoadingIdentity) return;
+    if (!currentUser) return;
+    if (mapInstanceRef.current) return;
 
-      const map = L.map('map', {
-        zoomControl: false,
-        attributionControl: false,
-        preferCanvas: true
-      }).setView([24.5950, 73.6800], 13.5);
-
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
-        maxZoom: 20
-      }).addTo(map);
-
-      mapInstanceRef.current = map;
-      addLog("System: Leaflet Map loaded.");
-
-      map.on('click', () => {
-        setSelectedTerritoryId(null);
-      });
-
-      map.on('dragstart', () => {
-        setMapAutoFollow(false);
-      });
-
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 150);
+    // Verify map container DOM element exists before calling L.map
+    const mapElement = L.DomUtil.get('map');
+    if (!mapElement) {
+      return;
     }
+
+    const map = L.map(mapElement, {
+      zoomControl: false,
+      attributionControl: false,
+      preferCanvas: true
+    }).setView([24.5950, 73.6800], 13.5);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+      maxZoom: 20
+    }).addTo(map);
+
+    mapInstanceRef.current = map;
+    addLog("System: Leaflet Map loaded.");
+
+    map.on('click', () => {
+      setSelectedTerritoryId(null);
+    });
+
+    map.on('dragstart', () => {
+      setMapAutoFollow(false);
+    });
+
+    setTimeout(() => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    }, 150);
 
     return () => {
       if (mapInstanceRef.current) {
@@ -856,15 +861,13 @@ export default function App() {
           mapInstanceRef.current.remove();
         } catch (e) {
           console.error("Map removal error", e);
+        } finally {
+          mapInstanceRef.current = null;
         }
-        mapInstanceRef.current = null;
       }
-      polylineRef.current = null;
-      runnerMarkerRef.current = null;
-      guidancePolylineRef.current = null;
       territoryPolygonsRef.current = {};
     };
-  }, [currentUser]);
+  }, [isLoadingIdentity, currentUser]);
 
   // Resize map when tab changes back to map
   useEffect(() => {

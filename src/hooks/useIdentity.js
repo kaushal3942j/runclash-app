@@ -1,7 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, useSupabase } from '../supabase';
-import { getCurrentSession, createAnonymousSession, isValidAuthenticatedUser } from '../services/authService';
-import { loadProfile, ensureProfile } from '../services/profileService';
+import { getCurrentSession, createAnonymousSession } from '../services/authService';
+import { ensureProfile } from '../services/profileService';
+
+// Safe LocalStorage Cache Parser
+const getSafeCachedProfile = () => {
+  try {
+    const raw = localStorage.getItem('clash_user');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object' && parsed.uid) ? parsed : null;
+  } catch (e) {
+    console.warn('[IDENTITY] Malformed local clash_user cache cleared.', e);
+    localStorage.removeItem('clash_user');
+    return null;
+  }
+};
 
 export const useIdentity = () => {
   const [isLoadingIdentity, setIsLoadingIdentity] = useState(true);
@@ -11,80 +25,29 @@ export const useIdentity = () => {
   const [authErrorMessage, setAuthErrorMessage] = useState(null);
   const [legacyMigrationNeeded, setLegacyMigrationNeeded] = useState(false);
 
-  // Core Identity Initialization Pipeline
-  const initializeIdentity = useCallback(async () => {
-    setIsLoadingIdentity(true);
-    setAuthErrorMessage(null);
+  const isInitializingRef = useRef(false);
+  const profileSyncUserIdRef = useRef(null);
 
-    // 1. Check navigator online status
-    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  // Synchronize and normalize cloud profile outside the auth lock
+  const syncProfileForUser = useCallback(async (user) => {
+    if (!user || !user.id) return { success: false, error: 'Invalid user' };
 
-    if (!useSupabase || !isOnline) {
-      // Offline-local fallback mode
-      setIdentityMode('offline-local');
-      const cached = JSON.parse(localStorage.getItem('clash_user')) || {
-        uid: 'local_offline_' + Date.now(),
-        displayName: 'Offline Runner',
-        level: 1,
-        xp: 0,
-        coins: 0,
-        clan: 'None'
-      };
-      setCurrentProfile(cached);
-      setIsLoadingIdentity(false);
-      return;
+    // Prevent duplicate concurrent profile requests for the same user UUID
+    if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id) {
+      return { success: true, data: currentProfile };
     }
+    profileSyncUserIdRef.current = user.id;
 
     try {
-      // 2. Check existing session
-      const sessionRes = await getCurrentSession();
-      let activeSession = sessionRes.success ? sessionRes.data : null;
-
-      // 3. If no active session, attempt Anonymous Sign-In
-      if (!activeSession || !activeSession.user) {
-        const anonRes = await createAnonymousSession();
-        if (anonRes.success) {
-          activeSession = anonRes.data;
-        } else {
-          // Check for disabled anonymous auth provider
-          if (anonRes.error === 'anonymous_provider_disabled') {
-            setAuthErrorMessage('Enable Supabase Dashboard → Authentication → Providers → Anonymous Sign-Ins');
-            setIdentityMode('error');
-          } else {
-            setAuthErrorMessage(anonRes.message || 'Authentication error.');
-            setIdentityMode('error');
-          }
-
-          // Preserve local cached profile so app doesn't break or render blank
-          const localCached = JSON.parse(localStorage.getItem('clash_user')) || {
-            uid: 'local_offline_' + Date.now(),
-            displayName: 'Guest Runner',
-            level: 1,
-            xp: 0,
-            coins: 0,
-            clan: 'None'
-          };
-          setCurrentProfile(localCached);
-          setIsLoadingIdentity(false);
-          return;
-        }
-      }
-
-      // 4. Session established: Valid UUID received
-      const user = activeSession.user;
-      setAuthUser(user);
-
-      // 5. Check for legacy local_* profile migration
-      const localUser = JSON.parse(localStorage.getItem('clash_user'));
-      const isLegacyLocal = localUser && typeof localUser.uid === 'string' && localUser.uid.startsWith('local_') && !localStorage.getItem('clash_identity_migrated_v1');
+      const cached = getSafeCachedProfile();
+      const isLegacyLocal = cached && typeof cached.uid === 'string' && cached.uid.startsWith('local_') && !localStorage.getItem('clash_identity_migrated_v1');
 
       if (isLegacyLocal) {
         setIdentityMode('migrating');
         setLegacyMigrationNeeded(true);
       }
 
-      // 6. Ensure profile exists in public.profiles
-      const profileRes = await ensureProfile(user, localUser?.displayName || 'Guest Runner', isLegacyLocal ? localUser : null);
+      const profileRes = await ensureProfile(user, cached?.displayName || 'Guest Runner', isLegacyLocal ? cached : null);
 
       if (profileRes.success && profileRes.data) {
         const profile = profileRes.data;
@@ -101,59 +64,166 @@ export const useIdentity = () => {
         setCurrentProfile(normalizedProfile);
         localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
         setIdentityMode('authenticated');
+        setAuthErrorMessage(null);
+        console.log(`[AUTHENTICATED USER UUID] ${normalizedProfile.uid}`);
 
         if (isLegacyLocal) {
           localStorage.setItem('clash_identity_migrated_v1', new Date().toISOString());
           setLegacyMigrationNeeded(false);
         }
+        return { success: true, data: normalizedProfile };
       } else {
         setAuthErrorMessage(profileRes.error || 'Failed to initialize cloud profile.');
         setIdentityMode('error');
+        if (cached) setCurrentProfile(cached);
+        return { success: false, error: profileRes.error };
       }
     } catch (err) {
-      console.error('Identity initialization exception:', err);
+      console.error('[IDENTITY] Profile sync exception:', err);
+      setAuthErrorMessage(err.message || 'Profile sync error.');
+      setIdentityMode('error');
+      const cached = getSafeCachedProfile();
+      if (cached) setCurrentProfile(cached);
+      return { success: false, error: err.message };
+    }
+  }, [currentProfile]);
+
+  // Core Identity Initialization Pipeline (Owns initial page load)
+  const initializeIdentity = useCallback(async () => {
+    if (isInitializingRef.current) return;
+    isInitializingRef.current = true;
+
+    setIsLoadingIdentity(true);
+    setAuthErrorMessage(null);
+
+    const cachedProfile = getSafeCachedProfile();
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+    if (!useSupabase || !isOnline) {
+      setIdentityMode('offline-local');
+      const fallback = cachedProfile || {
+        uid: 'local_offline_' + Date.now(),
+        displayName: 'Offline Runner',
+        level: 1,
+        xp: 0,
+        coins: 0,
+        clan: 'None'
+      };
+      setCurrentProfile(fallback);
+      setIsLoadingIdentity(false);
+      isInitializingRef.current = false;
+      return;
+    }
+
+    try {
+      // 1. Check existing active session
+      const sessionRes = await getCurrentSession();
+      let activeSession = sessionRes.success ? sessionRes.data : null;
+
+      // 2. If no active session, attempt Anonymous Sign-In
+      if (!activeSession || !activeSession.user) {
+        const anonRes = await createAnonymousSession();
+
+        if (anonRes.success) {
+          activeSession = anonRes.data;
+        } else {
+          if (anonRes.error === 'anonymous_provider_disabled') {
+            setAuthErrorMessage('Enable Supabase Dashboard → Authentication → Providers → Anonymous Sign-Ins');
+            setIdentityMode('error');
+          } else {
+            setAuthErrorMessage(anonRes.message || 'Authentication error.');
+            setIdentityMode('error');
+          }
+
+          const localCached = cachedProfile || {
+            uid: 'local_offline_' + Date.now(),
+            displayName: 'Guest Runner',
+            level: 1,
+            xp: 0,
+            coins: 0,
+            clan: 'None'
+          };
+          setCurrentProfile(localCached);
+          return;
+        }
+      }
+
+      // 3. Valid authenticated UUID session received
+      const user = activeSession.user;
+      setAuthUser(user);
+
+      // 4. Synchronize cloud profile for authenticated user
+      await syncProfileForUser(user);
+    } catch (err) {
+      console.error('[IDENTITY] Initialization exception:', err);
       setAuthErrorMessage(err.message || 'Identity initialization error.');
       setIdentityMode('error');
+      if (cachedProfile) {
+        setCurrentProfile(cachedProfile);
+      }
     } finally {
       setIsLoadingIdentity(false);
+      isInitializingRef.current = false;
     }
-  }, []);
+  }, [syncProfileForUser]);
 
   useEffect(() => {
     initializeIdentity();
 
     if (!useSupabase) return;
 
-    // Auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setAuthUser(session.user);
-        const profileRes = await loadProfile(session.user.id);
-        if (profileRes.success && profileRes.data) {
-          const p = profileRes.data;
-          const normalized = {
-            uid: p.id,
-            displayName: p.display_name,
-            level: p.level,
-            xp: p.xp,
-            coins: p.coins,
-            clan: p.clan_name || 'None',
-            premium: p.premium || false
-          };
-          setCurrentProfile(normalized);
-          localStorage.setItem('clash_user', JSON.stringify(normalized));
-          setIdentityMode('authenticated');
-        }
-      } else if (event === 'SIGNED_OUT') {
+    // Single Auth state listener: STRICTLY SYNCHRONOUS. No awaits inside callback!
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const user = session?.user ?? null;
+      setAuthUser(user);
+
+      if (event === 'SIGNED_OUT') {
+        profileSyncUserIdRef.current = null;
         setAuthUser(null);
+        setCurrentProfile(null);
         setIdentityMode('offline-local');
+        return;
+      }
+
+      if (event === 'INITIAL_SESSION') {
+        // Initial session is owned by initializeIdentity()
+        return;
+      }
+
+      if (event === 'TOKEN_REFRESHED') {
+        // State update only; do not reload profile or trigger loading state
+        return;
+      }
+
+      if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && user) {
+        // Defer async profile work outside the auth callback lock
+        setTimeout(() => {
+          syncProfileForUser(user);
+        }, 0);
       }
     });
 
     return () => {
       subscription?.unsubscribe();
     };
-  }, [initializeIdentity]);
+  }, [initializeIdentity, syncProfileForUser]);
+
+  // Controlled 8-second safety timeout guard to guarantee loading completes
+  useEffect(() => {
+    let timeoutId;
+    if (isLoadingIdentity) {
+      timeoutId = setTimeout(() => {
+        if (isLoadingIdentity) {
+          console.warn('[AUTH] Initial identity setup timed out after 8s; clearing loading spinner.');
+          setAuthErrorMessage(prev => prev || 'Connection timeout during identity verification.');
+          setIsLoadingIdentity(false);
+        }
+      }, 8000);
+    }
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [isLoadingIdentity]);
 
   return {
     isLoadingIdentity,
@@ -163,6 +233,10 @@ export const useIdentity = () => {
     identityMode,
     authErrorMessage,
     legacyMigrationNeeded,
-    refreshIdentity: initializeIdentity
+    refreshIdentity: () => {
+      isInitializingRef.current = false;
+      profileSyncUserIdRef.current = null;
+      initializeIdentity();
+    }
   };
 };

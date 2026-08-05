@@ -122,8 +122,21 @@ const RUN_ENGINE_CONFIG = {
 const GPS_CONFIG = RUN_ENGINE_CONFIG;
 
 export default function App() {
+  // Identity Engine & Auth Hook
+  const {
+    isLoadingIdentity,
+    authUser,
+    currentProfile,
+    setCurrentProfile,
+    identityMode,
+    authErrorMessage,
+    legacyMigrationNeeded
+  } = useIdentity();
+
+  const currentUser = currentProfile;
+  const setCurrentUser = setCurrentProfile;
+
   // Auth & Session State
-  const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState('login'); // 'login', 'signup', 'guest'
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -2364,6 +2377,18 @@ export default function App() {
   // RENDER INTERFACE
   // ----------------------------------------------------
 
+  // IDENTITY LOADING HUD GATE
+  if (isLoadingIdentity) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0B0B0D', color: 'white', gap: '16px' }}>
+        <div className="animate-spin" style={{ width: '36px', height: '36px', border: '3px solid rgba(252,76,2,0.2)', borderTopColor: '#FC4C02', borderRadius: '50%' }} />
+        <span style={{ fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', color: 'var(--clash-text-secondary)', fontWeight: '800' }}>
+          Authenticating Tactical Unit...
+        </span>
+      </div>
+    );
+  }
+
   // AUTH GATED VIEW
   if (!currentUser) {
     return (
@@ -2552,6 +2577,31 @@ export default function App() {
             backdropFilter: 'blur(10px)',
             zIndex: 100
           }}>
+            {/* Offline / Auth Error Banner Notice */}
+            {(identityMode === 'offline-local' || authErrorMessage) && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                right: 0,
+                background: 'rgba(252, 76, 2, 0.1)',
+                borderBottom: '1px solid rgba(252, 76, 2, 0.3)',
+                padding: '5px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                fontSize: '10px',
+                color: '#FC4C02',
+                fontWeight: '700',
+                zIndex: 99
+              }}>
+                <AlertCircle size={12} />
+                <span>
+                  {authErrorMessage || "Offline profile active. Connect to sync your progress."}
+                </span>
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{
                 width: '34px',

@@ -2580,8 +2580,8 @@ export default function App() {
             backdropFilter: 'blur(10px)',
             zIndex: 100
           }}>
-            {/* Offline / Auth Error Banner Notice */}
-            {(identityMode === 'offline-local' || authErrorMessage) && (
+            {/* Offline Banner Notice — ONLY when identityMode is offline-local */}
+            {identityMode === 'offline-local' && (
               <div style={{
                 position: 'absolute',
                 top: '100%',
@@ -2600,9 +2600,31 @@ export default function App() {
                 zIndex: 99
               }}>
                 <AlertCircle size={12} />
-                <span>
-                  {authErrorMessage || "Offline profile active. Connect to sync your progress."}
-                </span>
+                <span>Offline profile active. Connect to sync your progress.</span>
+              </div>
+            )}
+
+            {/* Auth Error Banner Notice — ONLY when identityMode is error */}
+            {identityMode === 'error' && authErrorMessage && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                right: 0,
+                background: 'rgba(252, 76, 2, 0.15)',
+                borderBottom: '1px solid rgba(252, 76, 2, 0.4)',
+                padding: '5px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                fontSize: '10px',
+                color: '#FC4C02',
+                fontWeight: '700',
+                zIndex: 99
+              }}>
+                <AlertCircle size={12} />
+                <span>{authErrorMessage}</span>
               </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>

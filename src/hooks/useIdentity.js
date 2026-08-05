@@ -32,8 +32,10 @@ export const useIdentity = () => {
   const syncProfileForUser = useCallback(async (user) => {
     if (!user || !user.id) return { success: false, error: 'Invalid user' };
 
-    // Prevent duplicate concurrent profile requests for the same user UUID
+    // If already synchronized for this user UUID, ensure authenticated state and return
     if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id) {
+      setIdentityMode('authenticated');
+      setAuthErrorMessage(null);
       return { success: true, data: currentProfile };
     }
     profileSyncUserIdRef.current = user.id;
@@ -65,7 +67,6 @@ export const useIdentity = () => {
         localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
         setIdentityMode('authenticated');
         setAuthErrorMessage(null);
-        console.log(`[AUTHENTICATED USER UUID] ${normalizedProfile.uid}`);
 
         if (isLegacyLocal) {
           localStorage.setItem('clash_identity_migrated_v1', new Date().toISOString());
@@ -186,17 +187,14 @@ export const useIdentity = () => {
       }
 
       if (event === 'INITIAL_SESSION') {
-        // Initial session is owned by initializeIdentity()
         return;
       }
 
       if (event === 'TOKEN_REFRESHED') {
-        // State update only; do not reload profile or trigger loading state
         return;
       }
 
       if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && user) {
-        // Defer async profile work outside the auth callback lock
         setTimeout(() => {
           syncProfileForUser(user);
         }, 0);

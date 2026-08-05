@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, useSupabase } from '../supabase';
 import { getCurrentSession, createAnonymousSession } from '../services/authService';
 import { ensureProfile } from '../services/profileService';
+import { syncQueueService } from '../services/syncQueueService';
 
 // Safe LocalStorage Cache Parser
 const getSafeCachedProfile = () => {
@@ -67,6 +68,7 @@ export const useIdentity = () => {
         localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
         setIdentityMode('authenticated');
         setAuthErrorMessage(null);
+        setTimeout(() => syncQueueService.syncAll(), 100);
 
         if (isLegacyLocal) {
           localStorage.setItem('clash_identity_migrated_v1', new Date().toISOString());

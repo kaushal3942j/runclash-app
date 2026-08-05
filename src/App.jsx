@@ -7,7 +7,7 @@ import {
   ChevronUp, ChevronDown, Clock, Check, Flame, Share2, Edit3, Bell, ChevronLeft, ChevronRight, Activity, Bookmark
 } from 'lucide-react';
 import { 
-  isFirebaseActive, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
+  isFirebaseActive, useSupabase, isValidUUID, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
   syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
   saveCompletedRun, updateUserProfile, fetchClans, createClanInCloud, joinClanInCloud, leaveClanInCloud
 } from './supabase';
@@ -1941,7 +1941,7 @@ export default function App() {
     addLog(`System: Run history successfully saved.`);
 
     // Save to Database (Supabase / LocalStorage)
-    const supabaseAttempted = isFirebaseActive() && currentUser && !currentUser.uid.startsWith('local_');
+    const supabaseAttempted = useSupabase && currentUser && isValidUUID(currentUser.uid);
     let supabaseResult = null;
     let supabaseErr = null;
 

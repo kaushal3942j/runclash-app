@@ -4,9 +4,15 @@ export const runService = {
   saveRun: async (runData) => {
     try {
       const res = await saveCompletedRun(runData);
-      return { success: res.success !== false, data: res.data, error: res.error || null };
+      return {
+        success: res.success !== false,
+        cloud: !!res.cloud,
+        queued: !!res.queued,
+        data: res.data,
+        error: res.error || null
+      };
     } catch (err) {
-      return { success: false, data: null, error: err.message };
+      return { success: false, cloud: false, queued: false, data: null, error: err.message };
     }
   },
   loadHistory: () => {

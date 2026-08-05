@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { syncQueueService, generateUUID } from './services/syncQueueService';
 
 // 1. Supabase Configuration Check
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -541,9 +542,103 @@ export const subscribeToTerritories = (onUpdate) => {
   }
 };
 
-const isValidUUID = (str) => {
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+export const isValidUUID = (str) => {
   if (!str || typeof str !== 'string') return false;
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str);
+  return UUID_REGEX.test(str);
+};
+
+const PENDING_CLAIMS_KEY = 'clash_pending_territories';
+
+export const getPendingTerritoryClaims = () => {
+  try {
+    const raw = localStorage.getItem(PENDING_CLAIMS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.warn('[QUEUE] Error reading pending claims cache:', e);
+    return [];
+  }
+};
+
+export const enqueuePendingTerritoryClaim = (pendingItem) => {
+  try {
+    const current = getPendingTerritoryClaims();
+    const filtered = current.filter(item => item.claimId !== pendingItem.claimId && item.territory?.name !== pendingItem.territory?.name);
+    filtered.push(pendingItem);
+    localStorage.setItem(PENDING_CLAIMS_KEY, JSON.stringify(filtered));
+    console.log('[QUEUE] Territory claim saved to offline queue:', pendingItem.territory?.name);
+  } catch (e) {
+    console.error('[QUEUE] Error queueing pending territory claim:', e);
+  }
+};
+
+export const syncOfflineTerritoryClaims = async () => {
+  if (!useSupabase) return { success: false, syncedCount: 0 };
+
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData?.session?.user;
+    if (!sessionUser || !isValidUUID(sessionUser.id)) {
+      return { success: false, syncedCount: 0, reason: 'No active authenticated session' };
+    }
+
+    const pendingList = getPendingTerritoryClaims();
+    if (pendingList.length === 0) return { success: true, syncedCount: 0 };
+
+    console.log(`[QUEUE SYNC] Processing ${pendingList.length} offline territory claim(s)...`);
+    let syncedCount = 0;
+    const remainingPending = [];
+
+    for (const item of pendingList) {
+      const terr = item.territory;
+      const claimId = item.claimId || `claim_${Date.now()}`;
+      const areaVal = typeof terr.area === 'number'
+        ? terr.area
+        : parseFloat(String(terr.area).replace(/[^\d.]/g, '')) || 0;
+
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 72);
+
+      const dbTerr = {
+        claim_id: claimId,
+        name: terr.name,
+        owner_id: sessionUser.id, // Strictly authenticated user UUID!
+        owner_name: terr.ownerName || 'Runner',
+        clan_name: terr.clan || 'None',
+        area_sqm: areaVal,
+        decay_hours: terr.decayHours || 72,
+        max_decay_hours: terr.maxDecayHours || 72,
+        rate: terr.rate || 1.0,
+        coords: terr.coords,
+        expires_at: expiresAt.toISOString()
+      };
+
+      const { data, error } = await supabase
+        .from('territories')
+        .insert(dbTerr)
+        .select()
+        .single();
+
+      if (!error || error.code === '23505') {
+        syncedCount++;
+        console.log(`[QUEUE SYNC] Successfully synced claim "${terr.name}" (Claim ID: ${claimId})`);
+      } else {
+        console.warn(`[QUEUE SYNC] Failed to sync claim "${terr.name}":`, error.message);
+        remainingPending.push(item);
+      }
+    }
+
+    localStorage.setItem(PENDING_CLAIMS_KEY, JSON.stringify(remainingPending));
+
+    if (syncedCount > 0 && activeLoadTerritories) {
+      activeLoadTerritories();
+    }
+
+    return { success: true, syncedCount, remainingCount: remainingPending.length };
+  } catch (err) {
+    console.error('[QUEUE SYNC] Exception syncing offline territory claims:', err);
+    return { success: false, syncedCount: 0, error: err.message };
+  }
 };
 
 export const saveNewTerritory = async (territory) => {
@@ -554,28 +649,45 @@ export const saveNewTerritory = async (territory) => {
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + 72);
 
-  // Validate ownerId to avoid PostgreSQL 22P02 invalid UUID type error
   const rawOwnerId = territory.ownerId || territory.userId;
   const validOwnerId = isValidUUID(rawOwnerId) ? rawOwnerId : null;
 
-  const dbTerr = {
-    name: territory.name,
-    owner_id: validOwnerId,
-    owner_name: territory.ownerName || 'Unclaimed',
-    clan_name: territory.clan || 'None',
-    area_sqm: areaVal,
-    decay_hours: territory.decayHours || 72,
-    max_decay_hours: territory.maxDecayHours || 72,
-    rate: territory.rate || 1.0,
-    coords: territory.coords,
-    expires_at: expiresAt.toISOString()
-  };
+  // STRICT AUTHENTICATION GUARD
+  let authenticatedSessionUser = null;
+  if (useSupabase && validOwnerId) {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sUser = sessionData?.session?.user;
+      if (sUser && isValidUUID(sUser.id) && sUser.id === validOwnerId) {
+        authenticatedSessionUser = sUser;
+      }
+    } catch (e) {
+      console.warn('[AUTH GUARD] Error checking session for territory insert:', e);
+    }
+  }
 
+  // Preserve or generate claim_id ONCE via generateUUID()
+  const claimId = territory.claimId || territory.claim_id || generateUUID();
   let insertData = null;
   let insertError = null;
   let cloudSuccess = false;
 
-  if (useSupabase) {
+  // Execute supabase.from('territories').insert ONLY when validOwnerId is non-null AND session is authenticated!
+  if (useSupabase && validOwnerId && authenticatedSessionUser) {
+    const dbTerr = {
+      claim_id: claimId,
+      name: territory.name,
+      owner_id: authenticatedSessionUser.id, // GUARANTEED NON-NULL VALID AUTHENTICATED UUID
+      owner_name: territory.ownerName || 'Runner',
+      clan_name: territory.clan || 'None',
+      area_sqm: areaVal,
+      decay_hours: territory.decayHours || 72,
+      max_decay_hours: territory.maxDecayHours || 72,
+      rate: territory.rate || 1.0,
+      coords: territory.coords,
+      expires_at: expiresAt.toISOString()
+    };
+
     try {
       const { data, error } = await supabase
         .from('territories')
@@ -583,52 +695,61 @@ export const saveNewTerritory = async (territory) => {
         .select()
         .single();
 
-      insertData = data;
-      insertError = error;
-      cloudSuccess = !error && !!data;
+      if (!error || error.code === '23505') {
+        insertData = data;
+        cloudSuccess = true;
+        if (error?.code === '23505') {
+          console.log(`[TERRITORY INSERT] Unique violation (23505) for claim ${claimId}. Marked as synced.`);
+        }
+      } else {
+        insertError = error;
+        cloudSuccess = false;
+        syncQueueService.enqueueTerritory({ ...territory, claimId, ownerId: validOwnerId });
+      }
     } catch (err) {
       insertError = err;
+      cloudSuccess = false;
+      syncQueueService.enqueueTerritory({ ...territory, claimId, ownerId: validOwnerId });
     }
+  } else {
+    // If authentication is unavailable or owner_id is unauthenticated/null, save to offline sync queue!
+    console.log('[TERRITORY CLAIM] Unauthenticated or offline owner. Queueing claim to offline sync queue.');
+    syncQueueService.enqueueTerritory({
+      ...territory,
+      claimId,
+      ownerId: validOwnerId || rawOwnerId
+    });
   }
-
-  // Structured Log Diagnostic (TASK 2)
-  console.log('[TERRITORY INSERT]', {
-    isSupabaseActive: useSupabase,
-    currentUserId: rawOwnerId,
-    currentUserIdType: typeof rawOwnerId,
-    territoryOwnerId: validOwnerId,
-    territoryOwnerIdType: typeof validOwnerId,
-    payload: dbTerr,
-    insertAttempted: useSupabase,
-    insertData: insertData,
-    insertError: insertError ? insertError.message || JSON.stringify(insertError) : null,
-    insertErrorCode: insertError ? insertError.code : null,
-    insertErrorDetails: insertError ? insertError.details : null,
-    localFallbackUsed: !cloudSuccess
-  });
 
   // Always mirror to LocalStorage for instant UI responsiveness
   const list = getMockTerritories();
   const newTerr = {
     ...territory,
     id: insertData ? insertData.id : (territory.id || `t_local_${Date.now()}`),
-    ownerId: validOwnerId || rawOwnerId
+    claimId: claimId,
+    ownerId: validOwnerId || rawOwnerId,
+    synced: cloudSuccess
   };
-  const updated = [...list.filter(t => t.id !== newTerr.id), newTerr];
+  const updated = [...list.filter(t => (t.claimId || t.id) !== (newTerr.claimId || newTerr.id)), newTerr];
   localStorage.setItem('clash_territories', JSON.stringify(updated));
   triggerListeners(updated);
   if (activeLoadTerritories) activeLoadTerritories();
 
-  if (useSupabase && !cloudSuccess) {
+  if (!cloudSuccess) {
     return {
-      success: false,
+      success: true,
+      queued: true,
       cloud: false,
-      error: insertError ? (insertError.message || JSON.stringify(insertError)) : 'Database insert failed',
       data: newTerr
     };
   }
 
-  return { success: true, cloud: cloudSuccess, data: insertData || newTerr };
+  return {
+    success: true,
+    cloud: true,
+    queued: false,
+    data: insertData || newTerr
+  };
 };
 
 export const updateTerritory = async (id, updates) => {
@@ -718,46 +839,90 @@ export const reportError = async (message, stack = '', component = '', metadata 
 
 export const saveCompletedRun = async (runData) => {
   const localRunsKey = 'clash_runs';
+  const operationId = runData.operationId || runData.operation_id || generateUUID();
   const existingRuns = JSON.parse(localStorage.getItem(localRunsKey)) || [];
+
   const localRun = {
     id: 'run_local_' + Date.now(),
+    operationId,
     ...runData,
     createdAt: new Date().toISOString()
   };
-  const updatedRuns = [...existingRuns, localRun];
+
+  const updatedRuns = [...existingRuns.filter(r => (r.operationId || r.operation_id) !== operationId), localRun];
   localStorage.setItem(localRunsKey, JSON.stringify(updatedRuns));
   console.log('Database: Run saved to local cache for instant UI rendering.');
 
-  const isLocalGuest = !runData.userId || runData.userId.startsWith('local_');
-  if (useSupabase && !isLocalGuest) {
+  const userId = runData.userId;
+  const isValidUser = isValidUUID(userId);
+
+  // STRICT AUTHENTICATION GUARD
+  let authenticatedSessionUser = null;
+  if (useSupabase && isValidUser) {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session && session.user && isValidUUID(session.user.id) && session.user.id === userId) {
+        authenticatedSessionUser = session.user;
+      }
+    } catch (e) {
+      console.warn('[AUTH GUARD] Error checking session for run insert:', e);
+    }
+  }
+
+  if (useSupabase && isValidUser && authenticatedSessionUser) {
+    try {
+      const distanceKm = parseFloat(runData.distance) || parseFloat(runData.distanceKm) || 0;
+      const durationSeconds = parseInt(runData.duration) || parseInt(runData.durationSeconds) || 0;
+      const caloriesVal = parseInt(runData.calories) || 0;
+
+      let paceVal = null;
+      if (typeof runData.pace === 'number') paceVal = runData.pace;
+      else if (typeof runData.paceSecondsPerKm === 'number') paceVal = runData.paceSecondsPerKm;
+      else if (typeof runData.pace === 'string' && runData.pace.includes(':')) {
+        const [m, s] = runData.pace.split(':').map(Number);
+        if (!isNaN(m) && !isNaN(s)) paceVal = m * 60 + s;
+      }
+
+      let speedVal = parseFloat(runData.speed) || parseFloat(runData.averageSpeedKmh) || null;
+
       const dbRun = {
-        user_id: runData.userId,
-        gps_path: runData.path,
-        distance: runData.distance,
-        duration: runData.duration,
-        pace: runData.pace,
-        speed: runData.speed,
-        calories: runData.calories,
-        start_time: runData.startTime,
-        end_time: runData.endTime,
-        summary_statistics: runData.summaryStatistics
+        operation_id: operationId,
+        user_id: authenticatedSessionUser.id,
+        distance_km: distanceKm,
+        duration_seconds: durationSeconds,
+        pace_seconds_per_km: paceVal,
+        average_speed_kmh: speedVal,
+        calories: caloriesVal,
+        gps_path: runData.path || runData.gps_path || [],
+        start_time: runData.startTime || new Date().toISOString(),
+        end_time: runData.endTime || new Date().toISOString(),
+        summary_statistics: runData.summaryStatistics || {}
       };
 
       const { data, error } = await supabase
         .from('runs')
-        .insert(dbRun);
+        .insert(dbRun)
+        .select()
+        .single();
 
-      console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + runData.userId + '\nstatus: ' + (error ? 'error: ' + error.message : 'success'));
-
-      if (error) console.warn('Supabase insert run warning:', error.message);
-      return { success: !error, data: data || localRun, local: false };
+      if (!error || error.code === '23505') {
+        console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + userId + '\nstatus: ' + (error ? 'already synced (23505)' : 'success'));
+        return { success: true, cloud: true, data: data || localRun };
+      } else {
+        console.warn('Supabase insert run warning:', error.message);
+        syncQueueService.enqueueRun({ ...runData, operationId });
+        return { success: true, cloud: false, queued: true, data: localRun };
+      }
     } catch (err) {
-      console.warn('Supabase insert run failed, using local copy:', err.message);
+      console.warn('Supabase insert run failed, queueing offline:', err.message);
+      syncQueueService.enqueueRun({ ...runData, operationId });
+      return { success: true, cloud: false, queued: true, data: localRun };
     }
+  } else {
+    console.log('[RUN SAVE] Unauthenticated or offline user. Queueing run to offline sync queue.');
+    syncQueueService.enqueueRun({ ...runData, operationId });
+    return { success: true, cloud: false, queued: true, data: localRun };
   }
-
-  return { success: true, local: true, data: localRun };
 };
 
 export const fetchClans = async () => {

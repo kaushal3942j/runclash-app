@@ -69,6 +69,7 @@ export const useIdentity = () => {
         localStorage.setItem('clash_user', JSON.stringify(normalizedProfile));
         setIdentityMode('authenticated');
         setAuthErrorMessage(null);
+        console.log('[IDENTITY] profile resolved', normalizedProfile.displayName);
         setTimeout(() => syncQueueService.syncAll(), 3000);
 
         if (isLegacyLocal) {
@@ -98,6 +99,7 @@ export const useIdentity = () => {
     isInitializingRef.current = true;
 
     const cachedProfile = getSafeCachedProfile();
+    console.log('[IDENTITY] cache loaded', cachedProfile ? cachedProfile.displayName : 'none');
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
     // OPTIMIZATION: If cached profile exists and not explicitly logged out, render UI INSTANTLY (<50ms)
@@ -133,6 +135,7 @@ export const useIdentity = () => {
       // 1. Check existing active session
       const sessionRes = await getCurrentSession();
       let activeSession = sessionRes.success ? sessionRes.data : null;
+      console.log('[IDENTITY] session resolved', activeSession?.user?.id || 'signed-out');
 
       // 2. If no active session, transition to 'signed-out' (DO NOT call signInAnonymously automatically)
       if (!activeSession || !activeSession.user) {

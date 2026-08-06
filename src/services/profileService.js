@@ -61,12 +61,20 @@ export const loadProfile = async (userId) => {
   }
 };
 
+export const isDefaultName = (name) => {
+  if (!name || typeof name !== 'string') return true;
+  const lower = name.trim().toLowerCase();
+  return lower === '' || lower === 'runner' || lower === 'guest runner' || lower === 'guest' || lower === 'offline runner';
+};
+
 export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner', legacyData = null) => {
   if (!useSupabase || !isValidAuthenticatedUser(user)) {
     return { success: false, data: null, error: 'User must be a valid authenticated Supabase identity.' };
   }
 
   try {
+    const customPreferred = (!isDefaultName(preferredDisplayName) ? preferredDisplayName : (legacyData?.displayName && !isDefaultName(legacyData.displayName) ? legacyData.displayName : null)) || null;
+
     // 1. Check if profile already exists in public.profiles
     const { data: existing } = await supabase
       .from('profiles')
@@ -77,6 +85,23 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
     if (existing) {
       const validClan = await validateClanIntegrity(user.id, existing.clan_name);
       existing.clan_name = validClan;
+
+      // RACE FIX: If existing name in DB is default ('Runner' / 'Guest Runner') AND we have a custom name, update Supabase!
+      if (customPreferred && isDefaultName(existing.display_name)) {
+        console.log(`[PROFILE RACE FIX] Overwriting default DB display_name "${existing.display_name}" with custom name "${customPreferred}" for user ${user.id}`);
+        const { data: updated } = await supabase
+          .from('profiles')
+          .update({ display_name: customPreferred, updated_at: new Date().toISOString() })
+          .eq('id', user.id)
+          .select()
+          .single();
+
+        if (updated) {
+          return { success: true, data: updated, created: false, error: null };
+        }
+        existing.display_name = customPreferred;
+      }
+
       return { success: true, data: existing, created: false, error: null };
     }
 
@@ -86,7 +111,7 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
 
     const profilePayload = {
       id: user.id,
-      display_name: legacyData?.displayName || preferredDisplayName || 'Guest Runner',
+      display_name: customPreferred || legacyData?.displayName || preferredDisplayName || 'Guest Runner',
       level: legacyData?.level || 1,
       xp: legacyData?.xp || 0,
       coins: legacyData?.coins || 0,

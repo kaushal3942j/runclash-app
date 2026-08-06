@@ -138,6 +138,10 @@ export default function App() {
   const currentUser = currentProfile;
   const setCurrentUser = setCurrentProfile;
 
+  useEffect(() => {
+    console.log('[APP] render ready');
+  }, []);
+
   // Auth & Session State
   const [authMode, setAuthMode] = useState('login'); // 'login', 'signup', 'guest'
   const [authEmail, setAuthEmail] = useState('');
@@ -181,6 +185,7 @@ export default function App() {
 
   const [completedRunData, setCompletedRunData] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [showSignOutModal, setShowSignOutModal] = useState(false);
   const [mapMode, setMapMode] = useState('solo'); // 'solo' | 'clan'
 
   // Live Run Screen 2.0 States
@@ -816,6 +821,7 @@ export default function App() {
         setAuthError(res.error);
         addLog(`Sign-out warning: ${res.error}`);
       } else {
+        setShowSignOutModal(false);
         addLog('System: User signed out successfully.');
       }
     } catch (err) {
@@ -2964,6 +2970,104 @@ export default function App() {
               </div>
             )}
 
+            {/* SIGN OUT CONFIRMATION MODAL (PART 3) */}
+            {showSignOutModal && (
+              <div
+                className="fade-in"
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0, 0, 0, 0.85)',
+                  backdropFilter: 'blur(8px)',
+                  zIndex: 30000,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '20px'
+                }}
+              >
+                <div
+                  className="clash-card"
+                  style={{
+                    width: '380px',
+                    maxWidth: '100%',
+                    backgroundColor: '#141414',
+                    border: '1px solid #2A2A2A',
+                    borderRadius: '20px',
+                    padding: '24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '16px',
+                    boxShadow: '0 20px 40px rgba(0,0,0,0.9)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '50%',
+                      backgroundColor: 'rgba(252, 76, 2, 0.1)',
+                      border: '1px solid rgba(252, 76, 2, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <LogOut size={20} style={{ color: '#FC4C02' }} />
+                    </div>
+                    <div>
+                      <h3 className="clash-title" style={{ margin: 0, fontSize: '18px', color: 'white', fontWeight: '800' }}>
+                        Sign out of RunClash?
+                      </h3>
+                      <span className="clash-label" style={{ fontSize: '9px', color: 'var(--clash-text-secondary)' }}>
+                        AUTHENTICATION NOTICE
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="clash-body" style={{ margin: 0, fontSize: '12px', color: '#A0A0A0', lineHeight: '1.5' }}>
+                    Anonymous guest progress cannot be recovered after signing out unless the account is upgraded.
+                  </p>
+
+                  {authError && (
+                    <div style={{ background: 'rgba(252, 76, 2, 0.1)', border: '1px solid #FC4C02', color: '#FC4C02', padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: '600' }}>
+                      {authError}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                    <button
+                      onClick={() => {
+                        if (!isSigningOut) {
+                          setAuthError('');
+                          setShowSignOutModal(false);
+                        }
+                      }}
+                      disabled={isSigningOut}
+                      className="clash-btn-secondary"
+                      style={{ flex: 1, height: '42px', borderRadius: '12px', fontSize: '12px', opacity: isSigningOut ? 0.5 : 1 }}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        await handleLogout();
+                      }}
+                      disabled={isSigningOut}
+                      className="clash-btn-primary"
+                      style={{ flex: 1.2, height: '42px', borderRadius: '12px', fontSize: '12px', backgroundColor: '#FC4C02', opacity: isSigningOut ? 0.6 : 1 }}
+                    >
+                      {isSigningOut ? 'SIGNING OUT...' : 'Sign Out'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* SETTINGS DRAWER OVERLAY (TRANSFORMED INTO RUNNER HQ COMMAND CENTER) */}
             {showSettingsDrawer && (
               <div className="fade-in settings-drawer-mobile" style={{
@@ -3861,16 +3965,16 @@ export default function App() {
                     {/* Exit Sign Out Account Action */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px', marginTop: '16px' }}>
                       <button
-                        onClick={async () => {
-                          await handleLogout();
+                        onClick={() => {
                           setShowSettingsDrawer(false);
+                          setShowSignOutModal(true);
                         }}
                         disabled={isSigningOut}
                         className="clash-btn-secondary"
-                        style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: isSigningOut ? 'wait' : 'pointer', opacity: isSigningOut ? 0.6 : 1 }}
+                        style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: 'pointer' }}
                       >
                         <LogOut size={13} style={{ color: '#FC4C02', marginRight: '6px' }} />
-                        {isSigningOut ? 'SIGNING OUT...' : 'Sign Out Account'}
+                        Sign Out Account
                       </button>
 
                       <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>

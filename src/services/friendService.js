@@ -1,28 +1,17 @@
 import { supabase, useSupabase } from '../supabase.js';
 
-const withTimeout = (promise, ms = 10000) => {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error('Request timed out.')), ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-};
-
 export const sendFriendRequest = async (targetUserId) => {
   if (!useSupabase || !targetUserId) {
     return { success: false, data: null, error: 'Target user ID is required.' };
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('send_friend_request', { target_user_id: targetUserId }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('send_friend_request', { target_user_id: targetUserId });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    if (!data || !data.success) {
-      return { success: false, data: null, error: data?.error || 'Failed to send friend request' };
+    if (!data.success) {
+      return { success: false, data: null, error: data.error };
     }
     return { success: true, data, error: null };
   } catch (err) {
@@ -36,18 +25,15 @@ export const acceptFriendRequest = async (requestId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('respond_to_friend_request', {
-        p_request_id: requestId,
-        p_response: 'accept'
-      }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('respond_to_friend_request', { 
+      p_request_id: requestId, 
+      p_response: 'accept' 
+    });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    if (!data || !data.success) {
-      return { success: false, data: null, error: data?.error || 'Failed to accept friend request' };
+    if (!data.success) {
+      return { success: false, data: null, error: data.error };
     }
     return { success: true, data, error: null };
   } catch (err) {
@@ -61,18 +47,15 @@ export const rejectFriendRequest = async (requestId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('respond_to_friend_request', {
-        p_request_id: requestId,
-        p_response: 'reject'
-      }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('respond_to_friend_request', { 
+      p_request_id: requestId, 
+      p_response: 'reject' 
+    });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    if (!data || !data.success) {
-      return { success: false, data: null, error: data?.error || 'Failed to reject friend request' };
+    if (!data.success) {
+      return { success: false, data: null, error: data.error };
     }
     return { success: true, data, error: null };
   } catch (err) {
@@ -86,15 +69,12 @@ export const cancelFriendRequest = async (requestId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('cancel_friend_request', { p_request_id: requestId }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('cancel_friend_request', { p_request_id: requestId });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    if (!data || !data.success) {
-      return { success: false, data: null, error: data?.error || 'Failed to cancel request' };
+    if (!data.success) {
+      return { success: false, data: null, error: data.error };
     }
     return { success: true, data, error: null };
   } catch (err) {
@@ -108,15 +88,12 @@ export const removeFriend = async (friendUserId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('remove_friend', { friend_user_id: friendUserId }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('remove_friend', { friend_user_id: friendUserId });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    if (!data || !data.success) {
-      return { success: false, data: null, error: data?.error || 'Failed to remove friend' };
+    if (!data.success) {
+      return { success: false, data: null, error: data.error };
     }
     return { success: true, data, error: null };
   } catch (err) {
@@ -130,14 +107,11 @@ export const blockUser = async (targetUserId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('block_user', { target_user_id: targetUserId }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('block_user', { target_user_id: targetUserId });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    return { success: true, data: data || { success: true }, error: null };
+    return { success: true, data, error: null };
   } catch (err) {
     return { success: false, data: null, error: err.message };
   }
@@ -149,14 +123,11 @@ export const unblockUser = async (targetUserId) => {
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase.rpc('unblock_user', { target_user_id: targetUserId }),
-      10000
-    );
+    const { data, error } = await supabase.rpc('unblock_user', { target_user_id: targetUserId });
     if (error) {
       return { success: false, data: null, error: error.message };
     }
-    return { success: true, data: data || { success: true }, error: null };
+    return { success: true, data, error: null };
   } catch (err) {
     return { success: false, data: null, error: err.message };
   }
@@ -165,7 +136,7 @@ export const unblockUser = async (targetUserId) => {
 export const updateLastActive = async () => {
   if (!useSupabase) return { success: true };
   try {
-    await withTimeout(supabase.rpc('update_last_active'), 5000);
+    await supabase.rpc('update_last_active');
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
@@ -185,13 +156,10 @@ export const getFriends = async () => {
 
     const userId = session.user.id;
 
-    const { data: friendships, error: fErr } = await withTimeout(
-      supabase
-        .from('friendships')
-        .select('user_one_id, user_two_id')
-        .or(`user_one_id.eq.${userId},user_two_id.eq.${userId}`),
-      10000
-    );
+    const { data: friendships, error: fErr } = await supabase
+      .from('friendships')
+      .select('user_one_id, user_two_id')
+      .or(`user_one_id.eq.${userId},user_two_id.eq.${userId}`);
 
     if (fErr) {
       return { success: false, data: [], error: fErr.message };
@@ -203,13 +171,10 @@ export const getFriends = async () => {
       return { success: true, data: [], error: null };
     }
 
-    const { data: friendProfiles, error: pErr } = await withTimeout(
-      supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url, clan_name, level, xp, last_active_at')
-        .in('id', friendIds),
-      10000
-    );
+    const { data: friendProfiles, error: pErr } = await supabase
+      .from('profiles')
+      .select('id, display_name, username, avatar_url, clan_name, level, xp, last_active_at')
+      .in('id', friendIds);
 
     if (pErr) {
       return { success: false, data: [], error: pErr.message };
@@ -232,14 +197,11 @@ export const getIncomingRequests = async () => {
       return { success: true, data: [], error: null };
     }
 
-    const { data, error } = await withTimeout(
-      supabase
-        .from('friend_requests')
-        .select('id, sender_id, created_at, status')
-        .eq('receiver_id', session.user.id)
-        .eq('status', 'pending'),
-      10000
-    );
+    const { data, error } = await supabase
+      .from('friend_requests')
+      .select('id, sender_id, created_at, status')
+      .eq('receiver_id', session.user.id)
+      .eq('status', 'pending');
 
     if (error) {
       return { success: false, data: [], error: error.message };
@@ -250,13 +212,10 @@ export const getIncomingRequests = async () => {
     }
 
     const senderIds = data.map(r => r.sender_id);
-    const { data: senderProfiles } = await withTimeout(
-      supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url, clan_name, level')
-        .in('id', senderIds),
-      10000
-    );
+    const { data: senderProfiles } = await supabase
+      .from('profiles')
+      .select('id, display_name, username, avatar_url, clan_name, level')
+      .in('id', senderIds);
 
     const profileMap = new Map((senderProfiles || []).map(p => [p.id, p]));
 
@@ -282,14 +241,11 @@ export const getOutgoingRequests = async () => {
       return { success: true, data: [], error: null };
     }
 
-    const { data, error } = await withTimeout(
-      supabase
-        .from('friend_requests')
-        .select('id, receiver_id, created_at, status')
-        .eq('sender_id', session.user.id)
-        .eq('status', 'pending'),
-      10000
-    );
+    const { data, error } = await supabase
+      .from('friend_requests')
+      .select('id, receiver_id, created_at, status')
+      .eq('sender_id', session.user.id)
+      .eq('status', 'pending');
 
     if (error) {
       return { success: false, data: [], error: error.message };
@@ -300,13 +256,10 @@ export const getOutgoingRequests = async () => {
     }
 
     const receiverIds = data.map(r => r.receiver_id);
-    const { data: receiverProfiles } = await withTimeout(
-      supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url, clan_name, level')
-        .in('id', receiverIds),
-      10000
-    );
+    const { data: receiverProfiles } = await supabase
+      .from('profiles')
+      .select('id, display_name, username, avatar_url, clan_name, level')
+      .in('id', receiverIds);
 
     const profileMap = new Map((receiverProfiles || []).map(p => [p.id, p]));
 
@@ -338,14 +291,11 @@ export const getRelationshipState = async (targetUserId) => {
     }
 
     // Check block
-    const { data: block } = await withTimeout(
-      supabase
-        .from('blocks')
-        .select('blocker_id')
-        .or(`and(blocker_id.eq.${currentUserId},blocked_id.eq.${targetUserId}),and(blocker_id.eq.${targetUserId},blocked_id.eq.${currentUserId})`)
-        .maybeSingle(),
-      8000
-    );
+    const { data: block } = await supabase
+      .from('blocks')
+      .select('blocker_id')
+      .or(`and(blocker_id.eq.${currentUserId},blocked_id.eq.${targetUserId}),and(blocker_id.eq.${targetUserId},blocked_id.eq.${currentUserId})`)
+      .maybeSingle();
 
     if (block) {
       return { state: 'blocked', isBlocker: block.blocker_id === currentUserId, requestId: null };
@@ -355,30 +305,24 @@ export const getRelationshipState = async (targetUserId) => {
     const u1 = currentUserId < targetUserId ? currentUserId : targetUserId;
     const u2 = currentUserId < targetUserId ? targetUserId : currentUserId;
 
-    const { data: friendship } = await withTimeout(
-      supabase
-        .from('friendships')
-        .select('id')
-        .eq('user_one_id', u1)
-        .eq('user_two_id', u2)
-        .maybeSingle(),
-      8000
-    );
+    const { data: friendship } = await supabase
+      .from('friendships')
+      .select('id')
+      .eq('user_one_id', u1)
+      .eq('user_two_id', u2)
+      .maybeSingle();
 
     if (friendship) {
       return { state: 'friends', requestId: null };
     }
 
     // Check pending request
-    const { data: pendingReq } = await withTimeout(
-      supabase
-        .from('friend_requests')
-        .select('id, sender_id, receiver_id')
-        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${currentUserId})`)
-        .eq('status', 'pending')
-        .maybeSingle(),
-      8000
-    );
+    const { data: pendingReq } = await supabase
+      .from('friend_requests')
+      .select('id, sender_id, receiver_id')
+      .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${currentUserId})`)
+      .eq('status', 'pending')
+      .maybeSingle();
 
     if (pendingReq) {
       if (pendingReq.sender_id === currentUserId) {
@@ -390,7 +334,7 @@ export const getRelationshipState = async (targetUserId) => {
 
     return { state: 'none', requestId: null };
   } catch (err) {
-    console.warn('[FRIEND SERVICE] Relationship state notice:', err.message);
+    console.error('[FRIEND SERVICE] Error getting relationship state:', err);
     return { state: 'none', requestId: null };
   }
 };

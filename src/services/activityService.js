@@ -1,13 +1,5 @@
 import { supabase, useSupabase } from '../supabase.js';
 
-const withTimeout = (promise, ms = 10000) => {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error('Request timed out.')), ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-};
-
 export const getActivityFeed = async (filter = 'friends', limitCount = 20, beforeTimestamp = null) => {
   if (!useSupabase) {
     return { success: true, data: [], error: null };
@@ -32,14 +24,11 @@ export const getActivityFeed = async (filter = 'friends', limitCount = 20, befor
       query = query.eq('actor_id', currentUserId);
     } else if (filter === 'friends') {
       if (!currentUserId) return { success: true, data: [], error: null };
-
-      const { data: friendships } = await withTimeout(
-        supabase
-          .from('friendships')
-          .select('user_one_id, user_two_id')
-          .or(`user_one_id.eq.${currentUserId},user_two_id.eq.${currentUserId}`),
-        8000
-      );
+      
+      const { data: friendships } = await supabase
+        .from('friendships')
+        .select('user_one_id, user_two_id')
+        .or(`user_one_id.eq.${currentUserId},user_two_id.eq.${currentUserId}`);
 
       const friendIds = (friendships || []).map(f => f.user_one_id === currentUserId ? f.user_two_id : f.user_one_id);
       const allowedActorIds = [currentUserId, ...friendIds];
@@ -50,7 +39,7 @@ export const getActivityFeed = async (filter = 'friends', limitCount = 20, befor
       query = query.eq('visibility', 'public');
     }
 
-    const { data: activities, error: actErr } = await withTimeout(query, 10000);
+    const { data: activities, error: actErr } = await query;
     if (actErr) {
       return { success: false, data: [], error: actErr.message };
     }
@@ -61,13 +50,10 @@ export const getActivityFeed = async (filter = 'friends', limitCount = 20, befor
 
     // Enrich actor profiles
     const actorIds = [...new Set(activities.map(a => a.actor_id))];
-    const { data: actorProfiles } = await withTimeout(
-      supabase
-        .from('profiles')
-        .select('id, display_name, username, avatar_url, clan_name, level')
-        .in('id', actorIds),
-      10000
-    );
+    const { data: actorProfiles } = await supabase
+      .from('profiles')
+      .select('id, display_name, username, avatar_url, clan_name, level')
+      .in('id', actorIds);
 
     const profileMap = new Map((actorProfiles || []).map(p => [p.id, p]));
 
@@ -91,34 +77,31 @@ export const createRunActivity = async (runData, sourceType = 'run', sourceId = 
 
     const effectiveSourceId = sourceId || runData.operationId || runData.id || `run_${Date.now()}`;
 
-    const { data, error } = await withTimeout(
-      supabase
-        .from('activity_feed')
-        .upsert(
-          {
-            actor_id: session.user.id,
-            activity_type: 'run_completed',
-            run_id: runData.id || null,
-            source_type: sourceType,
-            source_id: effectiveSourceId,
-            metadata: {
-              distance: runData.distance,
-              duration: runData.duration,
-              pace: runData.pace,
-              avgSpeed: runData.avgSpeed || runData.speed,
-              calories: runData.calories
-            },
-            visibility: 'public'
+    const { data, error } = await supabase
+      .from('activity_feed')
+      .upsert(
+        {
+          actor_id: session.user.id,
+          activity_type: 'run_completed',
+          run_id: runData.id || null,
+          source_type: sourceType,
+          source_id: effectiveSourceId,
+          metadata: {
+            distance: runData.distance,
+            duration: runData.duration,
+            pace: runData.pace,
+            avgSpeed: runData.avgSpeed || runData.speed,
+            calories: runData.calories
           },
-          { onConflict: 'actor_id,activity_type,source_type,source_id', ignoreDuplicates: true }
-        )
-        .select()
-        .maybeSingle(),
-      10000
-    );
+          visibility: 'public'
+        },
+        { onConflict: 'actor_id,activity_type,source_type,source_id', ignoreDuplicates: true }
+      )
+      .select()
+      .maybeSingle();
 
     if (error) {
-      console.warn('[ACTIVITY SERVICE] Notice logging run activity:', error.message);
+      console.warn('[ACTIVITY SERVICE] Error logging run activity:', error.message);
       return { success: false, error: error.message };
     }
 
@@ -137,31 +120,28 @@ export const createTerritoryActivity = async (territoryData, sourceType = 'terri
 
     const effectiveSourceId = sourceId || territoryData.claimId || territoryData.id || `terr_${Date.now()}`;
 
-    const { data, error } = await withTimeout(
-      supabase
-        .from('activity_feed')
-        .upsert(
-          {
-            actor_id: session.user.id,
-            activity_type: 'territory_claimed',
-            territory_id: territoryData.id || null,
-            source_type: sourceType,
-            source_id: effectiveSourceId,
-            metadata: {
-              name: territoryData.name,
-              area: territoryData.area
-            },
-            visibility: 'public'
+    const { data, error } = await supabase
+      .from('activity_feed')
+      .upsert(
+        {
+          actor_id: session.user.id,
+          activity_type: 'territory_claimed',
+          territory_id: territoryData.id || null,
+          source_type: sourceType,
+          source_id: effectiveSourceId,
+          metadata: {
+            name: territoryData.name,
+            area: territoryData.area
           },
-          { onConflict: 'actor_id,activity_type,source_type,source_id', ignoreDuplicates: true }
-        )
-        .select()
-        .maybeSingle(),
-      10000
-    );
+          visibility: 'public'
+        },
+        { onConflict: 'actor_id,activity_type,source_type,source_id', ignoreDuplicates: true }
+      )
+      .select()
+      .maybeSingle();
 
     if (error) {
-      console.warn('[ACTIVITY SERVICE] Notice logging territory activity:', error.message);
+      console.warn('[ACTIVITY SERVICE] Error logging territory activity:', error.message);
       return { success: false, error: error.message };
     }
 

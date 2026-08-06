@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Users, UserPlus, Search, RefreshCw, AlertCircle } from 'lucide-react';
+import { Users, UserPlus, Search, RefreshCw } from 'lucide-react';
 import { getFriends, getIncomingRequests, getOutgoingRequests, subscribeToFriendRequests, subscribeToFriendships } from '../services/friendService';
 import { PlayerSearch } from '../components/social/PlayerSearch';
 import { FriendCard } from '../components/social/FriendCard';
@@ -11,11 +11,9 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
   const [incoming, setIncoming] = useState([]);
   const [outgoing, setOutgoing] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
 
-  const loadSocialData = useCallback(async (mountedRef) => {
+  const loadSocialData = useCallback(async () => {
     setIsLoading(true);
-    setError(null);
     try {
       const [fRes, inRes, outRes] = await Promise.all([
         getFriends(),
@@ -23,31 +21,16 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
         getOutgoingRequests()
       ]);
 
-      if (mountedRef && !mountedRef.current) return;
-
       if (fRes.success) setFriends(fRes.data || []);
       if (inRes.success) setIncoming(inRes.data || []);
       if (outRes.success) setOutgoing(outRes.data || []);
-
-      if (!fRes.success && !inRes.success && !outRes.success) {
-        setError(fRes.error || inRes.error || outRes.error || 'Failed to load social connections');
-      }
-    } catch (err) {
-      if (mountedRef && !mountedRef.current) return;
-      setError(err.message || 'Error loading social connections');
     } finally {
-      if (!mountedRef || mountedRef.current) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const mountedRef = { current: true };
-    loadSocialData(mountedRef);
-    return () => {
-      mountedRef.current = false;
-    };
+    loadSocialData();
   }, [loadSocialData]);
 
   // Realtime subscriptions for friend requests and friendship changes
@@ -55,11 +38,11 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
     if (!currentUserId) return;
 
     const reqSub = subscribeToFriendRequests(currentUserId, () => {
-      loadSocialData({ current: true });
+      loadSocialData();
     });
 
     const friendSub = subscribeToFriendships(currentUserId, () => {
-      loadSocialData({ current: true });
+      loadSocialData();
     });
 
     return () => {
@@ -148,26 +131,6 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
         <div style={{ padding: '32px', textAlign: 'center', color: '#FC4C02', display: 'flex', justifyContent: 'center' }}>
           <RefreshCw size={20} className="spin" />
         </div>
-      ) : error ? (
-        <div className="clash-card" style={{ padding: '24px', textAlign: 'center', color: '#EF4444', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-          <AlertCircle size={24} />
-          <span style={{ fontSize: '12px', fontWeight: '700' }}>{error}</span>
-          <button
-            onClick={() => loadSocialData({ current: true })}
-            style={{
-              padding: '6px 16px',
-              backgroundColor: '#FC4C02',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '11px',
-              fontWeight: '700',
-              cursor: 'pointer'
-            }}
-          >
-            Retry
-          </button>
-        </div>
       ) : activeTab === 'friends' ? (
         friends.length === 0 ? (
           <div className="clash-card" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--clash-text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
@@ -182,7 +145,7 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
                 key={friend.id}
                 friend={friend}
                 onSelect={onSelectPlayer}
-                onRemoved={() => loadSocialData({ current: true })}
+                onRemoved={() => loadSocialData()}
               />
             ))}
           </div>
@@ -204,7 +167,7 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
                   key={req.id}
                   request={req}
                   type="incoming"
-                  onUpdated={() => loadSocialData({ current: true })}
+                  onUpdated={() => loadSocialData()}
                 />
               ))
             )}
@@ -225,7 +188,7 @@ export const FriendsScreen = ({ currentUserId, onSelectPlayer }) => {
                   key={req.id}
                   request={req}
                   type="outgoing"
-                  onUpdated={() => loadSocialData({ current: true })}
+                  onUpdated={() => loadSocialData()}
                 />
               ))
             )}

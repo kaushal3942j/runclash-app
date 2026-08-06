@@ -1,72 +1,77 @@
 import { supabase, useSupabase } from '../supabase.js';
 
-const withTimeout = (promise, ms = 15000) => {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error('Upload timed out.')), ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+const MAX_AVATAR_SIZE_BYTES = 3 * 1024 * 1024; // 3 MB
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+export const validateAvatarFile = (file) => {
+  if (!file) {
+    return { valid: false, error: 'No file selected.' };
+  }
+
+  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+    return { valid: false, error: 'Only JPEG, PNG, and WebP images are allowed.' };
+  }
+
+  if (file.size > MAX_AVATAR_SIZE_BYTES) {
+    return { valid: false, error: 'Avatar file size must be less than 3 MB.' };
+  }
+
+  return { valid: true, error: null };
 };
 
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024; // 3 MB
-
 export const uploadAvatar = async (file) => {
+  const valRes = validateAvatarFile(file);
+  if (!valRes.valid) {
+    return { success: false, url: null, error: valRes.error };
+  }
+
   if (!useSupabase) {
-    return { success: false, avatarUrl: null, error: 'Supabase storage disabled.' };
-  }
-
-  if (!file) {
-    return { success: false, avatarUrl: null, error: 'No file provided.' };
-  }
-
-  // 1. MIME type validation
-  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
-    return { success: false, avatarUrl: null, error: 'File must be JPEG, PNG, or WebP.' };
-  }
-
-  // 2. File size validation
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return { success: false, avatarUrl: null, error: 'File size exceeds 3 MB limit.' };
+    return { success: false, url: null, error: 'Supabase storage disabled.' };
   }
 
   try {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session || !session.user) {
-      return { success: false, avatarUrl: null, error: 'Not authenticated.' };
+      return { success: false, url: null, error: 'User must be authenticated to upload avatar.' };
     }
 
     const userId = session.user.id;
-    const fileExt = file.name.split('.').pop();
+    const fileExt = file.name.split('.').pop() || 'webp';
     const filePath = `${userId}/avatar_${Date.now()}.${fileExt}`;
 
-    // Upload to avatars bucket
-    const { error: uploadError } = await withTimeout(
-      supabase.storage
-        .from('avatars')
-        .upload(filePath, file, { upsert: true }),
-      15000
-    );
+    const { data, error: uploadErr } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: true
+      });
 
-    if (uploadError) {
-      return { success: false, avatarUrl: null, error: uploadError.message };
+    if (uploadErr) {
+      return { success: false, url: null, error: uploadErr.message };
     }
 
-    // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: publicUrlData } = supabase.storage
       .from('avatars')
       .getPublicUrl(filePath);
 
-    const publicUrl = urlData.publicUrl;
+    const publicUrl = publicUrlData?.publicUrl || null;
 
-    // Update user profile avatar_url
-    await supabase
+    if (!publicUrl) {
+      return { success: false, url: null, error: 'Failed to generate public URL for uploaded avatar.' };
+    }
+
+    // Update profile table with avatar URL
+    const { error: profileErr } = await supabase
       .from('profiles')
       .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
       .eq('id', userId);
 
-    return { success: true, avatarUrl: publicUrl, error: null };
+    if (profileErr) {
+      console.warn('[AVATAR SERVICE] Profile avatar_url update warning:', profileErr.message);
+    }
+
+    return { success: true, url: publicUrl, error: null };
   } catch (err) {
-    return { success: false, avatarUrl: null, error: err.message };
+    return { success: false, url: null, error: err.message };
   }
 };

@@ -1,122 +1,77 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, AlertCircle } from 'lucide-react';
-import { loadProfileStats } from '../services/profileService';
+import React, { useState, useEffect } from 'react';
 import { ProfileHeader } from '../components/profile/ProfileHeader';
 import { ProfileStatsGrid } from '../components/profile/ProfileStatsGrid';
-import { PrivacySettings } from '../components/profile/PrivacySettings';
 import { EditProfileModal } from '../components/profile/EditProfileModal';
+import { loadProfileStats } from '../services/profileService';
+import { LogOut, RefreshCw } from 'lucide-react';
 
-export const ProfileScreen = ({ profile, onUpdateProfile, onSignOut }) => {
+export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut }) => {
   const [stats, setStats] = useState(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
-  const [error, setError] = useState(null);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-
-  const userId = profile?.uid || profile?.id;
-
-  const fetchStats = useCallback(async (mountedRef) => {
-    if (!userId) {
-      setIsLoadingStats(false);
-      return;
-    }
-    setIsLoadingStats(true);
-    setError(null);
-    try {
-      const res = await loadProfileStats(userId);
-      if (mountedRef && !mountedRef.current) return;
-      if (res.success) {
-        setStats(res.data || {});
-      } else {
-        setError(res.error || 'Failed to load stats');
-      }
-    } catch (err) {
-      if (mountedRef && !mountedRef.current) return;
-      setError(err.message || 'Error fetching stats');
-    } finally {
-      if (!mountedRef || mountedRef.current) {
-        setIsLoadingStats(false);
-      }
-    }
-  }, [userId]);
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
-    const mountedRef = { current: true };
-    fetchStats(mountedRef);
-    return () => {
-      mountedRef.current = false;
-    };
-  }, [fetchStats]);
+    let active = true;
+    if (currentProfile?.uid) {
+      setIsLoadingStats(true);
+      loadProfileStats(currentProfile.uid).then(res => {
+        if (active && res.success) {
+          setStats(res.data);
+        }
+      }).finally(() => {
+        if (active) setIsLoadingStats(false);
+      });
+    }
+    return () => { active = false; };
+  }, [currentProfile]);
+
+  if (!currentProfile) return null;
 
   return (
-    <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '80px' }}>
-      {/* Profile Header */}
+    <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '80px' }}>
+      {/* Profile Header Card */}
       <ProfileHeader
-        profile={profile}
-        onEditClick={() => setIsEditModalOpen(true)}
+        profile={currentProfile}
+        isOwnProfile={true}
+        onEditClick={() => setIsEditing(true)}
       />
 
-      {/* Stats Grid */}
-      {isLoadingStats ? (
-        <div style={{ padding: '32px', textAlign: 'center', color: '#FC4C02', display: 'flex', justifyContent: 'center' }}>
-          <RefreshCw size={20} className="spin" />
+      {/* Running Statistics Grid */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h4 className="clash-subtitle" style={{ margin: 0, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            Tactical Performance Stats
+          </h4>
+          {isLoadingStats && <RefreshCw size={12} className="spin" style={{ color: '#FC4C02' }} />}
         </div>
-      ) : error ? (
-        <div className="clash-card" style={{ padding: '20px', textAlign: 'center', color: '#EF4444', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-          <AlertCircle size={24} />
-          <span style={{ fontSize: '12px', fontWeight: '700' }}>{error}</span>
-          <button
-            onClick={() => fetchStats({ current: true })}
-            style={{
-              padding: '6px 16px',
-              backgroundColor: '#FC4C02',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '11px',
-              fontWeight: '700',
-              cursor: 'pointer'
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      ) : (
         <ProfileStatsGrid stats={stats} />
-      )}
+      </div>
 
-      {/* Privacy Settings & Preferences */}
-      <PrivacySettings
-        profile={profile}
-        onUpdateProfile={onUpdateProfile}
-      />
+      {/* Account Settings Action */}
+      <div style={{ paddingTop: '16px', borderTop: '1px solid var(--clash-border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <button
+          onClick={onSignOut}
+          className="clash-btn-secondary"
+          style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+        >
+          <LogOut size={16} />
+          Sign Out Account
+        </button>
 
-      {/* Sign Out Action Button */}
-      <button
-        onClick={onSignOut}
-        style={{
-          width: '100%',
-          height: '44px',
-          borderRadius: '10px',
-          border: '1px solid rgba(239, 68, 68, 0.4)',
-          backgroundColor: 'rgba(239, 68, 68, 0.1)',
-          color: '#EF4444',
-          fontSize: '13px',
-          fontWeight: '700',
-          cursor: 'pointer',
-          marginTop: '8px'
-        }}
-      >
-        Sign Out
-      </button>
+        <div style={{ textAlign: 'center', fontSize: '9px', color: 'var(--clash-text-secondary)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          RunClash v2.0.0 • Secured Database Sync
+        </div>
+      </div>
 
-      {/* Edit Profile Modal */}
-      {isEditModalOpen && (
+      {/* Edit Profile Modal Overlay */}
+      {isEditing && (
         <EditProfileModal
-          profile={profile}
-          onClose={() => setIsEditModalOpen(false)}
-          onSaved={(updated) => {
-            if (onUpdateProfile) onUpdateProfile(updated);
-            fetchStats({ current: true });
+          profile={currentProfile}
+          onClose={() => setIsEditing(false)}
+          onSaveSuccess={(updated) => {
+            if (onUpdateProfile) {
+              onUpdateProfile(updated);
+            }
           }}
         />
       )}

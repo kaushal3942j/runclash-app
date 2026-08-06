@@ -6,7 +6,7 @@ import {
   Lock, Mail, User, ShieldCheck, LogOut, CheckCircle, Navigation, Radio, Settings, Home,
   ChevronUp, ChevronDown, Clock, Check, Flame, Share2, Edit3, Bell, ChevronLeft, ChevronRight, Activity, Bookmark
 } from 'lucide-react';
-import {
+import { 
   isFirebaseActive, useSupabase, isValidUUID, generateUUID, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
   syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
   saveCompletedRun, updateUserProfile, fetchClans, createClanInCloud, joinClanInCloud, leaveClanInCloud
@@ -195,23 +195,6 @@ export default function App() {
   const [cameraSheetOpen, setCameraSheetOpen] = useState(false);
   const [activeBanner, setActiveBanner] = useState(null); // { type, sectorName }
   const [toastMessage, setToastMessage] = useState(null);
-  const toastTimerRef = useRef(null);
-
-  const showToast = useCallback((message, durationMs = 4000) => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-    if (!message) {
-      setToastMessage(null);
-      return;
-    }
-    setToastMessage(message);
-    toastTimerRef.current = setTimeout(() => {
-      setToastMessage(null);
-      toastTimerRef.current = null;
-    }, durationMs);
-  }, []);
   const [showCameraFlash, setShowCameraFlash] = useState(false);
 
   const lastEnteredSectorIdRef = useRef(null);
@@ -1242,7 +1225,8 @@ export default function App() {
     if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
     if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
     if (!navigator.geolocation) {
-      showToast("Geolocation is not supported by your browser!", 4000);
+      setToastMessage("Geolocation is not supported by your browser!");
+      setTimeout(() => setToastMessage(null), 4000);
       return;
     }
 
@@ -1410,69 +1394,194 @@ export default function App() {
               return;
             }
 
-            // STAGE 4: Time & Distance Calculation from Last Accepted Coordinate
+            // STAGE 4: Time & Distance Window Accumulation
             const nowTime = Date.now();
             if (lastPointTimeRef.current === null || !gpsLastPointRef.current) {
               lastPointTimeRef.current = nowTime;
               gpsLastPointRef.current = newPoint;
-              if (gpsPathRef.current.length === 0) {
-                gpsPathRef.current.push(newPoint);
-              }
               return;
             }
 
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
             if (dtSeconds <= 0) return;
 
-            const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
-            const rawSpeedMS = stepMeters / dtSeconds;
-
-            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h) (PART 3 & 4)
-            if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
-              addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding point.`);
-              console.log(`[GPS REJECTED] Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h, dist: ${stepMeters.toFixed(1)}m. Retaining last valid coordinate.`);
-              return; // Do NOT update gpsLastPointRef.current to bad coordinate
-            }
-
-            // STAGE 5: Micro-jitter Filter (Ignore micro-drift < 1.0 meter)
-            if (stepMeters < 1.0) {
-              // Retain previous gpsLastPointRef so displacement accumulates to next coordinate
+            // Reject inaccurate raw GPS samples early (PART 3)
+            if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+              console.log(`[GPS REJECTED] Bad accuracy sample discarded: ${Math.round(wAccuracy)}m (threshold: ${RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD}m).`);
+              lastPointTimeRef.current = nowTime;
               return;
             }
 
-            // Valid segment accepted — update timestamps & coordinate refs
+            const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
+            accumulatedDistanceRef.current += stepMeters;
+            accumulatedDurationRef.current += dtSeconds;
             lastPointTimeRef.current = nowTime;
+
+            if (accumulatedDurationRef.current < RUN_ENGINE_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
+              return;
+            }
+
+            // STAGE 5: Shared Window Motion Evaluation
+            const windowDistMeters = accumulatedDistanceRef.current;
+            const windowTimeSec = accumulatedDurationRef.current;
+            const rawSpeedMS = windowDistMeters / windowTimeSec;
+
+            // Reset window accumulators
+            accumulatedDistanceRef.current = 0;
+            accumulatedDurationRef.current = 0;
+
+            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h) (PART 3 & 4)
+            if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
+              addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
+              console.log(`[GPS REJECTED] Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h, dist: ${windowDistMeters.toFixed(1)}m. Retaining last valid coordinate.`);
+              return; // Do NOT update gpsLastPointRef.current to bad coordinate
+            }
+
+            // Valid window accepted — update last valid point reference
+            gpsLastPointRef.current = newPoint;
+
+            // Candidate Motion Check
+            const isCandidateMoving = (rawSpeedMS >= RUN_ENGINE_CONFIG.RESUME_SPEED_THRESHOLD)
+              && (windowDistMeters >= RUN_ENGINE_CONFIG.STATIONARY_DISPLACEMENT_MIN)
+              && (wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD);
 
             const currStatus = runStateRef.current.status;
 
-            // Calculate live speed & pace
-            const speedKmH = parseFloat((rawSpeedMS * 3.6).toFixed(1));
-            if (speedKmH >= 1.2) {
-              gpsSpeedRef.current = speedKmH;
-              gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
-            } else {
-              gpsSpeedRef.current = 0;
-              gpsPaceRef.current = '--:--';
+            // STAGE 6: State Machine & Hysteresis Transitions
+            if (currStatus === 'waiting' || currStatus === 'paused') {
+              if (isCandidateMoving) {
+                consecutiveMovingWindowsRef.current += 1;
+                consecutiveStationaryWindowsRef.current = 0;
+
+                if (consecutiveMovingWindowsRef.current >= RUN_ENGINE_CONFIG.REQUIRED_MOVING_WINDOWS) {
+                  // TRANSITION ➔ TRACKING
+                  gpsAutoPausedRef.current = false;
+                  smoothedSpeedRef.current = rawSpeedMS;
+                  const speedKmH = parseFloat((rawSpeedMS * 3.6).toFixed(1));
+                  gpsSpeedRef.current = speedKmH;
+                  gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
+
+                  const distIncKm = windowDistMeters / 1000;
+                  const gpsDistBefore = gpsDistanceRef.current;
+                  const runStateDistBefore = runStateRef.current.distance;
+
+                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+
+                  if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
+                    gpsPathRef.current.push(stableBaselinePointRef.current);
+                  }
+                  gpsPathRef.current.push(newPoint);
+                  updateMapDisplay(newPoint);
+
+                  setRunState(prev => ({
+                    ...prev,
+                    status: 'tracking',
+                    distance: gpsDistanceRef.current,
+                    isAutoPaused: false
+                  }));
+
+                  console.log('[DISTANCE ENGINE]', {
+                    windowDistMeters: parseFloat(windowDistMeters.toFixed(2)),
+                    distanceIncKm: parseFloat(distIncKm.toFixed(3)),
+                    gpsDistanceBefore: gpsDistBefore,
+                    gpsDistanceAfter: gpsDistanceRef.current,
+                    runStateDistanceBefore: runStateDistBefore,
+                    runStateDistanceAfter: gpsDistanceRef.current,
+                    candidateMoving: isCandidateMoving,
+                    status: currStatus,
+                    manualPaused: runStateRef.current.manualPaused,
+                    isAutoPaused: gpsAutoPausedRef.current
+                  });
+
+                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} -> TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${speedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
+                  addLog(`GPS: Motion confirmed. Tracking resumed at ${speedKmH} km/h.`);
+                } else {
+                  gpsSpeedRef.current = 0;
+                  gpsPaceRef.current = '--:--';
+                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Validating motion (Window 1/2) | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h`);
+                }
+              } else {
+                consecutiveMovingWindowsRef.current = 0;
+                consecutiveStationaryWindowsRef.current += 1;
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+                console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Stationary | Dist: ${windowDistMeters.toFixed(2)}m | Acc: ${Math.round(wAccuracy)}m | Speed: 0`);
+              }
+            } else if (currStatus === 'tracking') {
+              if (isCandidateMoving) {
+                consecutiveMovingWindowsRef.current += 1;
+                consecutiveStationaryWindowsRef.current = 0;
+                lowSpeedDurationRef.current = 0;
+
+                // Calculate rolling live speed from last 5 accepted segments
+                if (wAccuracy <= 15 && windowTimeSec > 0 && rawSpeedMS <= 7.5) {
+                  let validSegSpeedMS = rawSpeedMS;
+                  const deviceSpeedMS = pos.coords?.speed;
+                  if (typeof deviceSpeedMS === 'number' && deviceSpeedMS >= 0 && deviceSpeedMS <= 7.5 && wAccuracy <= 10) {
+                    validSegSpeedMS = (rawSpeedMS + deviceSpeedMS) / 2;
+                  }
+
+                  speedHistoryRef.current.push(validSegSpeedMS);
+                  if (speedHistoryRef.current.length > 5) {
+                    speedHistoryRef.current.shift();
+                  }
+
+                  const sum = speedHistoryRef.current.reduce((acc, v) => acc + v, 0);
+                  const avgMS = sum / speedHistoryRef.current.length;
+                  const currentSpeedKmH = parseFloat((avgMS * 3.6).toFixed(1));
+
+                  if (currentSpeedKmH >= 1.5) {
+                    gpsSpeedRef.current = currentSpeedKmH;
+                    gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
+                  } else {
+                    gpsSpeedRef.current = 0;
+                    gpsPaceRef.current = '--:--';
+                  }
+                } else {
+                  speedHistoryRef.current = [];
+                  gpsSpeedRef.current = 0;
+                  gpsPaceRef.current = '--:--';
+                }
+
+                const distIncKm = windowDistMeters / 1000;
+                const gpsDistBefore = gpsDistanceRef.current;
+                const runStateDistBefore = runStateRef.current.distance;
+
+                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+
+                if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
+                  gpsPathRef.current.push(stableBaselinePointRef.current);
+                }
+                gpsPathRef.current.push(newPoint);
+                updateMapDisplay(newPoint);
+
+                setRunState(prev => ({
+                  ...prev,
+                  distance: gpsDistanceRef.current
+                }));
+
+                console.log(`[RUN ENGINE] Phase: TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Live Speed: ${gpsSpeedRef.current}km/h | Added: ${(distIncKm).toFixed(3)}km`);
+              } else {
+                // Stationary in tracking
+                consecutiveStationaryWindowsRef.current += 1;
+                consecutiveMovingWindowsRef.current = 0;
+                lowSpeedDurationRef.current += windowTimeSec;
+
+                speedHistoryRef.current = [];
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+
+                if (lowSpeedDurationRef.current >= RUN_ENGINE_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
+                  gpsAutoPausedRef.current = true;
+                  smoothedSpeedRef.current = 0;
+                  setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
+                  addLog("GPS: Auto-paused (runner stopped).");
+                  console.log(`[RUN ENGINE] Phase: TRACKING -> AUTO_PAUSED | Stationary for ${lowSpeedDurationRef.current.toFixed(1)}s`);
+                } else {
+                  console.log(`[RUN ENGINE] Phase: TRACKING | Low speed window (${lowSpeedDurationRef.current.toFixed(1)}s / 4s) | Dist: ${windowDistMeters.toFixed(2)}m`);
+                }
+              }
             }
-
-            // STAGE 6: Distance Accumulation & Path Update
-            const distIncKm = stepMeters / 1000;
-            gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
-            gpsLastPointRef.current = newPoint;
-            gpsPathRef.current.push(newPoint);
-            updateMapDisplay(newPoint);
-
-            setRunState(prev => ({
-              ...prev,
-              status: 'tracking',
-              distance: gpsDistanceRef.current,
-              speed: gpsSpeedRef.current,
-              pace: gpsPaceRef.current,
-              path: [...gpsPathRef.current],
-              isAutoPaused: false
-            }));
-
-            console.log(`[RUN ENGINE] Phase: TRACKING | Step: ${stepMeters.toFixed(2)}m | Speed: ${speedKmH}km/h | Total Dist: ${gpsDistanceRef.current.toFixed(3)}km | Path Length: ${gpsPathRef.current.length}`);
           },
           (watchErr) => {
             console.error("GPS Watch Error", watchErr);
@@ -1487,7 +1596,8 @@ export default function App() {
         setIsSearchingGps(false);
         setRunState(prev => ({ ...prev, status: 'idle' }));
         console.error("GPS Initial Error", error);
-        showToast(`GPS Signal Acquisition Failed: ${error.message}`, 5000);
+        setToastMessage(`GPS Signal Acquisition Failed: ${error.message}`);
+        setTimeout(() => setToastMessage(null), 5000);
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
@@ -1608,19 +1718,12 @@ export default function App() {
         : (runState.path && runState.path.length > 0 ? [...runState.path] : []);
       const currentDistance = gpsDistanceRef.current || runState.distance || 0;
 
-      // Short-run graceful cancellation (< 5 points or < 0.01 km)
-      if (currentPath.length < 5 || currentDistance < 0.01) {
-        addLog("Run Cancelled: Short run under 5 GPS points recorded.");
-        showToast("Run cancelled: Insufficient GPS points recorded.", 3500);
-        stopTracking("Short run cancelled");
-        return;
-      }
-
       const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
 
       if (!valid) {
         addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
-        showToast(diagnostic.validationFailureReason, 5000);
+        setToastMessage(diagnostic.validationFailureReason);
+        setTimeout(() => setToastMessage(null), 6000);
         stopTracking(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
         return;
       }
@@ -1630,7 +1733,8 @@ export default function App() {
       console.error('[STOP CLAIM ERROR] Exception in handleStopAndClaim:', err);
       const errMsg = `Claim Exception: ${err.message || 'Unknown Error'}`;
       addLog(errMsg);
-      showToast(errMsg, 5000);
+      setToastMessage(errMsg);
+      setTimeout(() => setToastMessage(null), 6000);
     } finally {
       setIsFinalizingRun(false);
     }
@@ -1763,7 +1867,8 @@ export default function App() {
           'AntiCheat',
           { distance: runState.distance, duration: runState.duration, avgSpeed: overallAvgSpeed }
         );
-        showToast("Action completed", 3000);
+        setToastMessage("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
+        setTimeout(() => setToastMessage(null), 4000);
         stopTracking("Anti-Cheat Average Speed Spike Cutoff");
         return;
       }
@@ -1790,7 +1895,8 @@ export default function App() {
           'AntiCheat',
           { suspicionScore, metrics: cheatMetricsRef.current, avgSpeed: overallAvgSpeed }
         );
-        showToast("Action completed", 3000);
+        setToastMessage("Anti-Cheat Triggered: Unrealistic movement signals detected.");
+        setTimeout(() => setToastMessage(null), 4000);
         stopTracking("Anti-Cheat High Suspicion Score Invalidation");
         return;
       }
@@ -1872,7 +1978,8 @@ export default function App() {
 
     if (territoryRes?.queued) {
       addLog(`System: Territory '${sectorName}' saved locally and queued for sync.`);
-      showToast("Territory saved locally and queued for sync", 4000);
+      setToastMessage("Territory saved locally and queued for sync");
+      setTimeout(() => setToastMessage(null), 4000);
     } else if (territoryRes?.error) {
       addLog(`System: Territory Notice: ${territoryRes.error}`);
     } else {
@@ -3353,7 +3460,8 @@ export default function App() {
                               setCurrentUser(updatedUser);
                               localStorage.setItem('clash_user', JSON.stringify(updatedUser));
                               setActiveSettingSubpage(null);
-                              showToast("Action completed", 3000);
+                              setToastMessage("Account settings updated successfully!");
+                              setTimeout(() => setToastMessage(null), 3000);
                             }}
                             className="clash-btn-primary"
                             style={{ height: '42px', fontSize: '11px', marginTop: '6px', cursor: 'pointer' }}
@@ -3476,7 +3584,8 @@ export default function App() {
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(`Check out my RunClash stats! LVL ${currentUser.level} | ${currentUser.clan}`);
-                            showToast("Action completed", 3000);
+                            setToastMessage("Profile details copied to clipboard!");
+                            setTimeout(() => setToastMessage(null), 3000);
                           }}
                           className="clash-btn-secondary btn-sm"
                           style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
@@ -4911,7 +5020,8 @@ export default function App() {
                       onClick={() => {
                         setShowCameraFlash(true);
                         setTimeout(() => setShowCameraFlash(false), 200);
-                        showToast("Action completed", 3000);
+                        setToastMessage("Snapshot Saved: Drone Recon Record logged.");
+                        setTimeout(() => setToastMessage(null), 3000);
                         setCameraSheetOpen(false);
                       }}
                       className="clash-btn-primary"
@@ -4924,7 +5034,8 @@ export default function App() {
                       onClick={() => {
                         setShowCameraFlash(true);
                         setTimeout(() => setShowCameraFlash(false), 200);
-                        showToast("Action completed", 3000);
+                        setToastMessage("Recon Video Saved: Tactical story created.");
+                        setTimeout(() => setToastMessage(null), 3000);
                         setCameraSheetOpen(false);
                       }}
                       className="clash-btn-primary"
@@ -5293,7 +5404,8 @@ export default function App() {
             <div style={{ display: activeTab === 'premium' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
               <PremiumScreen currentUser={currentUser} onUpgrade={() => {
                 setCurrentUser(prev => ({ ...prev, subscription_tier: 'premium' }));
-                showToast("Action completed", 3000);
+                setToastMessage('Success: Upgraded to RunClash Pro Membership!');
+                setTimeout(() => setToastMessage(null), 5000);
               }} />
             </div>
 
@@ -5935,7 +6047,8 @@ export default function App() {
                           </button>
                           <button
                             onClick={() => {
-                              showToast("Action completed", 3000);
+                              setToastMessage("🚧 Tactical chat channel coming soon!");
+                              setTimeout(() => setToastMessage(null), 3000);
                               setSelectedProfileUser(null);
                             }}
                             className="clash-btn-primary clash-btn-press"

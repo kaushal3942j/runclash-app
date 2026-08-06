@@ -1,5 +1,13 @@
 import { supabase, useSupabase } from '../supabase.js';
 
+const withTimeout = (promise, ms = 10000) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Request timed out.')), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+};
+
 export const getNotifications = async () => {
   if (!useSupabase) {
     return { success: true, data: [], error: null };
@@ -11,12 +19,15 @@ export const getNotifications = async () => {
       return { success: true, data: [], error: null };
     }
 
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('recipient_id', session.user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    const { data, error } = await withTimeout(
+      supabase
+        .from('notifications')
+        .select('*')
+        .eq('recipient_id', session.user.id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      10000
+    );
 
     if (error) {
       return { success: false, data: [], error: error.message };
@@ -39,11 +50,14 @@ export const getUnreadCount = async () => {
       return { count: 0 };
     }
 
-    const { count, error } = await supabase
-      .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('recipient_id', session.user.id)
-      .eq('is_read', false);
+    const { count, error } = await withTimeout(
+      supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('recipient_id', session.user.id)
+        .eq('is_read', false),
+      8000
+    );
 
     if (error) {
       return { count: 0 };
@@ -61,7 +75,10 @@ export const markRead = async (notificationId) => {
   }
 
   try {
-    const { data, error } = await supabase.rpc('mark_notification_read', { notification_id: notificationId });
+    const { data, error } = await withTimeout(
+      supabase.rpc('mark_notification_read', { notification_id: notificationId }),
+      8000
+    );
     if (error) {
       return { success: false, error: error.message };
     }
@@ -77,7 +94,10 @@ export const markAllRead = async () => {
   }
 
   try {
-    const { data, error } = await supabase.rpc('mark_all_notifications_read');
+    const { data, error } = await withTimeout(
+      supabase.rpc('mark_all_notifications_read'),
+      8000
+    );
     if (error) {
       return { success: false, error: error.message };
     }

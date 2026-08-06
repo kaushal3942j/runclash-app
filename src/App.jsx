@@ -132,7 +132,8 @@ export default function App() {
     identityMode,
     authErrorMessage,
     legacyMigrationNeeded,
-    signOutCurrentUser
+    signOutCurrentUser,
+    loginGuestUser
   } = useIdentity();
 
   const currentUser = currentProfile;
@@ -795,10 +796,12 @@ export default function App() {
         setCurrentUser(profile);
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
       } else if (authMode === 'guest') {
-        const name = authPassword.trim() || authName.trim() || `Runner_${Math.floor(1000 + Math.random() * 9000)}`;
-        const profile = await loginGuest(name, 'None');
-        setCurrentUser(profile);
-        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
+        const rawName = authPassword.trim() || authName.trim();
+        const res = await loginGuestUser(rawName, 'None');
+        if (!res.success) {
+          throw new Error(res.error || 'Guest login failed.');
+        }
+        console.log(`[AUTH]\nauthenticated: true\nuserId: ${res.data.uid}\nsession: active`);
       }
     } catch (err) {
       setAuthError(err.message || "Authentication failed.");

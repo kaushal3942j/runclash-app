@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, useSupabase } from '../supabase';
 import { getCurrentSession, createAnonymousSession } from '../services/authService';
-import { ensureProfile } from '../services/profileService';
+import { ensureProfile, isDefaultName } from '../services/profileService';
 import { syncQueueService } from '../services/syncQueueService';
 
 // Safe LocalStorage Cache Parser
@@ -29,13 +29,106 @@ export const useIdentity = () => {
   const isInitializingRef = useRef(false);
   const profileSyncUserIdRef = useRef(null);
   const explicitLogoutRef = useRef(false);
+  const pendingDisplayNameRef = useRef(null);
+
+  // Canonical Guest Entry Pipeline with Immediate Display Name Guarantee
+  const loginGuestUser = useCallback(async (rawName, clan = 'None') => {
+    const enteredName = (typeof rawName === 'string' && rawName.trim()) ? rawName.trim() : 'Runner';
+    pendingDisplayNameRef.current = enteredName;
+    explicitLogoutRef.current = false;
+
+    try {
+      setIsLoadingIdentity(true);
+
+      // 1. Sign in anonymously via canonical authService
+      const anonRes = await createAnonymousSession();
+      if (!anonRes.success || !anonRes.user) {
+        throw new Error(anonRes.error || anonRes.message || 'Anonymous sign-in failed');
+      }
+
+      const user = anonRes.user;
+      setAuthUser(user);
+
+      // 2. Build immediate canonical profile object
+      const immediateProfile = {
+        uid: user.id,
+        id: user.id,
+        displayName: enteredName,
+        display_name: enteredName,
+        clan: clan || 'None',
+        clan_name: clan || 'None',
+        level: 1,
+        xp: 0,
+        coins: 100,
+        premium: false,
+        isAnonymous: true
+      };
+
+      // 3. Immediately set React state & localStorage BEFORE any cloud fetch or background upsert
+      profileSyncUserIdRef.current = user.id;
+      setCurrentProfile(immediateProfile);
+      localStorage.setItem('clash_user', JSON.stringify(immediateProfile));
+      setIdentityMode('authenticated');
+      setAuthErrorMessage(null);
+
+      // 4. Background single-flight profile upsert with exact entered name
+      if (useSupabase) {
+        supabase
+          .from('profiles')
+          .upsert({
+            id: user.id,
+            display_name: enteredName,
+            clan_name: clan || 'None',
+            level: 1,
+            xp: 0,
+            coins: 100,
+            premium: false,
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single()
+          .then(({ data: cloudProfile, error: upsertErr }) => {
+            if (upsertErr) {
+              console.warn('[GUEST ENTRY] Background profile upsert warning:', upsertErr.message);
+            } else if (cloudProfile && cloudProfile.display_name === enteredName) {
+              console.log('[GUEST ENTRY] Profile confirmed in cloud as:', cloudProfile.display_name);
+            }
+          })
+          .catch(err => console.warn('[GUEST ENTRY] Background upsert exception:', err))
+          .finally(() => {
+            // Clear pending displayName ref ONLY after background upsert completes
+            pendingDisplayNameRef.current = null;
+          });
+      } else {
+        pendingDisplayNameRef.current = null;
+      }
+
+      return { success: true, data: immediateProfile };
+    } catch (err) {
+      console.error('[GUEST ENTRY ERROR]', err);
+      pendingDisplayNameRef.current = null;
+      setAuthErrorMessage(err.message || 'Guest login failed');
+      return { success: false, error: err.message };
+    } finally {
+      setIsLoadingIdentity(false);
+    }
+  }, []);
 
   // Synchronize and normalize cloud profile outside the auth lock
   const syncProfileForUser = useCallback(async (user) => {
     if (!user || !user.id) return { success: false, error: 'Invalid user' };
 
-    // If already synchronized for this user UUID, ensure authenticated state and return
-    if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id) {
+    // GUARD 1: If pendingDisplayNameRef.current is active for this user, protect currentProfile
+    if (pendingDisplayNameRef.current) {
+      if (currentProfile?.uid === user.id) {
+        setIdentityMode('authenticated');
+        setAuthErrorMessage(null);
+        return { success: true, data: currentProfile };
+      }
+    }
+
+    // GUARD 2: If already synchronized for this user UUID and profile has a non-default display name, return
+    if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id && !isDefaultName(currentProfile?.displayName)) {
       setIdentityMode('authenticated');
       setAuthErrorMessage(null);
       return { success: true, data: currentProfile };
@@ -44,6 +137,8 @@ export const useIdentity = () => {
 
     try {
       const cached = getSafeCachedProfile();
+      const preferredName = pendingDisplayNameRef.current || (cached && !isDefaultName(cached.displayName) ? cached.displayName : null) || 'Guest Runner';
+
       const isLegacyLocal = cached && typeof cached.uid === 'string' && cached.uid.startsWith('local_') && !localStorage.getItem('clash_identity_migrated_v1');
 
       if (isLegacyLocal) {
@@ -51,13 +146,15 @@ export const useIdentity = () => {
         setLegacyMigrationNeeded(true);
       }
 
-      const profileRes = await ensureProfile(user, cached?.displayName || 'Guest Runner', isLegacyLocal ? cached : null);
+      const profileRes = await ensureProfile(user, preferredName, isLegacyLocal ? cached : null);
 
       if (profileRes.success && profileRes.data) {
         const profile = profileRes.data;
+        const finalDisplayName = pendingDisplayNameRef.current || (profile.display_name && !isDefaultName(profile.display_name) ? profile.display_name : preferredName);
+
         const normalizedProfile = {
           uid: profile.id,
-          displayName: profile.display_name,
+          displayName: finalDisplayName,
           level: profile.level,
           xp: profile.xp,
           coins: profile.coins,
@@ -263,6 +360,7 @@ export const useIdentity = () => {
     authErrorMessage,
     legacyMigrationNeeded,
     signOutCurrentUser,
+    loginGuestUser,
     refreshIdentity: () => {
       explicitLogoutRef.current = false;
       isInitializingRef.current = false;

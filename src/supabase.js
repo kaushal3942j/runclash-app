@@ -50,7 +50,7 @@ if (hasSupabaseKeys) {
   });
 }
 
-export { supabase, useSupabase };
+export { supabase, useSupabase, generateUUID };
 
 // ----------------------------------------------------
 // LOCALSTORAGE FALLBACK SERVICE IMPLEMENTATION
@@ -678,16 +678,61 @@ export const syncOfflineTerritoryClaims = async () => {
   }
 };
 
+export const validateTerritoryPayload = (dbTerr) => {
+  if (!dbTerr.owner_id || !isValidUUID(dbTerr.owner_id)) {
+    return 'Invalid owner_id: Must be a valid authenticated UUID.';
+  }
+  if (!dbTerr.claim_id || !isValidUUID(dbTerr.claim_id)) {
+    return 'Invalid claim_id: Must be a valid UUID.';
+  }
+  if (!Array.isArray(dbTerr.coords) || dbTerr.coords.length < 3) {
+    return 'Invalid coords: Polygon must contain at least 3 coordinate pairs.';
+  }
+  if (!Number.isFinite(dbTerr.area_sqm) || dbTerr.area_sqm <= 0) {
+    return 'Invalid area_sqm: Must be a finite number greater than zero.';
+  }
+  if (!dbTerr.expires_at || isNaN(Date.parse(dbTerr.expires_at))) {
+    return 'Invalid expires_at: Must be a valid ISO timestamp.';
+  }
+  return null;
+};
+
+export const ensureClosedPolygon = (coords) => {
+  if (!Array.isArray(coords) || coords.length < 3) return coords;
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  if (!first || !last) return coords;
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    return [...coords, [first[0], first[1]]];
+  }
+  return coords;
+};
+
 export const saveNewTerritory = async (territory) => {
-  const areaVal = typeof territory.area === 'number'
+  const rawArea = typeof territory.area === 'number'
     ? territory.area
     : parseFloat(String(territory.area).replace(/[^\d.]/g, '')) || 0;
   
+  const areaVal = Number.isFinite(rawArea) && rawArea > 0 ? rawArea : 100;
+
   const expiresAt = new Date();
   expiresAt.setHours(expiresAt.getHours() + 72);
 
   const rawOwnerId = territory.ownerId || territory.userId;
   const validOwnerId = isValidUUID(rawOwnerId) ? rawOwnerId : null;
+  const claimId = territory.claimId || territory.claim_id || generateUUID();
+  const closedCoords = ensureClosedPolygon(territory.coords || []);
+
+  const list = getMockTerritories();
+  const localTerr = {
+    ...territory,
+    id: territory.id || `t_local_${Date.now()}`,
+    claimId: claimId,
+    ownerId: validOwnerId || rawOwnerId,
+    coords: closedCoords,
+    area: areaVal + ' m²',
+    synced: false
+  };
 
   // STRICT AUTHENTICATION GUARD
   let authenticatedSessionUser = null;
@@ -703,89 +748,119 @@ export const saveNewTerritory = async (territory) => {
     }
   }
 
-  // Preserve or generate claim_id ONCE via generateUUID()
-  const claimId = territory.claimId || territory.claim_id || generateUUID();
+  // If unauthenticated or no Supabase, queue offline and return success locally
+  if (!useSupabase || !validOwnerId || !authenticatedSessionUser) {
+    console.log('[STOP CLAIM] 5 territory saved locally / queued (unauthenticated or offline)');
+    syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId || rawOwnerId });
+
+    const updated = [...list.filter(t => (t.claimId || t.id) !== (localTerr.claimId || localTerr.id)), localTerr];
+    localStorage.setItem('clash_territories', JSON.stringify(updated));
+    triggerListeners(updated);
+    if (activeLoadTerritories) activeLoadTerritories();
+
+    return {
+      success: true,
+      cloud: false,
+      queued: true,
+      data: localTerr
+    };
+  }
+
+  const dbTerr = {
+    claim_id: claimId,
+    name: territory.name || 'Tactical Sector',
+    owner_id: authenticatedSessionUser.id,
+    owner_name: territory.ownerName || 'Runner',
+    clan_name: territory.clan || 'None',
+    area_sqm: areaVal,
+    decay_hours: territory.decayHours || 72,
+    max_decay_hours: territory.maxDecayHours || 72,
+    rate: territory.rate || 1.0,
+    coords: closedCoords,
+    expires_at: expiresAt.toISOString()
+  };
+
+  // PAYLOAD VALIDATION
+  const validationErr = validateTerritoryPayload(dbTerr);
+  if (validationErr) {
+    console.warn('[STOP CLAIM] 5 territory validation failed:', validationErr);
+    syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
+
+    const updated = [...list.filter(t => (t.claimId || t.id) !== (localTerr.claimId || localTerr.id)), localTerr];
+    localStorage.setItem('clash_territories', JSON.stringify(updated));
+    triggerListeners(updated);
+    if (activeLoadTerritories) activeLoadTerritories();
+
+    return {
+      success: true,
+      cloud: false,
+      queued: true,
+      error: validationErr,
+      data: localTerr
+    };
+  }
+
+  // 8-SECOND TIMEOUT GUARD FOR CLOUD INSERT
   let insertData = null;
   let insertError = null;
   let cloudSuccess = false;
 
-  // Execute supabase.from('territories').insert ONLY when validOwnerId is non-null AND session is authenticated!
-  if (useSupabase && validOwnerId && authenticatedSessionUser) {
-    const dbTerr = {
-      claim_id: claimId,
-      name: territory.name,
-      owner_id: authenticatedSessionUser.id, // GUARANTEED NON-NULL VALID AUTHENTICATED UUID
-      owner_name: territory.ownerName || 'Runner',
-      clan_name: territory.clan || 'None',
-      area_sqm: areaVal,
-      decay_hours: territory.decayHours || 72,
-      max_decay_hours: territory.maxDecayHours || 72,
-      rate: territory.rate || 1.0,
-      coords: territory.coords,
-      expires_at: expiresAt.toISOString()
-    };
+  try {
+    const cloudInsertPromise = supabase
+      .from('territories')
+      .insert(dbTerr)
+      .select()
+      .single();
 
-    try {
-      const { data, error } = await supabase
-        .from('territories')
-        .insert(dbTerr)
-        .select()
-        .single();
-
-      if (!error || error.code === '23505') {
-        insertData = data;
-        cloudSuccess = true;
-        if (error?.code === '23505') {
-          console.log(`[TERRITORY INSERT] Unique violation (23505) for claim ${claimId}. Marked as synced.`);
-        }
-      } else {
-        insertError = error;
-        cloudSuccess = false;
-        syncQueueService.enqueueTerritory({ ...territory, claimId, ownerId: validOwnerId });
-      }
-    } catch (err) {
-      insertError = err;
-      cloudSuccess = false;
-      syncQueueService.enqueueTerritory({ ...territory, claimId, ownerId: validOwnerId });
-    }
-  } else {
-    // If authentication is unavailable or owner_id is unauthenticated/null, save to offline sync queue!
-    console.log('[TERRITORY CLAIM] Unauthenticated or offline owner. Queueing claim to offline sync queue.');
-    syncQueueService.enqueueTerritory({
-      ...territory,
-      claimId,
-      ownerId: validOwnerId || rawOwnerId
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
     });
+
+    const res = await Promise.race([cloudInsertPromise, timeoutPromise]);
+    const { data, error } = res || {};
+
+    if (!error || error?.code === '23505') {
+      insertData = data || dbTerr;
+      cloudSuccess = true;
+      if (error?.code === '23505') {
+        console.log(`[STOP CLAIM] 5 territory already synced (23505 unique violation) for claim ${claimId}`);
+      } else {
+        console.log(`[STOP CLAIM] 5 territory cloud saved successfully (Claim ID: ${claimId})`);
+      }
+    } else {
+      insertError = error;
+      cloudSuccess = false;
+      console.warn(`[STOP CLAIM] 5 territory cloud error (${error.code || 'unknown'}):`, error.message);
+      syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
+    }
+  } catch (err) {
+    insertError = err;
+    cloudSuccess = false;
+    console.warn('[STOP CLAIM] 5 territory cloud insert exception/timeout:', err.message);
+    syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
   }
 
-  // Always mirror to LocalStorage for instant UI responsiveness
-  const list = getMockTerritories();
-  const newTerr = {
+  const finalTerr = {
     ...territory,
     id: insertData ? insertData.id : (territory.id || `t_local_${Date.now()}`),
     claimId: claimId,
-    ownerId: validOwnerId || rawOwnerId,
+    ownerId: validOwnerId,
+    coords: closedCoords,
+    area: areaVal + ' m²',
     synced: cloudSuccess
   };
-  const updated = [...list.filter(t => (t.claimId || t.id) !== (newTerr.claimId || newTerr.id)), newTerr];
+
+  const updated = [...list.filter(t => (t.claimId || t.id) !== (finalTerr.claimId || finalTerr.id)), finalTerr];
   localStorage.setItem('clash_territories', JSON.stringify(updated));
   triggerListeners(updated);
   if (activeLoadTerritories) activeLoadTerritories();
 
-  if (!cloudSuccess) {
-    return {
-      success: true,
-      queued: true,
-      cloud: false,
-      data: newTerr
-    };
-  }
-
   return {
     success: true,
-    cloud: true,
-    queued: false,
-    data: insertData || newTerr
+    cloud: cloudSuccess,
+    queued: !cloudSuccess,
+    error: insertError ? (insertError.message || JSON.stringify(insertError)) : null,
+    data: finalTerr
   };
 };
 

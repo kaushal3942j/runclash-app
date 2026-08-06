@@ -1,4 +1,5 @@
 import { supabase, useSupabase, isValidUUID } from '../supabase';
+import { createRunActivity, createTerritoryActivity } from './activityService';
 
 const PENDING_TERRITORIES_KEY = 'clash_pending_territories';
 const PENDING_RUNS_KEY = 'clash_pending_runs';
@@ -133,6 +134,7 @@ export const syncQueueService = {
               console.log(`[SYNC QUEUE WORKER] Claim "${item.name}" (Claim ID: ${claimId}) already synced in DB (23505). Removing from queue.`);
             } else {
               console.log(`[SYNC QUEUE WORKER] Successfully synced territory claim "${item.name}" (Claim ID: ${claimId}).`);
+              createTerritoryActivity(item, 'territory', claimId).catch(e => console.warn('[SYNC QUEUE WORKER] Activity log notice:', e));
             }
           } else {
             console.warn(`[SYNC QUEUE WORKER] Error syncing territory claim "${item.name}":`, error.message);
@@ -197,6 +199,7 @@ export const syncQueueService = {
               console.log(`[SYNC QUEUE WORKER] Run (Operation ID: ${operationId}) already synced in DB (23505). Removing from queue.`);
             } else {
               console.log(`[SYNC QUEUE WORKER] Successfully synced run (Operation ID: ${operationId}).`);
+              createRunActivity(run, 'run', operationId).catch(e => console.warn('[SYNC QUEUE WORKER] Activity log notice:', e));
             }
           } else {
             console.warn(`[SYNC QUEUE WORKER] Error syncing run (Operation ID: ${operationId}):`, error.message);

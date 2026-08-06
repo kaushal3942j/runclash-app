@@ -18,6 +18,9 @@ import { ConquestsScreen } from './screens/ConquestsScreen';
 import { SocialScreen } from './screens/SocialScreen';
 import { CoachScreen } from './screens/CoachScreen';
 import { PremiumScreen } from './screens/PremiumScreen';
+import { ProfileScreen } from './screens/ProfileScreen';
+import { PublicProfileScreen } from './screens/PublicProfileScreen';
+import { createRunActivity, createTerritoryActivity } from './services/activityService';
 import { RankBadge } from './components/profile/RankBadge';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
 import { TerritoryHealthBar } from './components/territory/TerritoryHealthBar';
@@ -78,9 +81,6 @@ const SIMULATION_ROUTES = {
     ]
   }
 };
-
-// Database of profiles for social system discovery/search
-const INITIAL_PROFILES = [];
 
 // ============================================================================
 // RUN ENGINE MODULE 1: CENTRALIZED CONFIGURATION & CONSTANTS
@@ -155,7 +155,8 @@ export default function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // Global App States
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'conquests', 'clans', 'coach'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'social', 'conquests', 'profile'
+  const [viewingPublicProfileId, setViewingPublicProfileId] = useState(null);
   const [territories, setTerritories] = useState([]);
   const [inventory, setInventory] = useState({
     shields: 2,
@@ -539,8 +540,7 @@ export default function App() {
   const sendFriendRequest = (profileId) => {
     if (friendRequestsSent.includes(profileId)) return;
     setFriendRequestsSent(prev => [...prev, profileId]);
-    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
-    addLog(`Social: Sent friend request to ${profileName}.`);
+    addLog(`Social: Sent friend request.`);
   };
 
   const acceptFriendRequest = (profileId) => {
@@ -551,28 +551,25 @@ export default function App() {
     if (!followersList.includes(profileId)) {
       setFollowersList(prev => [...prev, profileId]);
     }
-    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
     const newNotif = {
       id: 'notif_' + Date.now(),
       type: 'friend_accepted',
-      senderName: profileName,
+      senderName: 'Runner',
       timestamp: 'Just now',
       read: false
     };
     setSocialNotifications(prev => [newNotif, ...prev]);
-    addLog(`Social: Accepted friend request from ${profileName}.`);
+    addLog(`Social: Accepted friend request.`);
   };
 
   const rejectFriendRequest = (profileId) => {
     setFriendRequestsReceived(prev => prev.filter(id => id !== profileId));
-    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
-    addLog(`Social: Rejected friend request from ${profileName}.`);
+    addLog(`Social: Rejected friend request.`);
   };
 
   const removeFriend = (profileId) => {
     setFriendsList(prev => prev.filter(id => id !== profileId));
-    const profileName = INITIAL_PROFILES.find(p => p.id === profileId)?.displayName || 'User';
-    addLog(`Social: Removed ${profileName} from friends list.`);
+    addLog(`Social: Removed friend from network.`);
   };
 
   const [mapAutoFollow, setMapAutoFollow] = useState(true);
@@ -1934,8 +1931,12 @@ export default function App() {
     console.log('[STOP CLAIM] 2 run payload created', { operationId });
 
     // CHECKPOINT 3: Save completed run FIRST (Independent of territory result)
+    let runRes = null;
     try {
-      await saveCompletedRun(runSummary);
+      runRes = await saveCompletedRun(runSummary);
+      if (runRes?.cloud === true) {
+        createRunActivity(runSummary, 'run', runSummary.operationId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
+      }
       console.log('[STOP CLAIM] 3 run saved or queued');
       addLog(`System: Run history successfully saved.`);
     } catch (runErr) {
@@ -1962,6 +1963,9 @@ export default function App() {
     let territoryRes = null;
     try {
       territoryRes = await saveNewTerritory(newTerritory);
+      if (territoryRes?.cloud === true) {
+        createTerritoryActivity(newTerritory, 'territory', newTerritory.claimId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
+      }
       console.log('[STOP CLAIM] 5 territory cloud saved / queued / failed', {
         cloud: territoryRes?.cloud,
         queued: territoryRes?.queued,
@@ -5361,44 +5365,35 @@ export default function App() {
               inventory={inventory}
             />
 
-            {/* TAB: SOCIAL (CLANS & FRIENDS) */}
-            <SocialScreen
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              socialSubTab={socialSubTab}
-              setSocialSubTab={setSocialSubTab}
-              currentUser={currentUser}
-              setCurrentUser={setCurrentUser}
-              setShowClanModal={setShowClanModal}
-              getClanColor={getClanColor}
-              getClanStandings={getClanStandings}
-              leaderboard={leaderboard}
-              isLoadingLeaderboard={isLoadingLeaderboard}
-              INITIAL_PROFILES={INITIAL_PROFILES}
-              territories={territories}
-              setSelectedProfileUser={setSelectedProfileUser}
-              socialNotifications={socialNotifications}
-              friendRequestsReceived={friendRequestsReceived}
-              friendRequestsSent={friendRequestsSent}
-              acceptFriendRequest={acceptFriendRequest}
-              rejectFriendRequest={rejectFriendRequest}
-              sendFriendRequest={sendFriendRequest}
-              friendsList={friendsList}
-              followersList={followersList}
-              friendsSearchQuery={friendsSearchQuery}
-              setFriendsSearchQuery={setFriendsSearchQuery}
-              discoverSearchQuery={discoverSearchQuery}
-              setDiscoverSearchQuery={setDiscoverSearchQuery}
-              isEditingProfile={isEditingProfile}
-              setIsEditingProfile={setIsEditingProfile}
-              editDisplayName={editDisplayName}
-              setEditDisplayName={setEditDisplayName}
-              editBio={editBio}
-              setEditBio={setEditBio}
-              userBio={userBio}
-              setUserBio={setUserBio}
-              addLog={addLog}
-            />
+            {/* TAB: SOCIAL */}
+            <div style={{ display: (activeTab === 'social' || activeTab === 'clans') ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
+              <SocialScreen
+                currentUser={currentUser}
+                selectedTab={socialSubTab || 'feed'}
+                onTabChange={setSocialSubTab}
+                onSelectPlayer={(userId) => setViewingPublicProfileId(userId)}
+                onTerritoryClick={() => setActiveTab('conquests')}
+              />
+            </div>
+
+            {/* TAB: PROFILE */}
+            <div style={{ display: activeTab === 'profile' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
+              <ProfileScreen
+                currentProfile={currentUser}
+                onUpdateProfile={(updated) => {
+                  setCurrentUser(prev => ({
+                    ...prev,
+                    displayName: updated.display_name || prev.displayName,
+                    display_name: updated.display_name || prev.display_name,
+                    username: updated.username,
+                    bio: updated.bio,
+                    avatar_url: updated.avatar_url,
+                    avatarUrl: updated.avatar_url
+                  }));
+                }}
+                onSignOut={() => setShowSignOutModal(true)}
+              />
+            </div>
 
             {/* TAB: AI COACH */}
             <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
@@ -5448,6 +5443,15 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('social')}
+              className={`tab-btn ${(activeTab === 'social' || activeTab === 'clans') ? 'tab-btn-active' : ''}`}
+              style={{ color: (activeTab === 'social' || activeTab === 'clans') ? '#FC4C02' : 'var(--clash-text-secondary)' }}
+            >
+              <Users size={18} />
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Social</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('conquests')}
               className={`tab-btn ${activeTab === 'conquests' ? 'tab-btn-active' : ''}`}
               style={{ color: activeTab === 'conquests' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
@@ -5457,21 +5461,12 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('clans')}
-              className={`tab-btn ${activeTab === 'clans' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'clans' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
+              onClick={() => setActiveTab('profile')}
+              className={`tab-btn ${activeTab === 'profile' ? 'tab-btn-active' : ''}`}
+              style={{ color: activeTab === 'profile' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
             >
-              <Users size={18} />
-              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Social</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('coach')}
-              className={`tab-btn ${activeTab === 'coach' ? 'tab-btn-active' : ''}`}
-              style={{ color: activeTab === 'coach' ? '#FC4C02' : 'var(--clash-text-secondary)' }}
-            >
-              <Sparkles size={18} />
-              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Coach</span>
+              <User size={18} />
+              <span style={{ fontSize: '9px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Profile</span>
             </button>
           </div>
 
@@ -6127,6 +6122,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Public Profile Dossier Overlay */}
+          {viewingPublicProfileId && (
+            <PublicProfileScreen
+              targetUserId={viewingPublicProfileId}
+              onClose={() => setViewingPublicProfileId(null)}
+            />
           )}
 
         </div>

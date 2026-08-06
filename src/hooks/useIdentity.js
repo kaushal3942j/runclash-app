@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, useSupabase } from '../supabase';
 import { getCurrentSession, createAnonymousSession } from '../services/authService';
 import { ensureProfile, isDefaultName } from '../services/profileService';
+import { updateLastActive } from '../services/friendService';
 import { syncQueueService } from '../services/syncQueueService';
 
 // Safe LocalStorage Cache Parser
@@ -261,6 +262,19 @@ export const useIdentity = () => {
       isInitializingRef.current = false;
     }
   }, [syncProfileForUser]);
+
+  // Low-frequency last_active_at ping (every 4 minutes) for authenticated sessions
+  useEffect(() => {
+    if (identityMode !== 'authenticated' || !authUser?.id) return;
+
+    updateLastActive().catch(() => {});
+
+    const interval = setInterval(() => {
+      updateLastActive().catch(() => {});
+    }, 240000);
+
+    return () => clearInterval(interval);
+  }, [identityMode, authUser?.id]);
 
   // Canonical Sign Out Function (PART A & B)
   const signOutCurrentUser = useCallback(async () => {

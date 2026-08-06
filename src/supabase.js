@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { syncQueueService, generateUUID } from './services/syncQueueService';
+import { createAnonymousSession } from './services/authService';
 
 // 1. Supabase Configuration & Credential Check
 const rawUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -347,16 +348,14 @@ export const loginUser = async (email, password) => {
 export const loginGuest = async (name, clan) => {
   if (useSupabase) {
     try {
-      const { data: authData, error: guestError } = await supabase.auth.signInAnonymously({
-        options: {
-          data: {
-            display_name: name || 'Guest Runner',
-            clan_name: clan || 'None'
-          }
-        }
-      });
-      if (guestError) throw guestError;
-      const user = authData.user;
+      const anonRes = await createAnonymousSession();
+      if (!anonRes.success) {
+        throw new Error(anonRes.error || anonRes.message || 'Anonymous sign-in failed');
+      }
+      const user = anonRes.user || anonRes.data?.user;
+      if (!user || !user.id) {
+        throw new Error('No user object returned from anonymous session creation.');
+      }
 
       const profile = {
         id: user.id,
@@ -430,12 +429,17 @@ export const loginGuest = async (name, clan) => {
 
 export const logout = async () => {
   if (useSupabase) {
-    await supabase.auth.signOut();
-  } else {
-    localStorage.removeItem('clash_user');
-    mockCurrentUser = null;
-    mockAuthChangeListeners.forEach(cb => cb(null));
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch (e) {
+      console.warn("Supabase signout exception:", e);
+    }
   }
+  localStorage.removeItem('runclash-supabase-auth');
+  localStorage.removeItem('clash_user');
+  localStorage.removeItem('clash_identity_migrated_v1');
+  mockCurrentUser = null;
+  mockAuthChangeListeners.forEach(cb => cb(null));
 };
 
 // 2. User Stats Sync

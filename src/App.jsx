@@ -131,7 +131,8 @@ export default function App() {
     setCurrentProfile,
     identityMode,
     authErrorMessage,
-    legacyMigrationNeeded
+    legacyMigrationNeeded,
+    signOutCurrentUser
   } = useIdentity();
 
   const currentUser = currentProfile;
@@ -145,6 +146,8 @@ export default function App() {
   const [authClan, setAuthClan] = useState('None');
   const [authError, setAuthError] = useState('');
   const [isFinalizingRun, setIsFinalizingRun] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // Global App States
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'conquests', 'clans', 'coach'
@@ -754,8 +757,11 @@ export default function App() {
 
   // Handle Authentication actions
   const handleAuthSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
+    if (isAuthenticating) return;
+    setIsAuthenticating(true);
     setAuthError('');
+
     try {
       if (authMode !== 'guest') {
         const trimmedEmail = authEmail.trim();
@@ -771,12 +777,6 @@ export default function App() {
         }
         if (authPassword.length < 6) {
           throw new Error("Password must be at least 6 characters long.");
-        }
-      } else {
-        // Guest mode validation
-        const guestName = authPassword.trim() || authName.trim();
-        if (!guestName) {
-          throw new Error("Display name is required to enter as guest.");
         }
       }
 
@@ -799,14 +799,31 @@ export default function App() {
       setAuthError(err.message || "Authentication failed.");
       addLog(`Auth Error: ${err.message}`);
       console.log(`[AUTH]\nauthenticated: false\nuserId: null\nsession: null\nerror: ${err.message}`);
+    } finally {
+      setIsAuthenticating(false);
     }
   };
 
   const handleLogout = async () => {
-    await logout();
-    setCurrentUser(null);
-    stopTracking();
-    console.log(`[AUTH]\nauthenticated: false\nuserId: null\nsession: null`);
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    setAuthError('');
+
+    try {
+      stopTracking("User Sign Out");
+      const res = await signOutCurrentUser();
+      if (res && res.error) {
+        setAuthError(res.error);
+        addLog(`Sign-out warning: ${res.error}`);
+      } else {
+        addLog('System: User signed out successfully.');
+      }
+    } catch (err) {
+      console.error('[SIGN OUT] Logout exception:', err);
+      setAuthError(err.message || 'Failed to sign out.');
+    } finally {
+      setIsSigningOut(false);
+    }
   };
 
   // ----------------------------------------------------
@@ -2524,8 +2541,8 @@ export default function App() {
               </div>
             )}
 
-            <button type="submit" className="clash-btn-primary" style={{ marginTop: '12px' }}>
-              {authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : 'Enter Arena'}
+            <button type="submit" disabled={isAuthenticating} className="clash-btn-primary" style={{ marginTop: '12px', opacity: isAuthenticating ? 0.6 : 1 }}>
+              {isAuthenticating ? 'ENTERING ARENA...' : (authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : 'Enter Arena')}
             </button>
           </form>
 
@@ -3844,16 +3861,16 @@ export default function App() {
                     {/* Exit Sign Out Account Action */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--clash-border)', paddingTop: '16px', marginTop: '16px' }}>
                       <button
-                        onClick={() => {
-                          if (confirm("Are you sure you want to sign out?")) {
-                            handleLogout();
-                            setShowSettingsDrawer(false);
-                          }
+                        onClick={async () => {
+                          await handleLogout();
+                          setShowSettingsDrawer(false);
                         }}
+                        disabled={isSigningOut}
                         className="clash-btn-secondary"
-                        style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: 'pointer' }}
+                        style={{ borderColor: '#FC4C02', color: '#FC4C02', width: '100%', height: '48px', cursor: isSigningOut ? 'wait' : 'pointer', opacity: isSigningOut ? 0.6 : 1 }}
                       >
-                        <LogOut size={13} style={{ color: '#FC4C02', marginRight: '6px' }} /> Sign Out Account
+                        <LogOut size={13} style={{ color: '#FC4C02', marginRight: '6px' }} />
+                        {isSigningOut ? 'SIGNING OUT...' : 'Sign Out Account'}
                       </button>
 
                       <div className="clash-body" style={{ textAlign: 'center', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px' }}>

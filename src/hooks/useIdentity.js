@@ -28,6 +28,7 @@ export const useIdentity = () => {
 
   const isInitializingRef = useRef(false);
   const profileSyncUserIdRef = useRef(null);
+  const explicitLogoutRef = useRef(false);
 
   // Synchronize and normalize cloud profile outside the auth lock
   const syncProfileForUser = useCallback(async (user) => {
@@ -99,8 +100,8 @@ export const useIdentity = () => {
     const cachedProfile = getSafeCachedProfile();
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
-    // OPTIMIZATION 1: If cached profile exists, render UI INSTANTLY (<50ms)
-    if (cachedProfile) {
+    // OPTIMIZATION: If cached profile exists and not explicitly logged out, render UI INSTANTLY (<50ms)
+    if (cachedProfile && !explicitLogoutRef.current) {
       setCurrentProfile(cachedProfile);
       setIdentityMode('authenticated');
       setIsLoadingIdentity(false);
@@ -111,18 +112,8 @@ export const useIdentity = () => {
     setAuthErrorMessage(null);
 
     if (!useSupabase || !isOnline) {
-      setIdentityMode('offline-local');
-      if (!cachedProfile) {
-        const fallback = {
-          uid: 'local_offline_' + Date.now(),
-          displayName: 'Offline Runner',
-          level: 1,
-          xp: 0,
-          coins: 0,
-          clan: 'None'
-        };
-        setCurrentProfile(fallback);
-      }
+      setIdentityMode('signed-out');
+      setCurrentProfile(null);
       setIsLoadingIdentity(false);
       isInitializingRef.current = false;
       return;
@@ -131,15 +122,9 @@ export const useIdentity = () => {
     // Fast fallback timer: Guarantee UI appears within 1.5s even if network is slow
     const fastFallbackTimer = setTimeout(() => {
       if (!cachedProfile) {
-        console.warn('[AUTH] Slow network detected. Rendering local guest state while cloud completes.');
-        setCurrentProfile({
-          uid: 'local_guest_' + Date.now(),
-          displayName: 'Guest Runner',
-          level: 1,
-          xp: 0,
-          coins: 0,
-          clan: 'None'
-        });
+        setAuthUser(null);
+        setCurrentProfile(null);
+        setIdentityMode('signed-out');
         setIsLoadingIdentity(false);
       }
     }, 1500);
@@ -149,33 +134,14 @@ export const useIdentity = () => {
       const sessionRes = await getCurrentSession();
       let activeSession = sessionRes.success ? sessionRes.data : null;
 
-      // 2. If no active session, attempt Anonymous Sign-In
+      // 2. If no active session, transition to 'signed-out' (DO NOT call signInAnonymously automatically)
       if (!activeSession || !activeSession.user) {
-        const anonRes = await createAnonymousSession();
-
-        if (anonRes.success) {
-          activeSession = anonRes.data;
-        } else {
-          if (anonRes.error === 'anonymous_provider_disabled') {
-            setAuthErrorMessage('Enable Supabase Dashboard → Authentication → Providers → Anonymous Sign-Ins');
-            setIdentityMode('error');
-          } else {
-            setAuthErrorMessage(anonRes.message || 'Authentication error.');
-            setIdentityMode('error');
-          }
-
-          if (!cachedProfile) {
-            setCurrentProfile({
-              uid: 'local_offline_' + Date.now(),
-              displayName: 'Guest Runner',
-              level: 1,
-              xp: 0,
-              coins: 0,
-              clan: 'None'
-            });
-          }
-          return;
-        }
+        setAuthUser(null);
+        setCurrentProfile(null);
+        setIdentityMode('signed-out');
+        setIsLoadingIdentity(false);
+        isInitializingRef.current = false;
+        return;
       }
 
       // 3. Valid authenticated UUID session received
@@ -187,15 +153,47 @@ export const useIdentity = () => {
     } catch (err) {
       console.error('[IDENTITY] Initialization exception:', err);
       setAuthErrorMessage(err.message || 'Identity initialization error.');
-      if (!cachedProfile) {
-        setIdentityMode('error');
-      }
+      setIdentityMode('signed-out');
+      setCurrentProfile(null);
     } finally {
       clearTimeout(fastFallbackTimer);
       setIsLoadingIdentity(false);
       isInitializingRef.current = false;
     }
   }, [syncProfileForUser]);
+
+  // Canonical Sign Out Function (PART A & B)
+  const signOutCurrentUser = useCallback(async () => {
+    explicitLogoutRef.current = true;
+    profileSyncUserIdRef.current = null;
+    setIsLoadingIdentity(true);
+
+    try {
+      if (useSupabase) {
+        await supabase.auth.signOut({ scope: 'local' });
+      }
+
+      // Clear device/session identity cache keys ONLY
+      localStorage.removeItem('runclash-supabase-auth');
+      localStorage.removeItem('clash_user');
+      localStorage.removeItem('clash_identity_migrated_v1');
+
+      // Preserve workout and sync data: clash_runs, clash_territories, clash_pending_runs, clash_pending_territories
+
+      setAuthUser(null);
+      setCurrentProfile(null);
+      setIdentityMode('signed-out');
+      setAuthErrorMessage(null);
+      return { success: true };
+    } catch (err) {
+      console.error('[AUTH] Sign-out exception:', err);
+      setAuthErrorMessage(err.message || 'Failed to sign out.');
+      return { success: false, error: err.message };
+    } finally {
+      setIsLoadingIdentity(false);
+      isInitializingRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
     initializeIdentity();
@@ -205,25 +203,26 @@ export const useIdentity = () => {
     // Single Auth state listener: STRICTLY SYNCHRONOUS. No awaits inside callback!
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const user = session?.user ?? null;
-      setAuthUser(user);
 
       if (event === 'SIGNED_OUT') {
         profileSyncUserIdRef.current = null;
         setAuthUser(null);
         setCurrentProfile(null);
-        setIdentityMode('offline-local');
+        setIdentityMode('signed-out');
+        setIsLoadingIdentity(false);
         return;
       }
 
-      if (event === 'INITIAL_SESSION') {
-        return;
-      }
-
-      if (event === 'TOKEN_REFRESHED') {
+      if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
         return;
       }
 
       if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && user) {
+        if (explicitLogoutRef.current) {
+          // Explicit logout in progress; ignore SIGNED_IN event from local clearing
+          return;
+        }
+        setAuthUser(user);
         setTimeout(() => {
           syncProfileForUser(user);
         }, 0);
@@ -260,7 +259,9 @@ export const useIdentity = () => {
     identityMode,
     authErrorMessage,
     legacyMigrationNeeded,
+    signOutCurrentUser,
     refreshIdentity: () => {
+      explicitLogoutRef.current = false;
       isInitializingRef.current = false;
       profileSyncUserIdRef.current = null;
       initializeIdentity();

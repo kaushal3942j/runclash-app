@@ -94,7 +94,7 @@ const RUN_ENGINE_CONFIG = {
   // Speed & Motion Processing Thresholds
   STATIONARY_SPEED_THRESHOLD: 0.40,    // m/s (1.44 km/h)
   RESUME_SPEED_THRESHOLD: 0.50,        // m/s (1.80 km/h)
-  AUTO_PAUSE_STATIONARY_TIMEOUT_SEC: 10.0, // seconds stationary before auto-pause triggers
+  AUTO_PAUSE_STATIONARY_TIMEOUT_SEC: 15.0, // seconds stationary before auto-pause triggers (requires 15s AND 3 stationary fixes)
   SETTLING_DURATION_SEC: 3.0,          // seconds after start run to filter initial acquisition drift
   SETTLING_MIN_SAMPLES: 3,             // minimum samples required before leaving settling phase
   REQUIRED_MOVING_WINDOWS: 1,          // consecutive moving segments required to enter TRACKING
@@ -195,6 +195,24 @@ export default function App() {
   const [cameraSheetOpen, setCameraSheetOpen] = useState(false);
   const [activeBanner, setActiveBanner] = useState(null); // { type, sectorName }
   const [toastMessage, setToastMessage] = useState(null);
+  const toastTimerRef = useRef(null);
+
+  const showToast = useCallback((message, durationMs = 4000) => {
+    if (!message) return;
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage(message);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, durationMs);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
   const [showCameraFlash, setShowCameraFlash] = useState(false);
 
   const lastEnteredSectorIdRef = useRef(null);
@@ -622,7 +640,16 @@ export default function App() {
   const gpsAutoPausedRef = useRef(false);
   const gpsLastPointRef = useRef(null);
   const lastMovementTimestampRef = useRef(null);
+  const consecutiveStationaryFixesRef = useRef(0);
   const startAccuracyRef = useRef(null);
+  const gpsDiagnosticsRef = useRef({
+    received: 0,
+    accepted: 0,
+    rejectedAccuracy: 0,
+    rejectedMicro: 0,
+    rejectedTeleport: 0,
+    autoPauseCount: 0
+  });
   const smoothedSpeedRef = useRef(0);
   const speedHistoryRef = useRef([]);
   const accumulatedDistanceRef = useRef(0);
@@ -1241,7 +1268,16 @@ export default function App() {
     gpsAutoPausedRef.current = false;
     gpsLastPointRef.current = null;
     lastMovementTimestampRef.current = null;
+    consecutiveStationaryFixesRef.current = 0;
     startAccuracyRef.current = null;
+    gpsDiagnosticsRef.current = {
+      received: 0,
+      accepted: 0,
+      rejectedAccuracy: 0,
+      rejectedMicro: 0,
+      rejectedTeleport: 0,
+      autoPauseCount: 0
+    };
     speedHistoryRef.current = [];
     smoothedSpeedRef.current = 0;
     accumulatedDistanceRef.current = 0;
@@ -1366,8 +1402,25 @@ export default function App() {
         if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
         const watchId = navigator.geolocation.watchPosition(
           (watchPos) => {
-            console.log(`[WATCH POSITION GUARD] Checking runStateRef.current.manualPaused: ${runStateRef.current.manualPaused}, status: ${runStateRef.current.status}`);
             if (runStateRef.current.manualPaused) return; // User manually paused
+
+            gpsDiagnosticsRef.current.received += 1;
+
+            const logDiagnosticsEvery10 = () => {
+              if (gpsDiagnosticsRef.current.received % 10 === 0) {
+                console.log('[GPS DIAGNOSTICS]', {
+                  received: gpsDiagnosticsRef.current.received,
+                  accepted: gpsDiagnosticsRef.current.accepted,
+                  accuracyRejected: gpsDiagnosticsRef.current.rejectedAccuracy,
+                  microRejected: gpsDiagnosticsRef.current.rejectedMicro,
+                  teleportRejected: gpsDiagnosticsRef.current.rejectedTeleport,
+                  distanceMeters: Math.round(gpsDistanceRef.current * 1000),
+                  secondsSinceMovement: parseFloat(((Date.now() - (lastMovementTimestampRef.current || Date.now())) / 1000).toFixed(1)),
+                  accuracy: Math.round(gpsAccuracyRef.current || 0),
+                  rollingSpeed: gpsSpeedRef.current
+                });
+              }
+            };
 
             const wLat = watchPos.coords.latitude;
             const wLng = watchPos.coords.longitude;
@@ -1375,8 +1428,10 @@ export default function App() {
             gpsAccuracyRef.current = wAccuracy;
 
             if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+              gpsDiagnosticsRef.current.rejectedAccuracy += 1;
               console.log(`[GPS REJECT] reason: poor-accuracy | accuracy: ${Math.round(wAccuracy)}m | stepMeters: 0 | speed: 0`);
-              return; // Do NOT update gpsLastPointRef
+              logDiagnosticsEvery10();
+              return; // Do NOT update gpsLastPointRef and do NOT count as stationary proof
             }
 
             const newPoint = [wLat, wLng];
@@ -1393,6 +1448,7 @@ export default function App() {
               if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
               gpsSpeedRef.current = 0;
               gpsPaceRef.current = '--:--';
+              logDiagnosticsEvery10();
               return;
             }
 
@@ -1406,40 +1462,60 @@ export default function App() {
               if (gpsPathRef.current.length === 0) {
                 gpsPathRef.current.push(newPoint);
               }
+              logDiagnosticsEvery10();
               return;
             }
 
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
-            if (dtSeconds <= 0) return;
+            if (dtSeconds <= 0) {
+              logDiagnosticsEvery10();
+              return;
+            }
 
             const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
             const segmentSpeedKmh = (stepMeters / dtSeconds) * 3.6;
 
             // STAGE 4: Micro Movement Filter (< 0.8m)
             if (stepMeters < RUN_ENGINE_CONFIG.MIN_MOVEMENT_SEGMENT_METERS) {
+              gpsDiagnosticsRef.current.rejectedMicro += 1;
+              consecutiveStationaryFixesRef.current += 1;
+
               console.log(`[GPS REJECT] reason: micro-jitter | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(2)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
 
-              // Stationary Timeout Check (Auto-pause after 10.0 seconds without movement)
+              // Auto-pause ONLY when:
+              // 1. no accepted movement for at least 15 seconds
+              // 2. at least 3 consecutive recent GPS fixes indicate stationary behavior
               const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
-              if (secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC && !gpsAutoPausedRef.current && runStateRef.current.status === 'tracking') {
+              if (
+                secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC &&
+                consecutiveStationaryFixesRef.current >= 3 &&
+                !gpsAutoPausedRef.current &&
+                runStateRef.current.status === 'tracking'
+              ) {
                 gpsAutoPausedRef.current = true;
+                gpsDiagnosticsRef.current.autoPauseCount += 1;
                 gpsSpeedRef.current = 0;
                 gpsPaceRef.current = '--:--';
                 setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
-                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary.`);
-                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s`);
+                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary (${consecutiveStationaryFixesRef.current} fixes).`);
+                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s | stationaryFixes: ${consecutiveStationaryFixesRef.current}`);
               }
+              logDiagnosticsEvery10();
               return; // Retain previous gpsLastPointRef so displacement accumulates into next fix
             }
 
             // STAGE 5: Large GPS Jump Filter (> 30 km/h or > 50m jump)
             if (segmentSpeedKmh > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_KMH || stepMeters > 50.0) {
+              gpsDiagnosticsRef.current.rejectedTeleport += 1;
               addLog(`GPS: Teleport jump rejected (${stepMeters.toFixed(1)}m at ${segmentSpeedKmh.toFixed(1)} km/h).`);
               console.log(`[GPS REJECT] reason: teleport-jump | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(1)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
+              logDiagnosticsEvery10();
               return; // Do NOT advance gpsLastPointRef
             }
 
             // STAGE 6: ACCEPTED MOVEMENT
+            gpsDiagnosticsRef.current.accepted += 1;
+            consecutiveStationaryFixesRef.current = 0; // Reset stationary count on accepted movement
             lastPointTimeRef.current = nowTime;
             lastMovementTimestampRef.current = nowTime;
 
@@ -1468,7 +1544,7 @@ export default function App() {
               gpsPaceRef.current = '--:--';
             }
 
-            // Resume from auto-pause if auto-paused
+            // Resume immediately from auto-pause on accepted movement
             if (gpsAutoPausedRef.current) {
               gpsAutoPausedRef.current = false;
               addLog("GPS: Motion resumed. Tracking active.");
@@ -1496,6 +1572,8 @@ export default function App() {
               console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
               console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
             }
+
+            logDiagnosticsEvery10();
           },
           (watchErr) => {
             console.error("GPS Watch Error", watchErr);
@@ -5106,41 +5184,61 @@ export default function App() {
                   )}
 
                   {/* LIVE START-POINT PROXIMITY INDICATOR (PART 4) */}
-                  {(runState.status === 'tracking' || runState.status === 'paused') && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '6px',
-                      padding: '6px 12px',
-                      borderRadius: '12px',
-                      background: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS)
-                        ? 'rgba(16, 185, 129, 0.15)'
-                        : 'rgba(255, 255, 255, 0.05)',
-                      border: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS)
-                        ? '1px solid #10B981'
-                        : '1px solid rgba(255, 255, 255, 0.1)',
-                      marginBottom: '10px',
-                      width: '100%',
-                      boxSizing: 'border-box',
-                      transition: 'all 0.3s ease'
-                    }}>
-                      <MapPin size={12} style={{ color: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS) ? '#10B981' : '#FC4C02' }} />
-                      <span style={{
-                        fontSize: '10px',
-                        fontWeight: '800',
-                        color: (distanceToStartMeters !== null && distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS) ? '#10B981' : 'white',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.5px'
+                  {(runState.status === 'tracking' || runState.status === 'paused') && (() => {
+                    const path = gpsPathRef.current || [];
+                    const currentAcc = gpsAccuracyRef.current || 15;
+                    const startAcc = startAccuracyRef.current || 15;
+                    const closureRadius = Math.min(Math.max(12, startAcc, currentAcc), 22);
+                    const activeSec = (Date.now() - (startTimeRef.current ? startTimeRef.current.getTime() : Date.now())) / 1000;
+
+                    const closedCoords = path.length >= 3 ? [...path, path[0]] : [];
+                    const areaSqM = closedCoords.length >= 4 ? calculatePolygonArea(closedCoords) : 0;
+
+                    const isLoopReadyToClose = (
+                      distanceToStartMeters !== null &&
+                      distanceToStartMeters <= closureRadius &&
+                      gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM &&
+                      activeSec >= RUN_ENGINE_CONFIG.MIN_LOOP_DURATION_SEC &&
+                      path.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS &&
+                      areaSqM >= RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM
+                    );
+
+                    return (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        padding: '6px 12px',
+                        borderRadius: '12px',
+                        background: isLoopReadyToClose
+                          ? 'rgba(16, 185, 129, 0.15)'
+                          : 'rgba(255, 255, 255, 0.05)',
+                        border: isLoopReadyToClose
+                          ? '1px solid #10B981'
+                          : '1px solid rgba(255, 255, 255, 0.1)',
+                        marginBottom: '10px',
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        transition: 'all 0.3s ease'
                       }}>
-                        {(distanceToStartMeters === null || !gpsPathRef.current || gpsPathRef.current.length === 0)
-                          ? "Start point pending"
-                          : distanceToStartMeters <= RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS
-                            ? `Loop closable — ${distanceToStartMeters} m from start`
-                            : `Start: ${distanceToStartMeters} m away`}
-                      </span>
-                    </div>
-                  )}
+                        <MapPin size={12} style={{ color: isLoopReadyToClose ? '#10B981' : '#FC4C02' }} />
+                        <span style={{
+                          fontSize: '10px',
+                          fontWeight: '800',
+                          color: isLoopReadyToClose ? '#10B981' : 'white',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px'
+                        }}>
+                          {path.length === 0 || distanceToStartMeters === null
+                            ? "TRACKING LOOP"
+                            : isLoopReadyToClose
+                              ? `LOOP CLOSABLE — ${Math.round(distanceToStartMeters)} m to start`
+                              : `BUILDING LOOP — ${Math.round(distanceToStartMeters)} m from start`}
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* MINI STATE */}
                   {bottomHudState === 'mini' && (

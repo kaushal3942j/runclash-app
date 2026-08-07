@@ -197,6 +197,37 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState(null);
   const toastTimerRef = useRef(null);
 
+  // REAL DEVICE GPS DIAGNOSTIC MODE STATES
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
+  const [showDebugModal, setShowDebugModal] = useState(false);
+  const [debugModalText, setDebugModalText] = useState('');
+  const [liveDebugInfo, setLiveDebugInfo] = useState({
+    engineState: 'idle',
+    accuracy: 0,
+    coordsSpeedKmh: 'N/A',
+    lat: 0,
+    lng: 0,
+    bufferFixes: 0,
+    windowSeconds: 0,
+    totalPathMeters: 0,
+    netDisplacementMeters: 0,
+    directionEfficiency: 0,
+    medianSpeedKmh: 0,
+    medianAccuracy: 0,
+    primaryPass: false,
+    fallbackPass: false,
+    lastDecision: 'N/A',
+    lastReason: 'N/A',
+    gpsFixCount: 0,
+    acceptedFixCount: 0,
+    rejectedAccuracyCount: 0,
+    lastStepMeters: 0,
+    lastFixDtSeconds: 0,
+    calculatedSegmentSpeedKmh: 0,
+    distFromFirstWindowFix: 0
+  });
+  const debugHistoryRef = useRef([]);
+
   const showToast = useCallback((message, durationMs = 4000) => {
     if (!message) return;
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -206,6 +237,21 @@ export default function App() {
       toastTimerRef.current = null;
     }, durationMs);
   }, []);
+
+  const handleCopyGpsDebug = useCallback(() => {
+    const jsonText = JSON.stringify(debugHistoryRef.current, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(jsonText)
+        .then(() => showToast("Copied 20 GPS debug records to clipboard!"))
+        .catch(() => {
+          setDebugModalText(jsonText);
+          setShowDebugModal(true);
+        });
+    } else {
+      setDebugModalText(jsonText);
+      setShowDebugModal(true);
+    }
+  }, [showToast]);
 
   useEffect(() => {
     return () => {
@@ -1480,6 +1526,46 @@ export default function App() {
 
             const currentState = runEngineStateRef.current;
 
+            const recordDiagnosticFix = (info = {}) => {
+              const coordsSpeedKmh = (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
+                ? parseFloat((watchPos.coords.speed * 3.6).toFixed(1))
+                : 'N/A';
+
+              const record = {
+                timestamp: new Date().toLocaleTimeString(),
+                engineState: currentState,
+                accuracy: Math.round(wAccuracy),
+                coordsSpeedKmh,
+                lat: parseFloat(wLat.toFixed(6)),
+                lng: parseFloat(wLng.toFixed(6)),
+                lastStepMeters: parseFloat(stepMeters.toFixed(1)),
+                lastFixDtSeconds: parseFloat(dtSeconds.toFixed(1)),
+                calculatedSegmentSpeedKmh: parseFloat(segmentSpeedKmh.toFixed(1)),
+                bufferFixes: waitingBufferRef.current.length,
+                windowSeconds: parseFloat((info.windowSeconds || 0).toFixed(1)),
+                totalPathMeters: parseFloat((info.totalPathMeters || 0).toFixed(1)),
+                netDisplacementMeters: parseFloat((info.netDisplacementMeters || 0).toFixed(1)),
+                directionEfficiency: parseFloat((info.directionEfficiency || 0).toFixed(2)),
+                medianSpeedKmh: parseFloat((info.medianSpeedKmh || 0).toFixed(1)),
+                medianAccuracy: Math.round(info.medianAccuracy || wAccuracy),
+                primaryPass: info.primaryPass || false,
+                fallbackPass: info.fallbackPass || false,
+                decision: info.decision || 'N/A',
+                reason: info.reason || 'N/A',
+                gpsFixCount: gpsDiagnosticsRef.current.received,
+                acceptedFixCount: gpsDiagnosticsRef.current.accepted,
+                rejectedAccuracyCount: gpsDiagnosticsRef.current.rejectedAccuracy,
+                distFromFirstWindowFix: parseFloat((info.netDisplacementMeters || 0).toFixed(1))
+              };
+
+              debugHistoryRef.current.push(record);
+              if (debugHistoryRef.current.length > 20) {
+                debugHistoryRef.current.shift();
+              }
+
+              setLiveDebugInfo(record);
+            };
+
             // ------------------------------------------------------------------
             // 2. DISPATCH TO EXACTLY ONE STATE HANDLER (HARD ISOLATION)
             // ------------------------------------------------------------------
@@ -1502,6 +1588,7 @@ export default function App() {
                   if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
                   if (initialSettlingSamplesRef.current.length < 5) {
+                    recordDiagnosticFix({ decision: 'WAIT_SETTLING', reason: `Establishing baseline (${initialSettlingSamplesRef.current.length}/5)` });
                     console.log('[WAITING MOTION WINDOW]', {
                       fixes: initialSettlingSamplesRef.current.length,
                       windowSeconds: 0,
@@ -1543,6 +1630,9 @@ export default function App() {
                 let medianSpeedKmh = 0;
                 let medianAccuracy = wAccuracy;
 
+                let primaryPass = false;
+                let fallbackPass = false;
+
                 if (buf.length >= 4) {
                   windowSeconds = (buf[buf.length - 1].timestamp - buf[0].timestamp) / 1000;
                   netDisplacementMeters = getDistanceInMeters(buf[0].lat, buf[0].lng, buf[buf.length - 1].lat, buf[buf.length - 1].lng);
@@ -1574,20 +1664,20 @@ export default function App() {
 
                   // PRIMARY ARMING RULE (Straight / Coherent Walking):
                   // >= 4 fixes, window >= 3s, total path >= 4.5m, net displacement >= 3.5m, efficiency >= 0.50, median speed 1.0-15.0 km/h
-                  const primaryPass = (buf.length >= 4) &&
-                                      (windowSeconds >= 3.0) &&
-                                      (totalPathMeters >= 4.5) &&
-                                      (netDisplacementMeters >= 3.5) &&
-                                      (directionEfficiency >= 0.50) &&
-                                      (medianSpeedKmh >= 1.0 && medianSpeedKmh <= 15.0);
+                  primaryPass = (buf.length >= 4) &&
+                                (windowSeconds >= 3.0) &&
+                                (totalPathMeters >= 4.5) &&
+                                (netDisplacementMeters >= 3.5) &&
+                                (directionEfficiency >= 0.50) &&
+                                (medianSpeedKmh >= 1.0 && medianSpeedKmh <= 15.0);
 
                   // FALLBACK ARMING RULE (Curved path / House loops / Turning corners):
                   // >= 5 fixes, window >= 5s, total path >= 7.0m, median speed >= 1.0 km/h, no teleport speed (>25 km/h)
-                  const fallbackPass = (buf.length >= 5) &&
-                                       (windowSeconds >= 5.0) &&
-                                       (totalPathMeters >= 7.0) &&
-                                       (medianSpeedKmh >= 1.0) &&
-                                       (maxSpeedKmh <= 25.0);
+                  fallbackPass = (buf.length >= 5) &&
+                                 (windowSeconds >= 5.0) &&
+                                 (totalPathMeters >= 7.0) &&
+                                 (medianSpeedKmh >= 1.0) &&
+                                 (maxSpeedKmh <= 25.0);
 
                   if (primaryPass) {
                     shouldArm = true;
@@ -1597,6 +1687,19 @@ export default function App() {
                     armReason = 'Fallback sustained movement window confirmed';
                   }
                 }
+
+                recordDiagnosticFix({
+                  windowSeconds,
+                  totalPathMeters,
+                  netDisplacementMeters,
+                  directionEfficiency,
+                  medianSpeedKmh,
+                  medianAccuracy,
+                  primaryPass,
+                  fallbackPass,
+                  decision: shouldArm ? 'ARM_RUN' : 'WAIT',
+                  reason: shouldArm ? armReason : 'Building rolling window evidence'
+                });
 
                 console.log('[WAITING MOTION WINDOW]', {
                   fixes: buf.length,
@@ -5090,6 +5193,100 @@ export default function App() {
                 </div>
               )}
 
+              {/* REAL DEVICE GPS DIAGNOSTIC PANEL (COLLAPSIBLE) */}
+              {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '70px',
+                    left: '16px',
+                    right: '16px',
+                    zIndex: 1005,
+                    background: 'rgba(10, 10, 14, 0.95)',
+                    border: '1px solid #334155',
+                    borderRadius: '16px',
+                    padding: '10px 14px',
+                    color: '#E0E0E0',
+                    fontFamily: 'monospace',
+                    fontSize: '11px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isDebugPanelOpen ? '8px' : '0' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 'bold', color: '#10B981' }}>🛠️ GPS DEBUG</span>
+                      <span style={{ fontSize: '10px', background: '#1E293B', padding: '2px 6px', borderRadius: '4px', color: '#38BDF8' }}>
+                        STATE: {runEngineStateRef.current.toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={handleCopyGpsDebug}
+                        style={{
+                          background: '#FC4C02',
+                          border: 'none',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          fontSize: '10px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        📋 COPY DEBUG
+                      </button>
+                      <button
+                        onClick={() => setIsDebugPanelOpen(prev => !prev)}
+                        style={{
+                          background: '#334155',
+                          border: 'none',
+                          color: 'white',
+                          fontSize: '10px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {isDebugPanelOpen ? '▲ HIDE' : '▼ SHOW'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isDebugPanelOpen && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', borderTop: '1px solid #334155', paddingTop: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+                      <div><strong style={{ color: '#94A3B8' }}>STATE:</strong> <span style={{ color: '#F59E0B' }}>{runEngineStateRef.current}</span></div>
+                      <div><strong style={{ color: '#94A3B8' }}>ACCURACY:</strong> <span style={{ color: liveDebugInfo.accuracy <= 30 ? '#10B981' : '#EF4444' }}>{liveDebugInfo.accuracy}m</span></div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>COORDS SPEED:</strong> {liveDebugInfo.coordsSpeedKmh} {liveDebugInfo.coordsSpeedKmh !== 'N/A' ? 'km/h' : ''}</div>
+                      <div><strong style={{ color: '#94A3B8' }}>LAT/LNG:</strong> {liveDebugInfo.lat.toFixed(4)}, {liveDebugInfo.lng.toFixed(4)}</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>BUF FIXES:</strong> {liveDebugInfo.bufferFixes} / 6</div>
+                      <div><strong style={{ color: '#94A3B8' }}>WIN SECONDS:</strong> {liveDebugInfo.windowSeconds}s</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>TOTAL PATH:</strong> {liveDebugInfo.totalPathMeters}m</div>
+                      <div><strong style={{ color: '#94A3B8' }}>NET DISPLACE:</strong> {liveDebugInfo.netDisplacementMeters}m</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>DIR EFFICIENCY:</strong> {liveDebugInfo.directionEfficiency}</div>
+                      <div><strong style={{ color: '#94A3B8' }}>MEDIAN SPEED:</strong> {liveDebugInfo.medianSpeedKmh} km/h</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>MEDIAN ACC:</strong> {liveDebugInfo.medianAccuracy}m</div>
+                      <div><strong style={{ color: '#94A3B8' }}>FIRST FIX DIST:</strong> {liveDebugInfo.distFromFirstWindowFix}m</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>PRIMARY PASS:</strong> <span style={{ color: liveDebugInfo.primaryPass ? '#10B981' : '#EF4444' }}>{liveDebugInfo.primaryPass ? 'TRUE' : 'FALSE'}</span></div>
+                      <div><strong style={{ color: '#94A3B8' }}>FALLBACK PASS:</strong> <span style={{ color: liveDebugInfo.fallbackPass ? '#10B981' : '#EF4444' }}>{liveDebugInfo.fallbackPass ? 'TRUE' : 'FALSE'}</span></div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>LAST STEP:</strong> {liveDebugInfo.lastStepMeters}m ({liveDebugInfo.lastFixDtSeconds}s)</div>
+                      <div><strong style={{ color: '#94A3B8' }}>SEGMENT SPEED:</strong> {liveDebugInfo.calculatedSegmentSpeedKmh} km/h</div>
+
+                      <div><strong style={{ color: '#94A3B8' }}>FIX COUNTS:</strong> {liveDebugInfo.gpsFixCount} (Acc: {liveDebugInfo.acceptedFixCount}, Rej: {liveDebugInfo.rejectedAccuracyCount})</div>
+                      <div><strong style={{ color: '#94A3B8' }}>DECISION:</strong> <span style={{ color: '#38BDF8' }}>{liveDebugInfo.lastDecision}</span></div>
+
+                      <div style={{ gridColumn: 'span 2' }}><strong style={{ color: '#94A3B8' }}>REASON:</strong> <span style={{ color: '#CBD5E1' }}>{liveDebugInfo.lastReason}</span></div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* DYNAMIC TERRITORY NOTIFICATION BANNER */}
               {activeBanner && (
                 <div
@@ -6343,6 +6540,69 @@ export default function App() {
               targetUserId={viewingPublicProfileId}
               onClose={() => setViewingPublicProfileId(null)}
             />
+          )}
+
+          {/* SELECTABLE DEBUG TEXT MODAL (FALLBACK FOR CLIPBOARD) */}
+          {showDebugModal && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 9999,
+                background: 'rgba(0,0,0,0.85)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '20px'
+              }}
+            >
+              <div
+                style={{
+                  background: '#0F172A',
+                  border: '1px solid #334155',
+                  borderRadius: '16px',
+                  width: '100%',
+                  maxWidth: '500px',
+                  maxHeight: '80vh',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '16px',
+                  color: 'white',
+                  boxShadow: '0 12px 40px rgba(0,0,0,0.8)'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h3 style={{ margin: 0, fontSize: '13px', color: '#10B981', fontFamily: 'monospace' }}>📋 GPS DEBUG DATA (LAST 20 FIXES)</h3>
+                  <button
+                    onClick={() => setShowDebugModal(false)}
+                    style={{ background: '#334155', border: 'none', color: 'white', borderRadius: '8px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer' }}
+                  >
+                    ✕ CLOSE
+                  </button>
+                </div>
+                <p style={{ fontSize: '10px', color: '#94A3B8', margin: '0 0 8px 0', fontFamily: 'sans-serif' }}>Select all text below and copy it manually:</p>
+                <textarea
+                  readOnly
+                  value={debugModalText}
+                  style={{
+                    flex: 1,
+                    minHeight: '260px',
+                    background: '#020617',
+                    color: '#38BDF8',
+                    border: '1px solid #1E293B',
+                    borderRadius: '8px',
+                    padding: '10px',
+                    fontFamily: 'monospace',
+                    fontSize: '10px',
+                    resize: 'none'
+                  }}
+                  onClick={(e) => e.target.select()}
+                />
+              </div>
+            </div>
           )}
 
         </div>

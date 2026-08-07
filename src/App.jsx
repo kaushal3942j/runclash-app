@@ -1679,23 +1679,36 @@ export default function App() {
               logDiagnosticsEvery10();
               return;
             }
+            // ------------------------------------------------------------------
+            // PAUSED RESUME ENGINE (SCENARIO A: gpsAutoPausedRef.current === true)
+            // ------------------------------------------------------------------
             if (gpsAutoPausedRef.current) {
+              // Always update visual runner marker while paused so map doesn't freeze!
+              if (runnerMarkerRef.current) {
+                runnerMarkerRef.current.setLatLng(newPoint);
+              }
+              if (mapInstanceRef.current && mapAutoFollowRef.current) {
+                mapInstanceRef.current.panTo(newPoint);
+              }
+
+              // Freeze fixed pause anchor at the exact moment auto-pause begins
               if (!pauseAnchorRef.current) {
                 pauseAnchorRef.current = gpsLastPointRef.current || newPoint;
               }
 
-              // 1. Hard Accuracy Filter (>30m ignored, does NOT reset candidate progress)
+              // 1. Hard Accuracy Rejection (>30m ignored, doesn't reset candidate progress)
               if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
-                console.log('[RESUME CHECK]', {
+                console.log('[PAUSED RESUME CHECK]', {
                   distanceFromPauseAnchor: 0,
+                  stepMeters: parseFloat(stepMeters.toFixed(1)),
                   accuracy: Math.round(wAccuracy),
+                  coordsSpeedKmh: (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed)) ? parseFloat((watchPos.coords.speed * 3.6).toFixed(1)) : 'N/A',
+                  calculatedSpeedKmh: parseFloat(segmentSpeedKmh.toFixed(1)),
                   resumeCandidates: resumeCandidatesRef.current,
-                  pointCount: gpsPathRef.current ? gpsPathRef.current.length : 0,
-                  reason: 'poor accuracy >30m ignored',
-                  willResume: false
+                  decision: 'REJECT_POOR_ACCURACY'
                 });
                 logDiagnosticsEvery10();
-                return;
+                return; // Stay auto-paused
               }
 
               const distFromPauseAnchor = getDistanceInMeters(
@@ -1705,62 +1718,68 @@ export default function App() {
                 wLng
               );
 
-              // 2. Micro-jitter while paused (<0.8m step OR <1.0m from pause anchor):
-              // Ignore, do NOT reset candidate progress!
-              if (stepMeters < 0.8 || distFromPauseAnchor < 1.0) {
-                console.log('[RESUME CHECK]', {
-                  distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
-                  accuracy: Math.round(wAccuracy),
-                  resumeCandidates: resumeCandidatesRef.current,
-                  pointCount: gpsPathRef.current ? gpsPathRef.current.length : 0,
-                  reason: 'micro-jitter ignored',
-                  willResume: false
-                });
-                logDiagnosticsEvery10();
-                return;
-              }
+              const deviceSpeedKmh = (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
+                ? watchPos.coords.speed * 3.6
+                : null;
 
-              // 3. Reset candidate progress ONLY if runner clearly returned close to pause anchor (<1.5m with good accuracy)
+              // Check candidate fix conditions:
+              // distFromPauseAnchor >= 2.0m AND (coords.speed >= 0.8 OR calculatedSpeed >= 1.0 OR distance increasing)
+              let prevDistFromAnchor = distFromPauseAnchor;
+              if (gpsLastPointRef.current) {
+                prevDistFromAnchor = getDistanceInMeters(pauseAnchorRef.current[0], pauseAnchorRef.current[1], gpsLastPointRef.current[0], gpsLastPointRef.current[1]);
+              }
+              const isMovingOutward = distFromPauseAnchor > prevDistFromAnchor + 0.2;
+
+              const isMovementCandidate = distFromPauseAnchor >= 2.0 && (
+                (deviceSpeedKmh !== null && deviceSpeedKmh >= 0.8) ||
+                (segmentSpeedKmh >= 1.0) ||
+                isMovingOutward
+              );
+
+              // Reset candidate progress ONLY if runner returned close to pause anchor (<1.5m with good accuracy)
               if (distFromPauseAnchor < 1.5 && wAccuracy <= 20) {
                 resumeCandidatesRef.current = 0;
-                console.log('[RESUME CHECK]', {
+                console.log('[PAUSED RESUME CHECK]', {
                   distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
+                  stepMeters: parseFloat(stepMeters.toFixed(1)),
                   accuracy: Math.round(wAccuracy),
+                  coordsSpeedKmh: deviceSpeedKmh !== null ? parseFloat(deviceSpeedKmh.toFixed(1)) : 'N/A',
+                  calculatedSpeedKmh: parseFloat(segmentSpeedKmh.toFixed(1)),
                   resumeCandidates: 0,
-                  pointCount: gpsPathRef.current ? gpsPathRef.current.length : 0,
-                  reason: 'runner at pause anchor',
-                  willResume: false
+                  decision: 'STILL'
                 });
                 logDiagnosticsEvery10();
                 return;
               }
 
-              // 4. Evaluate Resume Candidate
-              // A fix qualifies as a candidate if distFromPauseAnchor >= 2.5m OR stepMeters >= 1.5m
-              const isCandidate = distFromPauseAnchor >= 2.5 || stepMeters >= 1.5;
-              if (isCandidate) {
+              if (isMovementCandidate) {
                 resumeCandidatesRef.current += 1;
-                gpsDiagnosticsRef.current.resumeCandidates += 1;
               }
 
-              // 5. Evaluate EITHER Resume Condition:
-              // Condition 1: distFromPauseAnchor >= 3.0m across at least 2 valid fixes (resumeCandidatesRef >= 2)
-              // Condition 2: distFromPauseAnchor >= 5.0m in 1 valid fix with accuracy <= 20m and plausible speed (< 30km/h)
-              const condition1Passed = distFromPauseAnchor >= 3.0 && resumeCandidatesRef.current >= 2;
-              const condition2Passed = distFromPauseAnchor >= 5.0 && wAccuracy <= 20 && segmentSpeedKmh < 30.0;
+              // Evaluate Resume Conditions:
+              // Condition 1: distFromPauseAnchor >= 2.0m across 2 candidate fixes (resumeCandidatesRef >= 2)
+              // Fallback Condition 2: distFromPauseAnchor >= 5.0m in 1 valid fix with accuracy <= 25m
+              const condition1Passed = distFromPauseAnchor >= 2.0 && resumeCandidatesRef.current >= 2;
+              const condition2Passed = distFromPauseAnchor >= 5.0 && wAccuracy <= 25;
               const shouldResume = condition1Passed || condition2Passed;
 
+              const currentDecisionText = shouldResume
+                ? 'RESUME_CONFIRMED'
+                : (resumeCandidatesRef.current === 1 ? 'CANDIDATE_1' : (resumeCandidatesRef.current >= 2 ? 'CANDIDATE_2' : 'STILL'));
+
+              console.log('[PAUSED RESUME CHECK]', {
+                distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
+                stepMeters: parseFloat(stepMeters.toFixed(1)),
+                accuracy: Math.round(wAccuracy),
+                coordsSpeedKmh: deviceSpeedKmh !== null ? parseFloat(deviceSpeedKmh.toFixed(1)) : 'N/A',
+                calculatedSpeedKmh: parseFloat(segmentSpeedKmh.toFixed(1)),
+                resumeCandidates: resumeCandidatesRef.current,
+                decision: currentDecisionText
+              });
+
               if (!shouldResume) {
-                console.log('[RESUME CHECK]', {
-                  distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
-                  accuracy: Math.round(wAccuracy),
-                  resumeCandidates: resumeCandidatesRef.current,
-                  pointCount: gpsPathRef.current ? gpsPathRef.current.length : 0,
-                  reason: 'building resume candidate',
-                  willResume: false
-                });
                 logDiagnosticsEvery10();
-                return;
+                return; // Stay auto-paused
               }
 
               // ------------------------------------------------------------------
@@ -1770,23 +1789,15 @@ export default function App() {
                 ? parseFloat(((nowTime - autoPauseStartTimeRef.current) / 1000).toFixed(1))
                 : 0;
 
-              console.log('[RESUME CHECK]', {
+              console.log('[PAUSED RESUME CONFIRMED]', {
                 distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
-                accuracy: Math.round(wAccuracy),
-                resumeCandidates: resumeCandidatesRef.current,
-                pointCount: gpsPathRef.current ? gpsPathRef.current.length : 0,
-                reason: 'resume confirmed',
-                willResume: true
-              });
-
-              console.log('[RESUME CONFIRMED]', {
-                distanceFromPauseAnchor: parseFloat(distFromPauseAnchor.toFixed(1)),
-                secondsPaused: secondsPaused
+                resumeLatency: secondsPaused,
+                accuracy: Math.round(wAccuracy)
               });
 
               gpsAutoPausedRef.current = false;
-              consecutiveStationaryFixesRef.current = 0;
               resumeCandidatesRef.current = 0;
+              consecutiveStationaryFixesRef.current = 0;
               pauseAnchorRef.current = null;
               autoPauseStartTimeRef.current = null;
               stationaryAnchorPointRef.current = newPoint;
@@ -1794,8 +1805,14 @@ export default function App() {
               lastPointTimeRef.current = nowTime;
               gpsDiagnosticsRef.current.confirmedResumes += 1;
 
-              // Clean baseline: Establish new accepted reference without adding displacement jump
+              // Clean baseline: Establish new accepted reference WITHOUT adding pause jump distance!
               gpsLastPointRef.current = newPoint;
+
+              // Clear stale pre-pause speed history so new walking fixes rebuild speed/pace cleanly
+              speedHistoryRef.current = [];
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+
               if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
               if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
@@ -1804,6 +1821,8 @@ export default function App() {
               setRunState(prev => ({
                 ...prev,
                 status: 'tracking',
+                speed: 0,
+                pace: '--:--',
                 isAutoPaused: false
               }));
 

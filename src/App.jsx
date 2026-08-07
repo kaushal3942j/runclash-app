@@ -641,6 +641,9 @@ export default function App() {
   const gpsLastPointRef = useRef(null);
   const lastMovementTimestampRef = useRef(null);
   const consecutiveStationaryFixesRef = useRef(0);
+  const stationaryAnchorPointRef = useRef(null);
+  const driftCandidateDistRef = useRef(0);
+  const resumeCandidatesRef = useRef(0);
   const startAccuracyRef = useRef(null);
   const gpsDiagnosticsRef = useRef({
     received: 0,
@@ -648,7 +651,11 @@ export default function App() {
     rejectedAccuracy: 0,
     rejectedMicro: 0,
     rejectedTeleport: 0,
-    autoPauseCount: 0
+    autoPauseCount: 0,
+    driftCandidates: 0,
+    driftDiscarded: 0,
+    resumeCandidates: 0,
+    confirmedResumes: 0
   });
   const smoothedSpeedRef = useRef(0);
   const speedHistoryRef = useRef([]);
@@ -1269,6 +1276,9 @@ export default function App() {
     gpsLastPointRef.current = null;
     lastMovementTimestampRef.current = null;
     consecutiveStationaryFixesRef.current = 0;
+    stationaryAnchorPointRef.current = null;
+    driftCandidateDistRef.current = 0;
+    resumeCandidatesRef.current = 0;
     startAccuracyRef.current = null;
     gpsDiagnosticsRef.current = {
       received: 0,
@@ -1276,7 +1286,11 @@ export default function App() {
       rejectedAccuracy: 0,
       rejectedMicro: 0,
       rejectedTeleport: 0,
-      autoPauseCount: 0
+      autoPauseCount: 0,
+      driftCandidates: 0,
+      driftDiscarded: 0,
+      resumeCandidates: 0,
+      confirmedResumes: 0
     };
     speedHistoryRef.current = [];
     smoothedSpeedRef.current = 0;
@@ -1414,6 +1428,11 @@ export default function App() {
                   accuracyRejected: gpsDiagnosticsRef.current.rejectedAccuracy,
                   microRejected: gpsDiagnosticsRef.current.rejectedMicro,
                   teleportRejected: gpsDiagnosticsRef.current.rejectedTeleport,
+                  autoPauseCount: gpsDiagnosticsRef.current.autoPauseCount,
+                  driftCandidates: gpsDiagnosticsRef.current.driftCandidates,
+                  driftDiscarded: gpsDiagnosticsRef.current.driftDiscarded,
+                  resumeCandidates: gpsDiagnosticsRef.current.resumeCandidates,
+                  confirmedResumes: gpsDiagnosticsRef.current.confirmedResumes,
                   distanceMeters: Math.round(gpsDistanceRef.current * 1000),
                   secondsSinceMovement: parseFloat(((Date.now() - (lastMovementTimestampRef.current || Date.now())) / 1000).toFixed(1)),
                   accuracy: Math.round(gpsAccuracyRef.current || 0),
@@ -1443,6 +1462,7 @@ export default function App() {
 
             if (elapsedSettlingSec < RUN_ENGINE_CONFIG.SETTLING_DURATION_SEC || settlingSamplesCountRef.current < RUN_ENGINE_CONFIG.SETTLING_MIN_SAMPLES) {
               gpsLastPointRef.current = newPoint;
+              stationaryAnchorPointRef.current = newPoint;
               startAccuracyRef.current = wAccuracy;
               if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
               if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
@@ -1458,6 +1478,7 @@ export default function App() {
               lastPointTimeRef.current = nowTime;
               lastMovementTimestampRef.current = nowTime;
               gpsLastPointRef.current = newPoint;
+              stationaryAnchorPointRef.current = newPoint;
               startAccuracyRef.current = wAccuracy;
               if (gpsPathRef.current.length === 0) {
                 gpsPathRef.current.push(newPoint);
@@ -1480,6 +1501,10 @@ export default function App() {
               gpsDiagnosticsRef.current.rejectedMicro += 1;
               consecutiveStationaryFixesRef.current += 1;
 
+              if (!stationaryAnchorPointRef.current) {
+                stationaryAnchorPointRef.current = gpsLastPointRef.current || newPoint;
+              }
+
               console.log(`[GPS REJECT] reason: micro-jitter | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(2)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
 
               // Auto-pause ONLY when:
@@ -1494,6 +1519,7 @@ export default function App() {
               ) {
                 gpsAutoPausedRef.current = true;
                 gpsDiagnosticsRef.current.autoPauseCount += 1;
+                resumeCandidatesRef.current = 0;
                 gpsSpeedRef.current = 0;
                 gpsPaceRef.current = '--:--';
                 setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
@@ -1513,9 +1539,114 @@ export default function App() {
               return; // Do NOT advance gpsLastPointRef
             }
 
-            // STAGE 6: ACCEPTED MOVEMENT
+            // STAGE 6: DRIFT & ACCURACY-AWARE MOTION VALIDATION
+            if (!stationaryAnchorPointRef.current) {
+              stationaryAnchorPointRef.current = gpsLastPointRef.current || newPoint;
+            }
+
+            const distFromAnchorMeters = getDistanceInMeters(
+              stationaryAnchorPointRef.current[0],
+              stationaryAnchorPointRef.current[1],
+              wLat,
+              wLng
+            );
+
+            // Dynamic accuracy-aware drift radius (3.5m to 6.0m depending on GPS accuracy)
+            const dynamicDriftRadiusMeters = Math.min(Math.max(3.5, wAccuracy * 0.25), 6.0);
+
+            // ------------------------------------------------------------------
+            // SCENARIO A: RUNNER IS CURRENTLY AUTO-PAUSED
+            // ------------------------------------------------------------------
+            if (gpsAutoPausedRef.current) {
+              // Do NOT add distance for isolated GPS movement while paused.
+              // Require confirmed resumed movement before leaving auto-pause.
+              const isResumingMovement = (distFromAnchorMeters >= 3.0 && segmentSpeedKmh >= 1.2) || stepMeters >= 2.0;
+
+              if (!isResumingMovement) {
+                resumeCandidatesRef.current = 0;
+                gpsDiagnosticsRef.current.driftCandidates += 1;
+                gpsDiagnosticsRef.current.driftDiscarded += 1;
+                logDiagnosticsEvery10();
+                return; // Stay auto-paused, 0 distance added
+              }
+
+              resumeCandidatesRef.current += 1;
+              gpsDiagnosticsRef.current.resumeCandidates += 1;
+
+              // Require at least 2 consecutive directional movement fixes or >= 4.0m shift
+              if (resumeCandidatesRef.current < 2 && distFromAnchorMeters < 4.0) {
+                console.log(`[PAUSED DRIFT] Candidate resume fix ${resumeCandidatesRef.current}/2 received. Awaiting confirmation...`);
+                logDiagnosticsEvery10();
+                return; // Await confirmation fix, 0 distance added
+              }
+
+              // CONFIRMED RESUME FROM AUTO-PAUSE!
+              gpsAutoPausedRef.current = false;
+              gpsDiagnosticsRef.current.confirmedResumes += 1;
+              resumeCandidatesRef.current = 0;
+              consecutiveStationaryFixesRef.current = 0;
+
+              // Establish new clean reference point without adding stationary jump distance
+              gpsLastPointRef.current = newPoint;
+              stationaryAnchorPointRef.current = newPoint;
+              lastPointTimeRef.current = nowTime;
+              lastMovementTimestampRef.current = nowTime;
+
+              updateMapDisplay(newPoint);
+              addLog("GPS: Confirmed movement. Tracking resumed.");
+              console.log("[AUTO PAUSE RESUME] Tracking resumed cleanly without adding stationary jump distance.");
+
+              setRunState(prev => ({
+                ...prev,
+                status: 'tracking',
+                isAutoPaused: false
+              }));
+
+              logDiagnosticsEvery10();
+              return;
+            }
+
+            // ------------------------------------------------------------------
+            // SCENARIO B: STATIONARY DRIFT FILTER (WHEN TRACKING)
+            // ------------------------------------------------------------------
+            const isStationaryDrift = (distFromAnchorMeters < dynamicDriftRadiusMeters && segmentSpeedKmh < 2.0) ||
+                                      (stepMeters < 1.5 && segmentSpeedKmh < 1.2);
+
+            if (isStationaryDrift) {
+              gpsDiagnosticsRef.current.driftCandidates += 1;
+              gpsDiagnosticsRef.current.driftDiscarded += 1;
+              consecutiveStationaryFixesRef.current += 1;
+
+              console.log(`[STATIONARY DRIFT REJECT] stepMeters: ${stepMeters.toFixed(2)}m | distFromAnchor: ${distFromAnchorMeters.toFixed(2)}m | radius: ${dynamicDriftRadiusMeters.toFixed(1)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h | accuracy: ${Math.round(wAccuracy)}m`);
+
+              // Check auto-pause timeout during stationary drift
+              const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
+              if (
+                secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC &&
+                consecutiveStationaryFixesRef.current >= 3 &&
+                !gpsAutoPausedRef.current &&
+                runStateRef.current.status === 'tracking'
+              ) {
+                gpsAutoPausedRef.current = true;
+                gpsDiagnosticsRef.current.autoPauseCount += 1;
+                resumeCandidatesRef.current = 0;
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+                setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
+                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary (${consecutiveStationaryFixesRef.current} fixes).`);
+                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s | stationaryFixes: ${consecutiveStationaryFixesRef.current}`);
+              }
+
+              logDiagnosticsEvery10();
+              return; // Discard stationary drift fix without adding distance
+            }
+
+            // ------------------------------------------------------------------
+            // SCENARIO C: ACCEPTED CONFIRMED MOVEMENT
+            // ------------------------------------------------------------------
             gpsDiagnosticsRef.current.accepted += 1;
-            consecutiveStationaryFixesRef.current = 0; // Reset stationary count on accepted movement
+            consecutiveStationaryFixesRef.current = 0;
+            stationaryAnchorPointRef.current = newPoint; // Update anchor to current moving fix
             lastPointTimeRef.current = nowTime;
             lastMovementTimestampRef.current = nowTime;
 

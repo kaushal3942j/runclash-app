@@ -639,6 +639,7 @@ export default function App() {
   const gpsAccuracyRef = useRef(null);
   const gpsAutoPausedRef = useRef(false);
   const runEngineStateRef = useRef('idle'); // 'idle' | 'acquiring' | 'waiting' | 'tracking' | 'paused'
+  const waitingBufferRef = useRef([]);
   const gpsLastPointRef = useRef(null);
   const lastMovementTimestampRef = useRef(null);
   const consecutiveStationaryFixesRef = useRef(0);
@@ -1290,6 +1291,7 @@ export default function App() {
     pauseAnchorRef.current = null;
     autoPauseStartTimeRef.current = null;
     runMovementConfirmedRef.current = false;
+    waitingBufferRef.current = [];
     initialAnchorRef.current = null;
     initialSettlingSamplesRef.current = [];
     initialSettlingCompleteRef.current = false;
@@ -1492,95 +1494,123 @@ export default function App() {
                 gpsSpeedRef.current = 0;
                 gpsPaceRef.current = '--:--';
 
-                // Initial Baseline Settling (collect 5 valid fixes for stable centroid)
+                if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+
+                // Initial Baseline Settling (collect 5 valid fixes for initial map view)
                 if (!initialSettlingCompleteRef.current) {
                   initialSettlingSamplesRef.current.push(newPoint);
-                  if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
                   if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
                   if (initialSettlingSamplesRef.current.length < 5) {
-                    console.log('[RUN ENGINE GPS]', {
-                      state: 'waiting',
-                      accuracy: Math.round(wAccuracy),
-                      stepMeters: 0,
-                      distanceMeters: 0,
-                      pathPoints: 0,
-                      speed: 0,
-                      decision: `Settling baseline (${initialSettlingSamplesRef.current.length}/5)`
+                    console.log('[WAITING MOTION WINDOW]', {
+                      fixes: initialSettlingSamplesRef.current.length,
+                      windowSeconds: 0,
+                      totalPathMeters: 0,
+                      netDisplacementMeters: 0,
+                      directionEfficiency: 0,
+                      medianSpeedKmh: 0,
+                      medianAccuracy: Math.round(wAccuracy),
+                      decision: 'WAIT',
+                      reason: `Establishing initial settling baseline (${initialSettlingSamplesRef.current.length}/5)`
                     });
+                    gpsLastPointRef.current = newPoint;
+                    lastPointTimeRef.current = nowTime;
                     return;
                   }
-
-                  // Compute Centroid
-                  const sumLat = initialSettlingSamplesRef.current.reduce((acc, p) => acc + p[0], 0);
-                  const sumLng = initialSettlingSamplesRef.current.reduce((acc, p) => acc + p[1], 0);
-                  const n = initialSettlingSamplesRef.current.length;
-                  stableBaselinePointRef.current = [sumLat / n, sumLng / n];
                   initialSettlingCompleteRef.current = true;
-                  console.log(`[RUN ENGINE STATE] Centroid baseline established: [${(sumLat/n).toFixed(5)}, ${(sumLng/n).toFixed(5)}]`);
                 }
 
-                const stableAnchor = stableBaselinePointRef.current || newPoint;
-                const distFromStableAnchor = getDistanceInMeters(stableAnchor[0], stableAnchor[1], wLat, wLng);
-                const minDisplacementReqMeters = Math.max(4.0, wAccuracy * 0.4);
-
-                // Reversal / Micro-Jitter Reset
-                if (distFromStableAnchor < 2.0 && wAccuracy <= 20) {
-                  initialMovementCandidatesRef.current = 0;
-                  if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
-                  console.log('[RUN ENGINE GPS]', {
-                    state: 'waiting',
-                    accuracy: Math.round(wAccuracy),
-                    stepMeters: parseFloat(stepMeters.toFixed(1)),
-                    distanceMeters: 0,
-                    pathPoints: 0,
-                    speed: 0,
-                    decision: 'Runner at anchor (candidates reset)'
-                  });
-                  return;
-                }
-
-                // Outward Vector Check
-                let isOutwardVector = false;
-                if (gpsLastPointRef.current) {
-                  const prevDist = getDistanceInMeters(stableAnchor[0], stableAnchor[1], gpsLastPointRef.current[0], gpsLastPointRef.current[1]);
-                  isOutwardVector = distFromStableAnchor > prevDist + 0.3;
-                }
-
-                const deviceSpeedKmh = (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
-                  ? watchPos.coords.speed * 3.6
-                  : null;
-
-                // Candidate Evaluation
-                const isCandidate = distFromStableAnchor >= minDisplacementReqMeters && (isOutwardVector || segmentSpeedKmh >= 1.2);
-                if (isCandidate) {
-                  initialMovementCandidatesRef.current += 1;
-                } else {
-                  initialMovementCandidatesRef.current = Math.max(0, initialMovementCandidatesRef.current - 1);
-                }
-
-                // Confidence Score
-                let score = 0;
-                if (distFromStableAnchor >= minDisplacementReqMeters) score += 35;
-                if (isOutwardVector) score += 25;
-                if (segmentSpeedKmh >= 1.2 && segmentSpeedKmh <= 25.0) score += 25;
-                if (deviceSpeedKmh !== null && deviceSpeedKmh >= 0.8) score += 15;
-
-                const shouldStart = initialMovementCandidatesRef.current >= 3 && score >= 70;
-
-                console.log('[RUN ENGINE GPS]', {
-                  state: 'waiting',
-                  accuracy: Math.round(wAccuracy),
-                  stepMeters: parseFloat(stepMeters.toFixed(1)),
-                  distanceMeters: 0,
-                  pathPoints: 0,
-                  speed: parseFloat(segmentSpeedKmh.toFixed(1)),
-                  decision: shouldStart ? 'CONFIRM_START' : `Waiting confidence (${initialMovementCandidatesRef.current}/3, score ${score}/70)`
+                // Append fix to temporary rolling buffer
+                waitingBufferRef.current.push({
+                  lat: wLat,
+                  lng: wLng,
+                  accuracy: wAccuracy,
+                  timestamp: nowTime
                 });
 
-                if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+                if (waitingBufferRef.current.length > 6) {
+                  waitingBufferRef.current.shift();
+                }
 
-                if (!shouldStart) {
+                const buf = waitingBufferRef.current;
+                let shouldArm = false;
+                let armReason = '';
+
+                let windowSeconds = 0;
+                let totalPathMeters = 0;
+                let netDisplacementMeters = 0;
+                let directionEfficiency = 0;
+                let medianSpeedKmh = 0;
+                let medianAccuracy = wAccuracy;
+
+                if (buf.length >= 4) {
+                  windowSeconds = (buf[buf.length - 1].timestamp - buf[0].timestamp) / 1000;
+                  netDisplacementMeters = getDistanceInMeters(buf[0].lat, buf[0].lng, buf[buf.length - 1].lat, buf[buf.length - 1].lng);
+
+                  let pathSum = 0;
+                  const speedArray = [];
+                  const accuracyArray = [];
+
+                  for (let i = 1; i < buf.length; i++) {
+                    const segM = getDistanceInMeters(buf[i - 1].lat, buf[i - 1].lng, buf[i].lat, buf[i].lng);
+                    const dtSec = (buf[i].timestamp - buf[i - 1].timestamp) / 1000;
+                    pathSum += segM;
+                    if (dtSec > 0) {
+                      speedArray.push((segM / dtSec) * 3.6);
+                    }
+                    accuracyArray.push(buf[i].accuracy);
+                  }
+
+                  totalPathMeters = pathSum;
+                  directionEfficiency = totalPathMeters > 0 ? netDisplacementMeters / totalPathMeters : 0;
+
+                  // Median Helper
+                  speedArray.sort((a, b) => a - b);
+                  accuracyArray.sort((a, b) => a - b);
+                  medianSpeedKmh = speedArray.length > 0 ? speedArray[Math.floor(speedArray.length / 2)] : 0;
+                  medianAccuracy = accuracyArray.length > 0 ? accuracyArray[Math.floor(accuracyArray.length / 2)] : wAccuracy;
+
+                  const maxSpeedKmh = speedArray.length > 0 ? speedArray[speedArray.length - 1] : 0;
+
+                  // PRIMARY ARMING RULE (Straight / Coherent Walking):
+                  // >= 4 fixes, window >= 3s, total path >= 4.5m, net displacement >= 3.5m, efficiency >= 0.50, median speed 1.0-15.0 km/h
+                  const primaryPass = (buf.length >= 4) &&
+                                      (windowSeconds >= 3.0) &&
+                                      (totalPathMeters >= 4.5) &&
+                                      (netDisplacementMeters >= 3.5) &&
+                                      (directionEfficiency >= 0.50) &&
+                                      (medianSpeedKmh >= 1.0 && medianSpeedKmh <= 15.0);
+
+                  // FALLBACK ARMING RULE (Curved path / House loops / Turning corners):
+                  // >= 5 fixes, window >= 5s, total path >= 7.0m, median speed >= 1.0 km/h, no teleport speed (>25 km/h)
+                  const fallbackPass = (buf.length >= 5) &&
+                                       (windowSeconds >= 5.0) &&
+                                       (totalPathMeters >= 7.0) &&
+                                       (medianSpeedKmh >= 1.0) &&
+                                       (maxSpeedKmh <= 25.0);
+
+                  if (primaryPass) {
+                    shouldArm = true;
+                    armReason = 'Primary directional walking window confirmed';
+                  } else if (fallbackPass) {
+                    shouldArm = true;
+                    armReason = 'Fallback sustained movement window confirmed';
+                  }
+                }
+
+                console.log('[WAITING MOTION WINDOW]', {
+                  fixes: buf.length,
+                  windowSeconds: parseFloat(windowSeconds.toFixed(1)),
+                  totalPathMeters: parseFloat(totalPathMeters.toFixed(1)),
+                  netDisplacementMeters: parseFloat(netDisplacementMeters.toFixed(1)),
+                  directionEfficiency: parseFloat(directionEfficiency.toFixed(2)),
+                  medianSpeedKmh: parseFloat(medianSpeedKmh.toFixed(1)),
+                  medianAccuracy: Math.round(medianAccuracy),
+                  decision: shouldArm ? 'ARM_RUN' : 'WAIT',
+                  reason: shouldArm ? armReason : 'Building rolling window evidence'
+                });
+
+                if (!shouldArm) {
                   gpsLastPointRef.current = newPoint;
                   lastPointTimeRef.current = nowTime;
                   return; // STAY IN WAITING STATE
@@ -1589,7 +1619,15 @@ export default function App() {
                 // ==============================================================
                 // TRANSITION: WAITING -> TRACKING
                 // ==============================================================
-                console.log('[RUN ENGINE STATE] from:waiting -> to:tracking | reason:Real movement confirmed');
+                console.log('[WAITING -> TRACKING CONFIRMED]', {
+                  windowSeconds: parseFloat(windowSeconds.toFixed(1)),
+                  totalPathMeters: parseFloat(totalPathMeters.toFixed(1)),
+                  netDisplacementMeters: parseFloat(netDisplacementMeters.toFixed(1)),
+                  directionEfficiency: parseFloat(directionEfficiency.toFixed(2)),
+                  medianSpeedKmh: parseFloat(medianSpeedKmh.toFixed(1))
+                });
+                console.log(`[RUN ENGINE STATE] from:waiting -> to:tracking | reason:${armReason}`);
+
                 runEngineStateRef.current = 'tracking';
                 runMovementConfirmedRef.current = true;
                 startTimeRef.current = new Date();
@@ -1603,6 +1641,7 @@ export default function App() {
                 stationaryAnchorPointRef.current = newPoint;
                 lastMovementTimestampRef.current = nowTime;
                 lastPointTimeRef.current = nowTime;
+                waitingBufferRef.current = [];
 
                 updateMapDisplay(newPoint);
                 addLog("GPS: Real movement confirmed. Run tracking active!");
@@ -1616,7 +1655,7 @@ export default function App() {
                   path: [newPoint],
                   isAutoPaused: false
                 }));
-                return; // MUST RETURN IMMEDIATELY! Do NOT process confirming fix as active distance!
+                return; // MUST RETURN IMMEDIATELY! Do NOT reprocess confirming point!
               }
 
               case 'paused': {

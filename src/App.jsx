@@ -1435,30 +1435,30 @@ export default function App() {
         // Start 1-second Clock Timer
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         timerIntervalRef.current = setInterval(() => {
-          const isPausedNow = manualPausedRef.current || runStateRef.current.manualPaused;
-          const durationBefore = runStateRef.current.duration;
-          const totalBefore = totalSessionDurationRef.current;
+          const canonicalState = runEngineStateRef.current;
+          const isPausedNow = manualPausedRef.current || runStateRef.current.manualPaused || canonicalState === 'paused';
 
-          if (isPausedNow) {
-            console.log('[TIMER DIAGNOSTIC]', {
-              manualPaused: true,
-              'duration before': durationBefore,
-              'duration after': durationBefore,
-              'totalSessionDurationRef before': totalBefore,
-              'totalSessionDurationRef after': totalBefore
-            });
+          // Timer MUST NOT increment during acquiring/waiting or when paused
+          if (canonicalState !== 'tracking' || isPausedNow) {
+            if (canonicalState === 'acquiring' || canonicalState === 'waiting') {
+              totalSessionDurationRef.current = 0;
+              activeMovingDurationRef.current = 0;
+              setRunState(prev => ({
+                ...prev,
+                status: canonicalState,
+                duration: 0,
+                distance: 0,
+                speed: 0,
+                pace: '--:--'
+              }));
+            }
             return;
           }
 
           totalSessionDurationRef.current += 1;
+          activeMovingDurationRef.current += 1;
+
           const totalAfter = totalSessionDurationRef.current;
-          const currentStatus = runStateRef.current.status;
-
-          // Only increment activeMovingDuration when in active TRACKING phase
-          if (currentStatus === 'tracking' && !gpsAutoPausedRef.current) {
-            activeMovingDurationRef.current += 1;
-          }
-
           const activeTime = activeMovingDurationRef.current;
           const currentDistance = gpsDistanceRef.current;
           const currentPath = gpsPathRef.current;
@@ -1471,25 +1471,18 @@ export default function App() {
 
           setRunState(prev => ({
             ...prev,
-            duration: (currentStatus === 'waiting' || currentStatus === 'acquiring') ? 0 : totalSessionDurationRef.current,
+            status: 'tracking',
+            duration: totalAfter,
             path: currentPath,
             distance: currentDistance,
             speed: currentSpeed,
             pace: currentPace,
             gpsAccuracy: currentAccuracy,
-            isAutoPaused: currentStatus === 'paused' && !prev.manualPaused,
+            isAutoPaused: false,
             avgSpeed: runStats.avgSpeedKmh,
             avgPace: runStats.formattedPace,
             calories: caloriesEst
           }));
-
-          console.log('[TIMER DIAGNOSTIC]', {
-            manualPaused: false,
-            'duration before': durationBefore,
-            'duration after': totalAfter,
-            'totalSessionDurationRef before': totalBefore,
-            'totalSessionDurationRef after': totalAfter
-          });
         }, 1000);
 
         // Start watchPosition pipeline
@@ -1922,48 +1915,130 @@ export default function App() {
                 runEngineStateRef.current = 'tracking';
                 gpsAutoPausedRef.current = false;
                 resumeCandidatesRef.current = 0;
+                gpsLastPointRef.current = newPoint;
+                lastMovementTimestampRef.current = nowTime;
 
-            // Temporary Active GPS Diagnostics every ~10 fixes
-            if (gpsDiagnosticsRef.current.received % 10 === 0) {
-              console.log('[ACTIVE GPS]', {
-                received: gpsDiagnosticsRef.current.received,
-                distanceAccepted: gpsDiagnosticsRef.current.accepted,
-                visualAccepted: gpsDiagnosticsRef.current.visualAccepted,
-                distanceMeters: Math.round(gpsDistanceRef.current * 1000),
-                pathPoints: gpsPathRef.current.length,
-                accuracy: Math.round(wAccuracy),
-                segmentSpeed: parseFloat(segmentSpeedKmh.toFixed(1)),
-                liveSpeed: gpsSpeedRef.current,
-                secondsSinceMovementEvidence: parseFloat(((nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000).toFixed(1)),
-                autoPaused: gpsAutoPausedRef.current
-              });
-            }
+                setRunState(prev => ({
+                  ...prev,
+                  status: 'tracking',
+                  isAutoPaused: false
+                }));
+                return;
+              }
 
-            // Check distance to starting point for loop closure UI indicator
-            if (gpsPathRef.current.length > 0) {
-              const startPt = gpsPathRef.current[0];
-              const startDistM = getDistanceInMeters(newPoint[0], newPoint[1], startPt[0], startPt[1]);
-              setDistanceToStartMeters(startDistM);
+              case 'tracking': {
+                // ==============================================================
+                // TRACKING STATE — ACTIVE DISTANCE ACCUMULATION & UI SYNC
+                // ==============================================================
+                console.log('[TRACKING FIX ENTER]', {
+                  engineState: runEngineStateRef.current,
+                  uiState: runStateRef.current.status,
+                  accuracy: Math.round(wAccuracy),
+                  lat: parseFloat(wLat.toFixed(5)),
+                  lng: parseFloat(wLng.toFixed(5)),
+                  previousPoint: gpsLastPointRef.current,
+                  stepMeters: parseFloat(stepMeters.toFixed(1))
+                });
 
-              const closureRadius = Math.min(Math.max(12, startAccuracyRef.current || 15, wAccuracy), 22);
-              const isClosed = startDistM <= closureRadius && gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS && gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM;
+                if (runStateRef.current.status !== 'tracking') {
+                  console.warn('[RUN STATE VIOLATION] TRACKING ENGINE / NON-TRACKING UI', {
+                    engineState: runEngineStateRef.current,
+                    uiStatus: runStateRef.current.status
+                  });
+                  setRunState(prev => ({ ...prev, status: 'tracking' }));
+                }
 
-              recordDiagnosticFix({
-                totalPathMeters: stepMeters,
-                netDisplacementMeters: stepMeters,
-                directionEfficiency: 1.0,
-                medianSpeedKmh: gpsSpeedRef.current,
-                medianAccuracy: wAccuracy,
-                primaryPass: true,
-                fallbackPass: false,
-                decision: 'ACCEPTED',
-                reason: 'Tracking segment accepted'
-              });
+                console.log('[RUN STATE SNAPSHOT]', {
+                  engineState: runEngineStateRef.current,
+                  uiStatus: runStateRef.current.status,
+                  movementConfirmed: runMovementConfirmedRef.current,
+                  autoPaused: gpsAutoPausedRef.current,
+                  distance: gpsDistanceRef.current,
+                  timer: totalSessionDurationRef.current
+                });
 
-              console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
-              console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
-            }
-          } // Close case 'tracking'
+                if (runEngineStateRef.current !== 'tracking') {
+                  console.error('[HARD ERROR] Official distance write attempted outside tracking state!', {
+                    engineState: runEngineStateRef.current
+                  });
+                  return;
+                }
+
+                // Minimum step distance filter (0.8m to prevent micro stationary jitter)
+                if (stepMeters >= 0.8 && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+                  const stepKm = stepMeters / 1000;
+                  gpsDistanceRef.current += stepKm;
+                  gpsPathRef.current.push(newPoint);
+                  gpsLastPointRef.current = newPoint;
+                  lastMovementTimestampRef.current = nowTime;
+
+                  gpsSpeedRef.current = segmentSpeedKmh;
+                  const stats = calculateConsistentRunStats(gpsDistanceRef.current, activeMovingDurationRef.current);
+                  gpsPaceRef.current = stats.formattedPace;
+
+                  gpsDiagnosticsRef.current.accepted += 1;
+
+                  if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+                  if (polylineRef.current) polylineRef.current.setLatLngs(gpsPathRef.current);
+                  if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
+
+                  // Update React UI immediately on fix
+                  setRunState(prev => ({
+                    ...prev,
+                    status: 'tracking',
+                    distance: gpsDistanceRef.current,
+                    speed: gpsSpeedRef.current,
+                    pace: gpsPaceRef.current,
+                    path: gpsPathRef.current,
+                    isAutoPaused: false
+                  }));
+                } else if (stepMeters < 0.8) {
+                  gpsDiagnosticsRef.current.rejectedMicro += 1;
+                }
+
+                recordDiagnosticFix({
+                  totalPathMeters: stepMeters,
+                  netDisplacementMeters: stepMeters,
+                  directionEfficiency: 1.0,
+                  medianSpeedKmh: gpsSpeedRef.current,
+                  medianAccuracy: wAccuracy,
+                  primaryPass: true,
+                  fallbackPass: false,
+                  decision: 'ACCEPTED',
+                  reason: 'Tracking segment accepted'
+                });
+
+                // Auto-pause stationary timeout (15s)
+                const secondsSinceMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
+                if (secondsSinceMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC) {
+                  console.log(`[RUN ENGINE STATE] from:tracking -> to:paused | reason:Stationary timeout (${secondsSinceMovement.toFixed(1)}s)`);
+                  runEngineStateRef.current = 'paused';
+                  gpsAutoPausedRef.current = true;
+                  pauseAnchorRef.current = newPoint;
+                  resumeCandidatesRef.current = 0;
+
+                  setRunState(prev => ({
+                    ...prev,
+                    status: 'paused',
+                    isAutoPaused: true
+                  }));
+                }
+
+                // Check distance to starting point for loop closure UI indicator
+                if (gpsPathRef.current.length > 0) {
+                  const startPt = gpsPathRef.current[0];
+                  const startDistM = getDistanceInMeters(newPoint[0], newPoint[1], startPt[0], startPt[1]);
+                  setDistanceToStartMeters(startDistM);
+
+                  const closureRadius = Math.min(Math.max(12, startAccuracyRef.current || 15, wAccuracy), 22);
+                  const isClosed = startDistM <= closureRadius && gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS && gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM;
+
+                  console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
+                  console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
+                }
+
+                break;
+              }
         } // Close switch (currentState)
       }, // Close watchPosition success callback
       (watchErr) => {

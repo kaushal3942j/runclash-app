@@ -1811,120 +1811,99 @@ export default function App() {
               return; // Next valid fix starts accumulating distance cleanly!
             }
 
-            // STAGE 4: Micro Movement Filter (< 0.8m when active tracking)
-            if (stepMeters < RUN_ENGINE_CONFIG.MIN_MOVEMENT_SEGMENT_METERS) {
-              gpsDiagnosticsRef.current.rejectedMicro += 1;
+            // ------------------------------------------------------------------
+            // VISUAL MAP POSITION UPDATE (ALWAYS RESPONSIVE)
+            // ------------------------------------------------------------------
+            if (runnerMarkerRef.current) {
+              runnerMarkerRef.current.setLatLng(newPoint);
+            }
+            if (mapInstanceRef.current && mapAutoFollowRef.current) {
+              mapInstanceRef.current.panTo(newPoint);
+            }
+            gpsDiagnosticsRef.current.visualAccepted = (gpsDiagnosticsRef.current.visualAccepted || 0) + 1;
+
+            // ------------------------------------------------------------------
+            // BROAD MOVEMENT EVIDENCE FOR AUTO-PAUSE & LIVE SPEED
+            // ------------------------------------------------------------------
+            const deviceSpeedKmh = (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
+              ? watchPos.coords.speed * 3.6
+              : null;
+
+            const hasPlausibleMovement = (stepMeters >= 0.8 && segmentSpeedKmh <= 30.0) ||
+                                         (deviceSpeedKmh !== null && deviceSpeedKmh >= 0.8) ||
+                                         (segmentSpeedKmh >= 1.0 && segmentSpeedKmh <= 25.0);
+
+            if (hasPlausibleMovement) {
+              lastMovementTimestampRef.current = nowTime;
+              consecutiveStationaryFixesRef.current = 0;
+            } else {
               consecutiveStationaryFixesRef.current += 1;
-
-              if (!stationaryAnchorPointRef.current) {
-                stationaryAnchorPointRef.current = gpsLastPointRef.current || newPoint;
-              }
-
-              console.log(`[GPS REJECT] reason: micro-jitter | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(2)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
-
-              // Auto-pause ONLY when:
-              // 1. no accepted movement for at least 15 seconds
-              // 2. at least 3 consecutive recent GPS fixes indicate stationary behavior
-              const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
-              if (
-                secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC &&
-                consecutiveStationaryFixesRef.current >= 3 &&
-                !gpsAutoPausedRef.current &&
-                runStateRef.current.status === 'tracking'
-              ) {
-                gpsAutoPausedRef.current = true;
-                gpsDiagnosticsRef.current.autoPauseCount += 1;
-                pauseAnchorRef.current = gpsLastPointRef.current || newPoint;
-                autoPauseStartTimeRef.current = nowTime;
-                resumeCandidatesRef.current = 0;
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
-                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary (${consecutiveStationaryFixesRef.current} fixes).`);
-                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s | stationaryFixes: ${consecutiveStationaryFixesRef.current}`);
-              }
-              logDiagnosticsEvery10();
-              return; // Retain previous gpsLastPointRef so displacement accumulates into next fix
             }
 
-            // STAGE 5: Large GPS Jump Filter (> 30 km/h or > 50m jump)
+            // Check auto-pause timeout based on real movement evidence (15s timeout)
+            const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
+            if (
+              secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC &&
+              consecutiveStationaryFixesRef.current >= 4 &&
+              !gpsAutoPausedRef.current &&
+              runStateRef.current.status === 'tracking'
+            ) {
+              gpsAutoPausedRef.current = true;
+              gpsDiagnosticsRef.current.autoPauseCount += 1;
+              pauseAnchorRef.current = gpsLastPointRef.current || newPoint;
+              autoPauseStartTimeRef.current = nowTime;
+              resumeCandidatesRef.current = 0;
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+              setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
+              addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary.`);
+              console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s | stationaryFixes: ${consecutiveStationaryFixesRef.current}`);
+              logDiagnosticsEvery10();
+              return;
+            }
+
+            // ------------------------------------------------------------------
+            // ACTIVE DISTANCE & PATH ACCUMULATION
+            // ------------------------------------------------------------------
+            // Large jump filter (> 30 km/h or > 50m jump)
             if (segmentSpeedKmh > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_KMH || stepMeters > 50.0) {
               gpsDiagnosticsRef.current.rejectedTeleport += 1;
-              addLog(`GPS: Teleport jump rejected (${stepMeters.toFixed(1)}m at ${segmentSpeedKmh.toFixed(1)} km/h).`);
-              console.log(`[GPS REJECT] reason: teleport-jump | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(1)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
+              console.log(`[ACTIVE GPS REJECT] reason: teleport-jump | stepMeters: ${stepMeters.toFixed(1)}m | accuracy: ${Math.round(wAccuracy)}m | segmentSpeed: ${segmentSpeedKmh.toFixed(1)}km/h`);
               logDiagnosticsEvery10();
-              return; // Do NOT advance gpsLastPointRef
+              return;
             }
 
-            // STAGE 6: DRIFT & ACCURACY-AWARE MOTION VALIDATION (WHEN TRACKING)
+            // Stationary drift rejection (ONLY reject if stationary at anchor: dist < 3.0m AND speed < 1.0 km/h AND step < 0.8m)
             if (!stationaryAnchorPointRef.current) {
               stationaryAnchorPointRef.current = gpsLastPointRef.current || newPoint;
             }
+            const distFromAnchorMeters = getDistanceInMeters(stationaryAnchorPointRef.current[0], stationaryAnchorPointRef.current[1], wLat, wLng);
+            const isStationaryJitter = distFromAnchorMeters < 3.0 && segmentSpeedKmh < 1.0 && stepMeters < 0.8;
 
-            const distFromAnchorMeters = getDistanceInMeters(
-              stationaryAnchorPointRef.current[0],
-              stationaryAnchorPointRef.current[1],
-              wLat,
-              wLng
-            );
-
-            // Dynamic accuracy-aware drift radius (3.5m to 6.0m depending on GPS accuracy)
-            const dynamicDriftRadiusMeters = Math.min(Math.max(3.5, wAccuracy * 0.25), 6.0);
-
-            // ------------------------------------------------------------------
-            // STATIONARY DRIFT FILTER (WHEN TRACKING)
-            // ------------------------------------------------------------------
-            const isStationaryDrift = (distFromAnchorMeters < dynamicDriftRadiusMeters && segmentSpeedKmh < 2.0) ||
-                                      (stepMeters < 1.5 && segmentSpeedKmh < 1.2);
-
-            if (isStationaryDrift) {
-              gpsDiagnosticsRef.current.driftCandidates += 1;
-              gpsDiagnosticsRef.current.driftDiscarded += 1;
-              consecutiveStationaryFixesRef.current += 1;
-
-              console.log(`[STATIONARY DRIFT REJECT] stepMeters: ${stepMeters.toFixed(2)}m | distFromAnchor: ${distFromAnchorMeters.toFixed(2)}m | radius: ${dynamicDriftRadiusMeters.toFixed(1)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h | accuracy: ${Math.round(wAccuracy)}m`);
-
-              // Check auto-pause timeout during stationary drift
-              const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
-              if (
-                secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC &&
-                consecutiveStationaryFixesRef.current >= 3 &&
-                !gpsAutoPausedRef.current &&
-                runStateRef.current.status === 'tracking'
-              ) {
-                gpsAutoPausedRef.current = true;
-                gpsDiagnosticsRef.current.autoPauseCount += 1;
-                pauseAnchorRef.current = gpsLastPointRef.current || newPoint;
-                autoPauseStartTimeRef.current = nowTime;
-                resumeCandidatesRef.current = 0;
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
-                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary (${consecutiveStationaryFixesRef.current} fixes).`);
-                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s | stationaryFixes: ${consecutiveStationaryFixesRef.current}`);
-              }
-
+            if (isStationaryJitter) {
+              gpsDiagnosticsRef.current.rejectedMicro += 1;
+              console.log(`[ACTIVE GPS REJECT] reason: stationary-jitter | stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | segmentSpeed: ${segmentSpeedKmh.toFixed(1)}km/h`);
               logDiagnosticsEvery10();
-              return; // Discard stationary drift fix without adding distance
+              return;
             }
 
-            // ------------------------------------------------------------------
-            // SCENARIO C: ACCEPTED CONFIRMED MOVEMENT
-            // ------------------------------------------------------------------
+            // ACCEPT ACTIVE MOVEMENT DISTANCE!
             gpsDiagnosticsRef.current.accepted += 1;
-            consecutiveStationaryFixesRef.current = 0;
             stationaryAnchorPointRef.current = newPoint; // Update anchor to current moving fix
             lastPointTimeRef.current = nowTime;
-            lastMovementTimestampRef.current = nowTime;
 
-            // NO INTERNAL ROUNDING ON EVERY SAMPLE!
-            // Exact floating-point addition to preserve small-loop distance:
             gpsDistanceRef.current += stepMeters / 1000;
             gpsLastPointRef.current = newPoint;
-            gpsPathRef.current.push(newPoint);
-            updateMapDisplay(newPoint);
 
-            // Rolling Speed Calculation (last 5 accepted segments)
+            // Path sampling rule: Append to gpsPathRef if moved >= 1.5m from last path point (preserves geometry cleanly)
+            const lastPathPt = gpsPathRef.current.length > 0 ? gpsPathRef.current[gpsPathRef.current.length - 1] : null;
+            const distFromLastPathPt = lastPathPt ? getDistanceInMeters(lastPathPt[0], lastPathPt[1], wLat, wLng) : 999;
+            if (!lastPathPt || distFromLastPathPt >= 1.5) {
+              gpsPathRef.current.push(newPoint);
+              updateMapDisplay(newPoint);
+            }
+
+            // Live Speed Calculation (last 5 movement fixes)
             speedHistoryRef.current.push({ distM: stepMeters, dtSec: dtSeconds });
             if (speedHistoryRef.current.length > 5) {
               speedHistoryRef.current.shift();
@@ -1932,20 +1911,19 @@ export default function App() {
 
             const totalSegDistM = speedHistoryRef.current.reduce((acc, s) => acc + s.distM, 0);
             const totalSegTimeS = speedHistoryRef.current.reduce((acc, s) => acc + s.dtSec, 0);
-            const rollingSpeedKmh = totalSegTimeS > 0 ? parseFloat(((totalSegDistM / totalSegTimeS) * 3.6).toFixed(1)) : 0;
+            let rollingSpeedKmh = totalSegTimeS > 0 ? parseFloat(((totalSegDistM / totalSegTimeS) * 3.6).toFixed(1)) : 0;
 
-            if (rollingSpeedKmh >= 1.2) {
+            // Factor in coords.speed if available for faster responsiveness
+            if (deviceSpeedKmh !== null && deviceSpeedKmh >= 0.8) {
+              rollingSpeedKmh = parseFloat(((rollingSpeedKmh * 0.6) + (deviceSpeedKmh * 0.4)).toFixed(1));
+            }
+
+            if (rollingSpeedKmh >= 0.8) {
               gpsSpeedRef.current = rollingSpeedKmh;
               gpsPaceRef.current = calculatePaceFromSpeed(rollingSpeedKmh);
             } else {
               gpsSpeedRef.current = 0;
               gpsPaceRef.current = '--:--';
-            }
-
-            // Resume immediately from auto-pause on accepted movement
-            if (gpsAutoPausedRef.current) {
-              gpsAutoPausedRef.current = false;
-              addLog("GPS: Motion resumed. Tracking active.");
             }
 
             setRunState(prev => ({
@@ -1957,6 +1935,29 @@ export default function App() {
               path: [...gpsPathRef.current],
               isAutoPaused: false
             }));
+
+            // Check distance to starting point for loop closure UI indicator
+            if (gpsPathRef.current.length > 0) {
+              const startPt = gpsPathRef.current[0];
+              const startDistM = getDistanceInMeters(newPoint[0], newPoint[1], startPt[0], startPt[1]);
+              setDistanceToStartMeters(startDistM);
+            }
+
+            // Temporary Active GPS Diagnostics every ~10 fixes
+            if (gpsDiagnosticsRef.current.received % 10 === 0) {
+              console.log('[ACTIVE GPS]', {
+                received: gpsDiagnosticsRef.current.received,
+                distanceAccepted: gpsDiagnosticsRef.current.accepted,
+                visualAccepted: gpsDiagnosticsRef.current.visualAccepted,
+                distanceMeters: Math.round(gpsDistanceRef.current * 1000),
+                pathPoints: gpsPathRef.current.length,
+                accuracy: Math.round(wAccuracy),
+                segmentSpeed: parseFloat(segmentSpeedKmh.toFixed(1)),
+                liveSpeed: gpsSpeedRef.current,
+                secondsSinceMovementEvidence: parseFloat(((nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000).toFixed(1)),
+                autoPaused: gpsAutoPausedRef.current
+              });
+            }
 
             // Check distance to starting point for loop closure UI indicator
             if (gpsPathRef.current.length > 0) {

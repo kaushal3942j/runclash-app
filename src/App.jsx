@@ -687,6 +687,10 @@ export default function App() {
   const runEngineStateRef = useRef('idle'); // 'idle' | 'acquiring' | 'waiting' | 'tracking' | 'paused'
   const waitingBufferRef = useRef([]);
   const waitingBaselineRef = useRef(null);
+  const activeMovementWindowRef = useRef([]);
+  const trackingStartTimeRef = useRef(null);
+  const activeDurationAccumulatedRef = useRef(0);
+  const trackingSegmentStartRef = useRef(null);
   const gpsLastPointRef = useRef(null);
   const lastMovementTimestampRef = useRef(null);
   const consecutiveStationaryFixesRef = useRef(0);
@@ -1340,6 +1344,10 @@ export default function App() {
     runMovementConfirmedRef.current = false;
     waitingBufferRef.current = [];
     waitingBaselineRef.current = null;
+    activeMovementWindowRef.current = [];
+    trackingStartTimeRef.current = null;
+    activeDurationAccumulatedRef.current = 0;
+    trackingSegmentStartRef.current = null;
     initialAnchorRef.current = null;
     initialSettlingSamplesRef.current = [];
     initialSettlingCompleteRef.current = false;
@@ -1441,6 +1449,8 @@ export default function App() {
           // Timer MUST NOT increment during acquiring/waiting or when paused
           if (canonicalState !== 'tracking' || isPausedNow) {
             if (canonicalState === 'acquiring' || canonicalState === 'waiting') {
+              activeDurationAccumulatedRef.current = 0;
+              trackingSegmentStartRef.current = null;
               totalSessionDurationRef.current = 0;
               activeMovingDurationRef.current = 0;
               setRunState(prev => ({
@@ -1451,15 +1461,26 @@ export default function App() {
                 speed: 0,
                 pace: '--:--'
               }));
+            } else if (canonicalState === 'paused') {
+              setRunState(prev => ({
+                ...prev,
+                status: 'paused',
+                duration: activeDurationAccumulatedRef.current,
+                isAutoPaused: true
+              }));
             }
             return;
           }
 
-          totalSessionDurationRef.current += 1;
-          activeMovingDurationRef.current += 1;
+          let currentSegmentSec = 0;
+          if (trackingSegmentStartRef.current) {
+            currentSegmentSec = Math.max(0, Math.floor((Date.now() - trackingSegmentStartRef.current) / 1000));
+          }
+          const activeTime = activeDurationAccumulatedRef.current + currentSegmentSec;
+          totalSessionDurationRef.current = activeTime;
+          activeMovingDurationRef.current = activeTime;
 
-          const totalAfter = totalSessionDurationRef.current;
-          const activeTime = activeMovingDurationRef.current;
+          const totalAfter = activeTime;
           const currentDistance = gpsDistanceRef.current;
           const currentPath = gpsPathRef.current;
           const currentSpeed = gpsSpeedRef.current;
@@ -1817,8 +1838,12 @@ export default function App() {
                 runEngineStateRef.current = 'tracking';
                 runMovementConfirmedRef.current = true;
                 startTimeRef.current = new Date();
+                trackingStartTimeRef.current = Date.now();
+                activeDurationAccumulatedRef.current = 0;
+                trackingSegmentStartRef.current = Date.now();
                 totalSessionDurationRef.current = 0;
                 activeMovingDurationRef.current = 0;
+                activeMovementWindowRef.current = [];
 
                 // ABSOLUTE ZERO START:
                 gpsDistanceRef.current = 0.0;
@@ -1914,6 +1939,7 @@ export default function App() {
                 console.log('[RUN ENGINE STATE] from:paused -> to:tracking | reason:Motion resumed from auto-pause');
                 runEngineStateRef.current = 'tracking';
                 gpsAutoPausedRef.current = false;
+                trackingSegmentStartRef.current = Date.now();
                 resumeCandidatesRef.current = 0;
                 gpsLastPointRef.current = newPoint;
                 lastMovementTimestampRef.current = nowTime;
@@ -1928,7 +1954,7 @@ export default function App() {
 
               case 'tracking': {
                 // ==============================================================
-                // TRACKING STATE — ACTIVE DISTANCE ACCUMULATION & UI SYNC
+                // TRACKING STATE — ACTIVE MOTION CLASSIFICATION & DISTANCE PROTECTION
                 // ==============================================================
                 console.log('[TRACKING FIX ENTER]', {
                   engineState: runEngineStateRef.current,
@@ -1948,15 +1974,6 @@ export default function App() {
                   setRunState(prev => ({ ...prev, status: 'tracking' }));
                 }
 
-                console.log('[RUN STATE SNAPSHOT]', {
-                  engineState: runEngineStateRef.current,
-                  uiStatus: runStateRef.current.status,
-                  movementConfirmed: runMovementConfirmedRef.current,
-                  autoPaused: gpsAutoPausedRef.current,
-                  distance: gpsDistanceRef.current,
-                  timer: totalSessionDurationRef.current
-                });
-
                 if (runEngineStateRef.current !== 'tracking') {
                   console.error('[HARD ERROR] Official distance write attempted outside tracking state!', {
                     engineState: runEngineStateRef.current
@@ -1964,13 +1981,97 @@ export default function App() {
                   return;
                 }
 
-                // Minimum step distance filter (0.8m to prevent micro stationary jitter)
-                if (stepMeters >= 0.8 && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+                // 1. Maintain activeMovementWindowRef (last 8 seconds)
+                activeMovementWindowRef.current.push({
+                  lat: wLat,
+                  lng: wLng,
+                  accuracy: wAccuracy,
+                  stepMeters,
+                  segmentSpeedKmh,
+                  coordsSpeedKmh: (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
+                    ? watchPos.coords.speed * 3.6
+                    : null,
+                  timestamp: nowTime
+                });
+                activeMovementWindowRef.current = activeMovementWindowRef.current.filter(p => nowTime - p.timestamp <= 8000);
+
+                const actBuf = activeMovementWindowRef.current;
+                let windowPathMeters = 0;
+                let windowNetDisplacement = 0;
+                let medianSpeed = segmentSpeedKmh;
+
+                if (actBuf.length >= 2) {
+                  windowNetDisplacement = getDistanceInMeters(actBuf[0].lat, actBuf[0].lng, actBuf[actBuf.length - 1].lat, actBuf[actBuf.length - 1].lng);
+                  let pSum = 0;
+                  const speeds = [];
+                  for (let i = 1; i < actBuf.length; i++) {
+                    const dM = getDistanceInMeters(actBuf[i - 1].lat, actBuf[i - 1].lng, actBuf[i].lat, actBuf[i].lng);
+                    pSum += dM;
+                    const dtS = (actBuf[i].timestamp - actBuf[i - 1].timestamp) / 1000;
+                    if (dtS > 0) speeds.push((dM / dtS) * 3.6);
+                  }
+                  windowPathMeters = pSum;
+                  speeds.sort((a, b) => a - b);
+                  medianSpeed = speeds.length > 0 ? speeds[Math.floor(speeds.length / 2)] : segmentSpeedKmh;
+                }
+
+                const latestCoordsSpeed = (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0)
+                  ? watchPos.coords.speed * 3.6
+                  : null;
+
+                const directionEfficiency = windowPathMeters > 0 ? windowNetDisplacement / windowPathMeters : 0;
+
+                // ==============================================================
+                // MULTI-SIGNAL MOVEMENT EVIDENCE EVALUATION
+                // ==============================================================
+                // 1. Displacement Evidence: net displacement >= 2.5m AND path length >= 3.0m
+                const displacementEvidence = (windowNetDisplacement >= 2.5) && (windowPathMeters >= 3.0);
+
+                // 2. Speed Evidence: median calculated window speed >= 1.0 km/h OR reliable coordsSpeed >= 1.0 km/h
+                const speedEvidence = (medianSpeed >= 1.0) || (latestCoordsSpeed !== null && latestCoordsSpeed >= 1.0);
+
+                // 3. Translation Coherence Evidence: direction efficiency >= 0.40 (progressive translation vs stationary jitter)
+                const translationEvidence = directionEfficiency >= 0.40;
+
+                // MOVING: Requires displacementEvidence AND (speedEvidence OR translationEvidence)
+                // Net displacement >= 2.5m ALONE cannot classify MOVING without speed or translation evidence!
+                const isMovingCredible = displacementEvidence && (speedEvidence || translationEvidence);
+
+                let classification = 'UNCERTAIN';
+
+                if (isMovingCredible) {
+                  classification = 'MOVING';
+                } else if (windowNetDisplacement < 1.2 && (latestCoordsSpeed === null || latestCoordsSpeed < 0.6) && medianSpeed < 0.8 && wAccuracy <= 25) {
+                  classification = 'STATIONARY';
+                }
+
+                // 3. Movement evidence resets stationary timer (prevents false auto-pause while slow walking!)
+                if (classification === 'MOVING') {
+                  lastMovementTimestampRef.current = nowTime;
+                }
+
+                const stationarySeconds = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
+
+                console.log('[ACTIVE MOTION CLASSIFIER]', {
+                  accuracy: Math.round(wAccuracy),
+                  stepMeters: parseFloat(stepMeters.toFixed(1)),
+                  coordsSpeed: latestCoordsSpeed !== null ? parseFloat(latestCoordsSpeed.toFixed(1)) : 'N/A',
+                  calculatedSpeed: parseFloat(segmentSpeedKmh.toFixed(1)),
+                  windowPathMeters: parseFloat(windowPathMeters.toFixed(1)),
+                  windowNetDisplacement: parseFloat(windowNetDisplacement.toFixed(1)),
+                  medianSpeed: parseFloat(medianSpeed.toFixed(1)),
+                  classification,
+                  stationarySeconds: parseFloat(stationarySeconds.toFixed(1)),
+                  distanceAccepted: classification === 'MOVING' && stepMeters >= 0.8
+                });
+
+                // 4. Distance Write Protection:
+                // Official distance is added ONLY when classification === 'MOVING' AND stepMeters >= 0.8m
+                if (classification === 'MOVING' && stepMeters >= 0.8 && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
                   const stepKm = stepMeters / 1000;
                   gpsDistanceRef.current += stepKm;
                   gpsPathRef.current.push(newPoint);
                   gpsLastPointRef.current = newPoint;
-                  lastMovementTimestampRef.current = nowTime;
 
                   gpsSpeedRef.current = segmentSpeedKmh;
                   const stats = calculateConsistentRunStats(gpsDistanceRef.current, activeMovingDurationRef.current);
@@ -1982,7 +2083,6 @@ export default function App() {
                   if (polylineRef.current) polylineRef.current.setLatLngs(gpsPathRef.current);
                   if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
-                  // Update React UI immediately on fix
                   setRunState(prev => ({
                     ...prev,
                     status: 'tracking',
@@ -1992,28 +2092,51 @@ export default function App() {
                     path: gpsPathRef.current,
                     isAutoPaused: false
                   }));
-                } else if (stepMeters < 0.8) {
-                  gpsDiagnosticsRef.current.rejectedMicro += 1;
+                } else {
+                  // STATIONARY OR UNCERTAIN: Protect official distance & speed
+                  if (classification === 'STATIONARY') {
+                    gpsSpeedRef.current = 0;
+                    gpsPaceRef.current = '--:--';
+                  }
+                  // Visual marker can pan slightly to follow live location without affecting official distance
+                  if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+                  if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
+
+                  setRunState(prev => ({
+                    ...prev,
+                    status: 'tracking',
+                    distance: gpsDistanceRef.current,
+                    speed: gpsSpeedRef.current,
+                    pace: gpsPaceRef.current,
+                    isAutoPaused: false
+                  }));
                 }
 
                 recordDiagnosticFix({
                   totalPathMeters: stepMeters,
-                  netDisplacementMeters: stepMeters,
-                  directionEfficiency: 1.0,
-                  medianSpeedKmh: gpsSpeedRef.current,
+                  netDisplacementMeters: windowNetDisplacement,
+                  directionEfficiency: windowPathMeters > 0 ? windowNetDisplacement / windowPathMeters : 1.0,
+                  medianSpeedKmh: medianSpeed,
                   medianAccuracy: wAccuracy,
-                  primaryPass: true,
+                  primaryPass: classification === 'MOVING',
                   fallbackPass: false,
-                  decision: 'ACCEPTED',
-                  reason: 'Tracking segment accepted'
+                  decision: classification === 'MOVING' ? 'ACCEPTED' : (classification === 'STATIONARY' ? 'STATIONARY_FROZEN' : 'UNCERTAIN_HELD'),
+                  reason: `Motion classifier: ${classification}`
                 });
 
-                // Auto-pause stationary timeout (15s)
-                const secondsSinceMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
-                if (secondsSinceMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC) {
-                  console.log(`[RUN ENGINE STATE] from:tracking -> to:paused | reason:Stationary timeout (${secondsSinceMovement.toFixed(1)}s)`);
+                // 5. Auto-Pause Check: Stationary for >= 15 seconds AND confirmed STATIONARY
+                if (classification === 'STATIONARY' && stationarySeconds >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC) {
+                  console.log(`[RUN ENGINE STATE] from:tracking -> to:paused | reason:Stationary timeout (${stationarySeconds.toFixed(1)}s)`);
                   runEngineStateRef.current = 'paused';
                   gpsAutoPausedRef.current = true;
+
+                  if (trackingSegmentStartRef.current) {
+                    activeDurationAccumulatedRef.current += Math.max(0, Math.floor((Date.now() - trackingSegmentStartRef.current) / 1000));
+                    trackingSegmentStartRef.current = null;
+                  }
+                  totalSessionDurationRef.current = activeDurationAccumulatedRef.current;
+                  activeMovingDurationRef.current = activeDurationAccumulatedRef.current;
+
                   pauseAnchorRef.current = newPoint;
                   resumeCandidatesRef.current = 0;
 
@@ -2033,7 +2156,7 @@ export default function App() {
                   const closureRadius = Math.min(Math.max(12, startAccuracyRef.current || 15, wAccuracy), 22);
                   const isClosed = startDistM <= closureRadius && gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS && gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM;
 
-                  console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
+                  console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | classification: ${classification} | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
                   console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
                 }
 
@@ -2230,14 +2353,19 @@ export default function App() {
     clearInterval(timerIntervalRef.current);
     releaseWakeLock();
 
+    let finalActiveDuration = activeDurationAccumulatedRef.current;
+    if (runEngineStateRef.current === 'tracking' && trackingSegmentStartRef.current) {
+      finalActiveDuration += Math.max(0, Math.floor((Date.now() - trackingSegmentStartRef.current) / 1000));
+    }
+
     // If the run has significant distance, show the summary modal instead of resetting immediately!
     if (reason === "Explicit User Request" && runState.distance >= 0.01) {
       const runSummary = {
         userId: currentUser.uid,
         path: runState.path,
         distance: runState.distance,
-        duration: runState.duration,
-        pace: runState.avgPace !== '--:--' ? runState.avgPace : runState.pace,
+        duration: finalActiveDuration,
+        pace: calculateConsistentRunStats(runState.distance, finalActiveDuration).formattedPace,
         speed: runState.avgSpeed || parseFloat((runState.distance > 0 ? (runState.distance * 3600) / runState.duration : 0).toFixed(1)),
         calories: runState.calories || Math.round(runState.distance * 75 * 1.03),
         startTime: startTimeRef.current ? startTimeRef.current.toISOString() : new Date().toISOString(),

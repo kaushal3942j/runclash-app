@@ -686,6 +686,7 @@ export default function App() {
   const gpsAutoPausedRef = useRef(false);
   const runEngineStateRef = useRef('idle'); // 'idle' | 'acquiring' | 'waiting' | 'tracking' | 'paused'
   const waitingBufferRef = useRef([]);
+  const waitingBaselineRef = useRef(null);
   const gpsLastPointRef = useRef(null);
   const lastMovementTimestampRef = useRef(null);
   const consecutiveStationaryFixesRef = useRef(0);
@@ -1338,6 +1339,7 @@ export default function App() {
     autoPauseStartTimeRef.current = null;
     runMovementConfirmedRef.current = false;
     waitingBufferRef.current = [];
+    waitingBaselineRef.current = null;
     initialAnchorRef.current = null;
     initialSettlingSamplesRef.current = [];
     initialSettlingCompleteRef.current = false;
@@ -1407,6 +1409,7 @@ export default function App() {
         gpsLastPointRef.current = [lat, lng];
         stableBaselinePointRef.current = [lat, lng];
         initialAnchorRef.current = [lat, lng];
+        waitingBaselineRef.current = [lat, lng];
         initialSettlingSamplesRef.current = [[lat, lng]];
         initialSettlingCompleteRef.current = false;
         initialWaitingStartTimeRef.current = Date.now();
@@ -1501,13 +1504,12 @@ export default function App() {
           (watchPos) => {
             if (runStateRef.current.manualPaused) return;
 
-            // HARD STATE CONSISTENCY ASSERTION & AUTO-SYNC
+            // HARD STATE CONSISTENCY ASSERTION (LOGGING ONLY)
             if (runStateRef.current.status !== runEngineStateRef.current && runEngineStateRef.current !== 'idle') {
               console.error('[RUN ENGINE STATE MISMATCH DETECTED]', {
                 uiState: runStateRef.current.status,
                 engineState: runEngineStateRef.current
               });
-              runEngineStateRef.current = runStateRef.current.status;
             }
 
             gpsDiagnosticsRef.current.received += 1;
@@ -1585,7 +1587,6 @@ export default function App() {
 
               setLiveDebugInfo(record);
             };
-
             // ------------------------------------------------------------------
             // 2. DISPATCH TO EXACTLY ONE STATE HANDLER (HARD ISOLATION)
             // ------------------------------------------------------------------
@@ -1593,7 +1594,7 @@ export default function App() {
               case 'acquiring':
               case 'waiting': {
                 // ==============================================================
-                // WAITING STATE — ABSOLUTE ZERO GUARANTEE
+                // WAITING STATE — ABSOLUTE ZERO OFFICIAL DISTANCE GUARANTEE
                 // ==============================================================
                 gpsDistanceRef.current = 0.0;
                 gpsPathRef.current = [];
@@ -1601,24 +1602,52 @@ export default function App() {
                 gpsPaceRef.current = '--:--';
 
                 if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
+                if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
 
-                // Initial Baseline Settling (collect 5 valid fixes for initial map view)
+                // Initialize stationary baseline if not yet set
+                if (!waitingBaselineRef.current) {
+                  waitingBaselineRef.current = [wLat, wLng];
+                }
+
+                // Calculate displacement from current frozen/active waiting baseline
+                const distFromBaselineMeters = getDistanceInMeters(
+                  waitingBaselineRef.current[0],
+                  waitingBaselineRef.current[1],
+                  wLat,
+                  wLng
+                );
+
+                // Update baseline ONLY while stationary (< 3.0m displacement and high accuracy)
+                if (distFromBaselineMeters < 3.0 && wAccuracy <= 20) {
+                  // Slightly smooth baseline position with stationary centroid
+                  waitingBaselineRef.current = [
+                    (waitingBaselineRef.current[0] * 0.7) + (wLat * 0.3),
+                    (waitingBaselineRef.current[1] * 0.7) + (wLng * 0.3)
+                  ];
+                }
+
                 if (!initialSettlingCompleteRef.current) {
                   initialSettlingSamplesRef.current.push(newPoint);
-                  if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
-
                   if (initialSettlingSamplesRef.current.length < 5) {
                     recordDiagnosticFix({ decision: 'WAIT_SETTLING', reason: `Establishing baseline (${initialSettlingSamplesRef.current.length}/5)` });
-                    console.log('[WAITING MOTION WINDOW]', {
-                      fixes: initialSettlingSamplesRef.current.length,
-                      windowSeconds: 0,
+                    console.log('[WAITING RAW FIX]', {
+                      timestamp: new Date(nowTime).toLocaleTimeString(),
+                      accuracy: Math.round(wAccuracy),
+                      lat: parseFloat(wLat.toFixed(5)),
+                      lng: parseFloat(wLng.toFixed(5)),
+                      coordsSpeedKmh: (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0) ? parseFloat((watchPos.coords.speed * 3.6).toFixed(1)) : 'N/A',
+                      bufferLength: initialSettlingSamplesRef.current.length,
+                      bufferAgeSeconds: 0,
+                      stepFromPreviousMeters: parseFloat(stepMeters.toFixed(1)),
+                      distanceFromWaitingBaselineMeters: parseFloat(distFromBaselineMeters.toFixed(1)),
                       totalPathMeters: 0,
                       netDisplacementMeters: 0,
                       directionEfficiency: 0,
                       medianSpeedKmh: 0,
-                      medianAccuracy: Math.round(wAccuracy),
-                      decision: 'WAIT',
-                      reason: `Establishing initial settling baseline (${initialSettlingSamplesRef.current.length}/5)`
+                      primaryPass: false,
+                      fallbackPass: false,
+                      sustainedPass: false,
+                      exactFailedConditions: [`Establishing initial settling baseline (${initialSettlingSamplesRef.current.length}/5)`]
                     });
                     gpsLastPointRef.current = newPoint;
                     lastPointTimeRef.current = nowTime;
@@ -1627,7 +1656,7 @@ export default function App() {
                   initialSettlingCompleteRef.current = true;
                 }
 
-                // Append fix to temporary rolling buffer
+                // 1. Append fix to TIME-BASED rolling buffer
                 waitingBufferRef.current.push({
                   lat: wLat,
                   lng: wLng,
@@ -1635,9 +1664,10 @@ export default function App() {
                   timestamp: nowTime
                 });
 
-                if (waitingBufferRef.current.length > 6) {
-                  waitingBufferRef.current.shift();
-                }
+                // 2. Filter buffer to keep fixes from the last 8 seconds (8000ms)
+                waitingBufferRef.current = waitingBufferRef.current.filter(
+                  p => nowTime - p.timestamp <= 8000
+                );
 
                 const buf = waitingBufferRef.current;
                 let shouldArm = false;
@@ -1652,6 +1682,8 @@ export default function App() {
 
                 let primaryPass = false;
                 let fallbackPass = false;
+                let sustainedPass = false;
+                const exactFailedConditions = [];
 
                 if (buf.length >= 4) {
                   windowSeconds = (buf[buf.length - 1].timestamp - buf[0].timestamp) / 1000;
@@ -1674,7 +1706,6 @@ export default function App() {
                   totalPathMeters = pathSum;
                   directionEfficiency = totalPathMeters > 0 ? netDisplacementMeters / totalPathMeters : 0;
 
-                  // Median Helper
                   speedArray.sort((a, b) => a - b);
                   accuracyArray.sort((a, b) => a - b);
                   medianSpeedKmh = speedArray.length > 0 ? speedArray[Math.floor(speedArray.length / 2)] : 0;
@@ -1682,8 +1713,6 @@ export default function App() {
 
                   const maxSpeedKmh = speedArray.length > 0 ? speedArray[speedArray.length - 1] : 0;
 
-                  // PRIMARY ARMING RULE (Straight / Coherent Walking):
-                  // >= 4 fixes, window >= 3s, total path >= 4.5m, net displacement >= 3.5m, efficiency >= 0.50, median speed 1.0-15.0 km/h
                   primaryPass = (buf.length >= 4) &&
                                 (windowSeconds >= 3.0) &&
                                 (totalPathMeters >= 4.5) &&
@@ -1691,13 +1720,28 @@ export default function App() {
                                 (directionEfficiency >= 0.50) &&
                                 (medianSpeedKmh >= 1.0 && medianSpeedKmh <= 15.0);
 
-                  // FALLBACK ARMING RULE (Curved path / House loops / Turning corners):
-                  // >= 5 fixes, window >= 5s, total path >= 7.0m, median speed >= 1.0 km/h, no teleport speed (>25 km/h)
                   fallbackPass = (buf.length >= 5) &&
                                  (windowSeconds >= 5.0) &&
                                  (totalPathMeters >= 7.0) &&
                                  (medianSpeedKmh >= 1.0) &&
                                  (maxSpeedKmh <= 25.0);
+
+                  // SUSTAINED DISPLACEMENT FALLBACK (Displacement from frozen baseline):
+                  // Count fixes in buffer >= 3.5m from stationary baseline
+                  const movingFixesFromBaseline = buf.filter(p => {
+                    const d = getDistanceInMeters(waitingBaselineRef.current[0], waitingBaselineRef.current[1], p.lat, p.lng);
+                    return d >= 3.5;
+                  });
+                  const movingFixesTimeSpan = movingFixesFromBaseline.length >= 2
+                    ? (movingFixesFromBaseline[movingFixesFromBaseline.length - 1].timestamp - movingFixesFromBaseline[0].timestamp) / 1000
+                    : 0;
+
+                  sustainedPass = (wAccuracy <= 30) &&
+                                  (distFromBaselineMeters >= 5.0) &&
+                                  (movingFixesFromBaseline.length >= 3) &&
+                                  (movingFixesTimeSpan >= 3.0) &&
+                                  (medianSpeedKmh >= 1.0) &&
+                                  (maxSpeedKmh <= 25.0);
 
                   if (primaryPass) {
                     shouldArm = true;
@@ -1705,7 +1749,23 @@ export default function App() {
                   } else if (fallbackPass) {
                     shouldArm = true;
                     armReason = 'Fallback sustained movement window confirmed';
+                  } else if (sustainedPass) {
+                    shouldArm = true;
+                    armReason = 'Sustained displacement from waiting baseline confirmed';
                   }
+
+                  if (!shouldArm) {
+                    if (buf.length < 4) exactFailedConditions.push(`buf.length ${buf.length} < 4`);
+                    if (windowSeconds < 3.0) exactFailedConditions.push(`windowSeconds ${windowSeconds.toFixed(1)}s < 3.0s`);
+                    if (totalPathMeters < 4.5) exactFailedConditions.push(`totalPath ${totalPathMeters.toFixed(1)}m < 4.5m`);
+                    if (netDisplacementMeters < 3.5) exactFailedConditions.push(`netDisplacement ${netDisplacementMeters.toFixed(1)}m < 3.5m`);
+                    if (directionEfficiency < 0.50) exactFailedConditions.push(`directionEfficiency ${directionEfficiency.toFixed(2)} < 0.50`);
+                    if (medianSpeedKmh < 1.0 || medianSpeedKmh > 15.0) exactFailedConditions.push(`medianSpeed ${medianSpeedKmh.toFixed(1)}km/h outside 1.0-15.0`);
+                    if (distFromBaselineMeters < 5.0) exactFailedConditions.push(`distFromBaseline ${distFromBaselineMeters.toFixed(1)}m < 5.0m`);
+                    if (movingFixesFromBaseline.length < 3) exactFailedConditions.push(`movingFixesFromBaseline ${movingFixesFromBaseline.length} < 3`);
+                  }
+                } else {
+                  exactFailedConditions.push(`Building rolling window fixes (${buf.length}/4)`);
                 }
 
                 recordDiagnosticFix({
@@ -1717,20 +1777,29 @@ export default function App() {
                   medianAccuracy,
                   primaryPass,
                   fallbackPass,
+                  sustainedPass,
                   decision: shouldArm ? 'ARM_RUN' : 'WAIT',
-                  reason: shouldArm ? armReason : 'Building rolling window evidence'
+                  reason: shouldArm ? armReason : (exactFailedConditions[0] || 'Building rolling window evidence')
                 });
 
-                console.log('[WAITING MOTION WINDOW]', {
-                  fixes: buf.length,
-                  windowSeconds: parseFloat(windowSeconds.toFixed(1)),
+                console.log('[WAITING RAW FIX]', {
+                  timestamp: new Date(nowTime).toLocaleTimeString(),
+                  accuracy: Math.round(wAccuracy),
+                  lat: parseFloat(wLat.toFixed(5)),
+                  lng: parseFloat(wLng.toFixed(5)),
+                  coordsSpeedKmh: (watchPos.coords && watchPos.coords.speed !== null && watchPos.coords.speed !== undefined && !isNaN(watchPos.coords.speed) && watchPos.coords.speed >= 0) ? parseFloat((watchPos.coords.speed * 3.6).toFixed(1)) : 'N/A',
+                  bufferLength: buf.length,
+                  bufferAgeSeconds: parseFloat(windowSeconds.toFixed(1)),
+                  stepFromPreviousMeters: parseFloat(stepMeters.toFixed(1)),
+                  distanceFromWaitingBaselineMeters: parseFloat(distFromBaselineMeters.toFixed(1)),
                   totalPathMeters: parseFloat(totalPathMeters.toFixed(1)),
                   netDisplacementMeters: parseFloat(netDisplacementMeters.toFixed(1)),
                   directionEfficiency: parseFloat(directionEfficiency.toFixed(2)),
                   medianSpeedKmh: parseFloat(medianSpeedKmh.toFixed(1)),
-                  medianAccuracy: Math.round(medianAccuracy),
-                  decision: shouldArm ? 'ARM_RUN' : 'WAIT',
-                  reason: shouldArm ? armReason : 'Building rolling window evidence'
+                  primaryPass,
+                  fallbackPass,
+                  sustainedPass,
+                  exactFailedConditions: shouldArm ? [] : exactFailedConditions
                 });
 
                 if (!shouldArm) {
@@ -1747,7 +1816,8 @@ export default function App() {
                   totalPathMeters: parseFloat(totalPathMeters.toFixed(1)),
                   netDisplacementMeters: parseFloat(netDisplacementMeters.toFixed(1)),
                   directionEfficiency: parseFloat(directionEfficiency.toFixed(2)),
-                  medianSpeedKmh: parseFloat(medianSpeedKmh.toFixed(1))
+                  medianSpeedKmh: parseFloat(medianSpeedKmh.toFixed(1)),
+                  distFromBaselineMeters: parseFloat(distFromBaselineMeters.toFixed(1))
                 });
                 console.log(`[RUN ENGINE STATE] from:waiting -> to:tracking | reason:${armReason}`);
 

@@ -644,6 +644,11 @@ export default function App() {
   const stationaryAnchorPointRef = useRef(null);
   const pauseAnchorRef = useRef(null);
   const autoPauseStartTimeRef = useRef(null);
+  const runMovementConfirmedRef = useRef(false);
+  const initialAnchorRef = useRef(null);
+  const initialMovementCandidatesRef = useRef(0);
+  const pendingInitialPointsRef = useRef([]);
+  const initialWaitingStartTimeRef = useRef(null);
   const driftCandidateDistRef = useRef(0);
   const resumeCandidatesRef = useRef(0);
   const startAccuracyRef = useRef(null);
@@ -1281,6 +1286,11 @@ export default function App() {
     stationaryAnchorPointRef.current = null;
     pauseAnchorRef.current = null;
     autoPauseStartTimeRef.current = null;
+    runMovementConfirmedRef.current = false;
+    initialAnchorRef.current = null;
+    initialMovementCandidatesRef.current = 0;
+    pendingInitialPointsRef.current = [];
+    initialWaitingStartTimeRef.current = null;
     driftCandidateDistRef.current = 0;
     resumeCandidatesRef.current = 0;
     startAccuracyRef.current = null;
@@ -1339,9 +1349,14 @@ export default function App() {
           runnerMarkerRef.current = L.marker([lat, lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
         }
 
-        // Set baseline position (ADDS EXACTLY 0 METERS & 0 PATH POINTS)
+        // Set baseline initial anchor (0 distance, 0 path points)
         gpsLastPointRef.current = [lat, lng];
         stableBaselinePointRef.current = [lat, lng];
+        initialAnchorRef.current = [lat, lng];
+        initialWaitingStartTimeRef.current = Date.now();
+        initialMovementCandidatesRef.current = 0;
+        pendingInitialPointsRef.current = [];
+        runMovementConfirmedRef.current = false;
         gpsAccuracyRef.current = accuracy;
         lastPointTimeRef.current = Date.now();
         settlingStartTimeRef.current = Date.now();
@@ -1395,7 +1410,7 @@ export default function App() {
 
           setRunState(prev => ({
             ...prev,
-            duration: totalSessionDurationRef.current,
+            duration: (currentStatus === 'waiting' || currentStatus === 'acquiring') ? 0 : totalSessionDurationRef.current,
             path: currentPath,
             distance: currentDistance,
             speed: currentSpeed,
@@ -1501,8 +1516,161 @@ export default function App() {
             const segmentSpeedKmh = (stepMeters / dtSeconds) * 3.6;
 
             // ------------------------------------------------------------------
-            // SCENARIO A: RUNNER IS CURRENTLY AUTO-PAUSED (RESUME ENGINE)
+            // INITIAL MOVEMENT CONFIRMATION LAYER (WAITING -> TRACKING)
             // ------------------------------------------------------------------
+            if (!runMovementConfirmedRef.current) {
+              if (!initialAnchorRef.current) {
+                initialAnchorRef.current = gpsLastPointRef.current || newPoint;
+              }
+
+              // A. Hard Accuracy Filter (>30m ignored, does NOT arm or reset)
+              if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+                console.log('[INITIAL MOTION CHECK]', {
+                  distanceFromInitialAnchor: 0,
+                  accuracy: Math.round(wAccuracy),
+                  candidateCount: initialMovementCandidatesRef.current,
+                  pendingPoints: pendingInitialPointsRef.current.length,
+                  reason: 'poor accuracy >30m ignored',
+                  willStart: false
+                });
+                logDiagnosticsEvery10();
+                return; // Stay in WAITING FOR MOVEMENT
+              }
+
+              const distFromInitialAnchor = getDistanceInMeters(
+                initialAnchorRef.current[0],
+                initialAnchorRef.current[1],
+                wLat,
+                wLng
+              );
+
+              // B. Micro-Jitter / Stationary Drift while waiting (<0.8m step OR <1.0m from anchor)
+              if (stepMeters < 0.8 || distFromInitialAnchor < 1.0) {
+                console.log('[INITIAL MOTION CHECK]', {
+                  distanceFromInitialAnchor: parseFloat(distFromInitialAnchor.toFixed(1)),
+                  accuracy: Math.round(wAccuracy),
+                  candidateCount: initialMovementCandidatesRef.current,
+                  pendingPoints: pendingInitialPointsRef.current.length,
+                  reason: 'micro-jitter ignored',
+                  willStart: false
+                });
+                logDiagnosticsEvery10();
+                return; // Stay in WAITING FOR MOVEMENT
+              }
+
+              // C. Reset candidates if runner returns close to initial anchor (<1.5m with good accuracy)
+              if (distFromInitialAnchor < 1.5 && wAccuracy <= 20) {
+                initialMovementCandidatesRef.current = 0;
+                pendingInitialPointsRef.current = [];
+                console.log('[INITIAL MOTION CHECK]', {
+                  distanceFromInitialAnchor: parseFloat(distFromInitialAnchor.toFixed(1)),
+                  accuracy: Math.round(wAccuracy),
+                  candidateCount: 0,
+                  pendingPoints: 0,
+                  reason: 'runner at initial anchor',
+                  willStart: false
+                });
+                logDiagnosticsEvery10();
+                return; // Stay in WAITING FOR MOVEMENT
+              }
+
+              // D. Candidate Point Buffer
+              const isCandidate = distFromInitialAnchor >= 2.5 || stepMeters >= 1.5;
+              if (isCandidate) {
+                initialMovementCandidatesRef.current += 1;
+                pendingInitialPointsRef.current.push(newPoint);
+              }
+
+              // E. Evaluate Initial Movement Confirmation Rule:
+              // Condition A: distFromInitialAnchor >= 3.0m across at least 2 valid fixes (initialMovementCandidatesRef >= 2) AND wAccuracy <= 25m
+              // Condition B: distFromInitialAnchor >= 5.0m in 1 valid fix with wAccuracy <= 20m and plausible speed (< 30km/h)
+              const conditionAPassed = distFromInitialAnchor >= 3.0 && initialMovementCandidatesRef.current >= 2 && wAccuracy <= 25;
+              const conditionBPassed = distFromInitialAnchor >= 5.0 && wAccuracy <= 20 && segmentSpeedKmh < 30.0;
+              const shouldStart = conditionAPassed || conditionBPassed;
+
+              if (!shouldStart) {
+                console.log('[INITIAL MOTION CHECK]', {
+                  distanceFromInitialAnchor: parseFloat(distFromInitialAnchor.toFixed(1)),
+                  accuracy: Math.round(wAccuracy),
+                  candidateCount: initialMovementCandidatesRef.current,
+                  pendingPoints: pendingInitialPointsRef.current.length,
+                  reason: 'building initial candidate',
+                  willStart: false
+                });
+                logDiagnosticsEvery10();
+                return; // Stay in WAITING FOR MOVEMENT
+              }
+
+              // ------------------------------------------------------------------
+              // CONFIRMED REAL RUN START!
+              // ------------------------------------------------------------------
+              runMovementConfirmedRef.current = true;
+              startTimeRef.current = new Date(); // Set official active run start time!
+              totalSessionDurationRef.current = 0;
+              activeMovingDurationRef.current = 0;
+
+              // Recover validated initial movement distance & establish clean territory path
+              gpsPathRef.current = [initialAnchorRef.current];
+              let recoveredMeters = 0;
+              let prevPt = initialAnchorRef.current;
+
+              for (const candidatePt of pendingInitialPointsRef.current) {
+                const segM = getDistanceInMeters(prevPt[0], prevPt[1], candidatePt[0], candidatePt[1]);
+                if (segM >= 0.8 && segM <= 15.0) {
+                  gpsDistanceRef.current += segM / 1000;
+                  gpsPathRef.current.push(candidatePt);
+                  recoveredMeters += segM;
+                  prevPt = candidatePt;
+                }
+              }
+
+              // Also add the current triggering fix
+              const lastSegM = getDistanceInMeters(prevPt[0], prevPt[1], newPoint[0], newPoint[1]);
+              if (lastSegM >= 0.8 && lastSegM <= 15.0) {
+                gpsDistanceRef.current += lastSegM / 1000;
+                gpsPathRef.current.push(newPoint);
+                recoveredMeters += lastSegM;
+              }
+
+              gpsLastPointRef.current = newPoint;
+              stationaryAnchorPointRef.current = newPoint;
+              lastMovementTimestampRef.current = nowTime;
+              lastPointTimeRef.current = nowTime;
+
+              const secondsWaiting = initialWaitingStartTimeRef.current
+                ? parseFloat(((nowTime - initialWaitingStartTimeRef.current) / 1000).toFixed(1))
+                : 0;
+
+              console.log('[INITIAL MOTION CHECK]', {
+                distanceFromInitialAnchor: parseFloat(distFromInitialAnchor.toFixed(1)),
+                accuracy: Math.round(wAccuracy),
+                candidateCount: initialMovementCandidatesRef.current,
+                pendingPoints: pendingInitialPointsRef.current.length,
+                reason: 'start confirmed',
+                willStart: true
+              });
+
+              console.log('[INITIAL MOTION CONFIRMED]', {
+                distanceFromInitialAnchor: parseFloat(distFromInitialAnchor.toFixed(1)),
+                candidateCount: initialMovementCandidatesRef.current,
+                recoveredDistance: Math.round(recoveredMeters),
+                secondsWaiting: secondsWaiting
+              });
+
+              updateMapDisplay(newPoint);
+              addLog("GPS: Real movement confirmed. Run tracking active!");
+
+              setRunState(prev => ({
+                ...prev,
+                status: 'tracking',
+                distance: gpsDistanceRef.current,
+                path: [...gpsPathRef.current],
+                isAutoPaused: false
+              }));
+
+              logDiagnosticsEvery10();
+              return;
+            }
             if (gpsAutoPausedRef.current) {
               if (!pauseAnchorRef.current) {
                 pauseAnchorRef.current = gpsLastPointRef.current || newPoint;

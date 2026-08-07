@@ -1364,6 +1364,7 @@ export default function App() {
     accumulatedDistanceRef.current = 0;
     accumulatedDurationRef.current = 0;
 
+    runEngineStateRef.current = 'acquiring';
     setIsSearchingGps(true);
     addLog("GPS: Calibrating tracking device... Searching for GPS satellites...");
 
@@ -1419,7 +1420,9 @@ export default function App() {
 
         setIsSearchingGps(false);
 
-        // Transition from ACQUIRING -> WAITING FOR MOVEMENT
+        // Synchronize Canonical Run Engine Lifecycle: ACQUIRING -> WAITING FOR MOVEMENT
+        runEngineStateRef.current = 'waiting';
+        console.log(`[RUN ENGINE LIFECYCLE] State initialized: waiting`);
         setRunState(prev => ({
           ...prev,
           status: 'waiting',
@@ -1487,10 +1490,25 @@ export default function App() {
         }, 1000);
 
         // Start watchPosition pipeline
-        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+        if (watchIdRef.current) {
+          console.log(`[GPS WATCH] cleared { watchId: ${watchIdRef.current}, reason: 'Re-registering watchPosition' }`);
+          navigator.geolocation.clearWatch(watchIdRef.current);
+          watchIdRef.current = null;
+        }
+
+        console.log(`[GPS WATCH] registering watchPosition...`);
         const watchId = navigator.geolocation.watchPosition(
           (watchPos) => {
             if (runStateRef.current.manualPaused) return;
+
+            // HARD STATE CONSISTENCY ASSERTION & AUTO-SYNC
+            if (runStateRef.current.status !== runEngineStateRef.current && runEngineStateRef.current !== 'idle') {
+              console.error('[RUN ENGINE STATE MISMATCH DETECTED]', {
+                uiState: runStateRef.current.status,
+                engineState: runEngineStateRef.current
+              });
+              runEngineStateRef.current = runStateRef.current.status;
+            }
 
             gpsDiagnosticsRef.current.received += 1;
             const wLat = watchPos.coords.latitude;
@@ -1499,6 +1517,8 @@ export default function App() {
             gpsAccuracyRef.current = wAccuracy;
             const newPoint = [wLat, wLng];
             const nowTime = Date.now();
+
+            console.log(`[GPS WATCH] fix received { state: ${runEngineStateRef.current}, acc: ${Math.round(wAccuracy)}m, lat: ${wLat.toFixed(5)}, lng: ${wLng.toFixed(5)} }`);
 
             processTerritoryTransition(newPoint);
 
@@ -1533,7 +1553,7 @@ export default function App() {
 
               const record = {
                 timestamp: new Date().toLocaleTimeString(),
-                engineState: currentState,
+                engineState: runEngineStateRef.current,
                 accuracy: Math.round(wAccuracy),
                 coordsSpeedKmh,
                 lat: parseFloat(wLat.toFixed(6)),
@@ -1858,6 +1878,18 @@ export default function App() {
               const closureRadius = Math.min(Math.max(12, startAccuracyRef.current || 15, wAccuracy), 22);
               const isClosed = startDistM <= closureRadius && gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS && gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM;
 
+              recordDiagnosticFix({
+                totalPathMeters: stepMeters,
+                netDisplacementMeters: stepMeters,
+                directionEfficiency: 1.0,
+                medianSpeedKmh: gpsSpeedRef.current,
+                medianAccuracy: wAccuracy,
+                primaryPass: true,
+                fallbackPass: false,
+                decision: 'ACCEPTED',
+                reason: 'Tracking segment accepted'
+              });
+
               console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
               console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
             }
@@ -1872,12 +1904,15 @@ export default function App() {
         );
 
         watchIdRef.current = watchId;
+        console.log(`[GPS WATCH] registered successfully { watchId: ${watchId} }`);
       },
       (error) => {
         setIsSearchingGps(false);
+        runEngineStateRef.current = 'idle';
+        console.log(`[RUN ENGINE LIFECYCLE] Acquisition failed. State reset to idle`);
         setRunState(prev => ({ ...prev, status: 'idle' }));
         console.error("GPS Initial Error", error);
-        setToastMessage(`GPS Signal Acquisition Failed: ${error.message}`);
+        setToastMessage(`GPS Signal Acquisition Failed: ${error.message} (Grant location permissions and tap Start Run)`);
         setTimeout(() => setToastMessage(null), 5000);
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -2100,6 +2135,8 @@ export default function App() {
     activeMovingDurationRef.current = 0;
     totalSessionDurationRef.current = 0;
 
+    runEngineStateRef.current = 'idle';
+    console.log(`[RUN ENGINE LIFECYCLE] State reset: idle`);
     setRunState({
       status: 'idle',
       path: [],

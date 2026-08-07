@@ -87,32 +87,32 @@ const SIMULATION_ROUTES = {
 // ============================================================================
 const RUN_ENGINE_CONFIG = {
   // Geolocation & Signal Quality Thresholds
-  GPS_ACCURACY_THRESHOLD: 25.0,        // meters (discard points with poor accuracy > 25m)
-  MIN_TIME_COMPUTATION_WINDOW: 1.8,    // seconds (buffer coordinate updates to compute stable speed)
-  JITTER_DISTANCE_FILTER: 0.002,       // km (2 meters distance jump filter threshold)
+  GPS_ACCURACY_THRESHOLD: 30.0,        // meters (accept points with accuracy <= 30m)
+  MIN_TIME_COMPUTATION_WINDOW: 1.0,    // seconds
+  MIN_MOVEMENT_SEGMENT_METERS: 0.8,    // meters (minimum displacement to accept segment)
 
   // Speed & Motion Processing Thresholds
-  STATIONARY_SPEED_THRESHOLD: 0.65,    // m/s (2.34 km/h) below which runner is considered stationary
-  RESUME_SPEED_THRESHOLD: 0.80,        // m/s (2.88 km/h) required to confirm walking movement
-  STATIONARY_DISPLACEMENT_MIN: 1.0,    // meters (minimum displacement in window)
-  AUTO_PAUSE_DELAY: 4.0,               // seconds stationary before auto-pause triggers
-  SETTLING_DURATION_SEC: 4.0,          // seconds after start run to filter initial acquisition drift
+  STATIONARY_SPEED_THRESHOLD: 0.40,    // m/s (1.44 km/h)
+  RESUME_SPEED_THRESHOLD: 0.50,        // m/s (1.80 km/h)
+  AUTO_PAUSE_STATIONARY_TIMEOUT_SEC: 10.0, // seconds stationary before auto-pause triggers
+  SETTLING_DURATION_SEC: 3.0,          // seconds after start run to filter initial acquisition drift
   SETTLING_MIN_SAMPLES: 3,             // minimum samples required before leaving settling phase
-  REQUIRED_MOVING_WINDOWS: 2,          // consecutive moving windows required to enter TRACKING
-  MIN_VALID_SPEED_KMH: 2.50,           // km/h (minimum valid running/walking speed for accumulation)
-  EMA_SMOOTHING_ALPHA: 0.35,           // Exponential Moving Average filter smoothing factor
+  REQUIRED_MOVING_WINDOWS: 1,          // consecutive moving segments required to enter TRACKING
+  MIN_VALID_SPEED_KMH: 1.20,           // km/h (minimum valid speed for display)
 
   // Auto-Pause & Inactivity Timers
-  INACTIVITY_PAUSE_TIMEOUT: 8.0,       // seconds without GPS update before auto-pausing
+  INACTIVITY_PAUSE_TIMEOUT: 10.0,      // seconds without GPS update before auto-pausing
 
   // Loop Detection & Territory Conquest Limits
-  MIN_LOOP_POINTS: 5,                  // minimum coordinates required before self-intersection check
-  MIN_LOOP_DISTANCE_KM: 0,             // minimum cumulative distance (km) required for valid loop (0 = no distance cutoff)
-  MIN_LOOP_AREA_SQM: 200,              // minimum enclosed area (m²) required for sector capture
-  LOOP_CLOSURE_DISTANCE_METERS: 25.0,  // maximum distance (m) between end and start point for loop closure
+  MIN_LOOP_POINTS: 8,                  // minimum coordinates required before loop validation
+  MIN_LOOP_DISTANCE_KM: 0.04,          // minimum cumulative distance (40m) required for valid loop
+  MIN_LOOP_DURATION_SEC: 25,           // minimum active duration seconds required for loop
+  MIN_LOOP_AREA_SQM: 80,               // minimum enclosed area (80 m²) required for sector capture
+  LOOP_CLOSURE_DISTANCE_METERS: 18.0,  // baseline loop closure distance threshold
 
   // Anti-Cheat Engine Thresholds
-  MAX_INSTANT_SPEED_MS: 12.0,          // m/s (43.2 km/h) instant teleport jump cutoff
+  MAX_INSTANT_SPEED_KMH: 30.0,         // km/h (8.33 m/s) instant jump cutoff
+  MAX_INSTANT_SPEED_MS: 8.33,          // m/s (30 km/h)
   SUSTAINED_HIGH_SPEED_LIMIT: 8.0,     // m/s (28.8 km/h) vehicle detection limit
   SUSTAINED_HIGH_SPEED_MAX_DUR: 5,     // max seconds allowed at vehicle speed before auto-invalidation
   VEHICLE_SPEED_LIMIT: 7.0,            // m/s (25.2 km/h) maximum overall average speed allowed
@@ -621,6 +621,8 @@ export default function App() {
   const gpsAccuracyRef = useRef(null);
   const gpsAutoPausedRef = useRef(false);
   const gpsLastPointRef = useRef(null);
+  const lastMovementTimestampRef = useRef(null);
+  const startAccuracyRef = useRef(null);
   const smoothedSpeedRef = useRef(0);
   const speedHistoryRef = useRef([]);
   const accumulatedDistanceRef = useRef(0);
@@ -1238,6 +1240,9 @@ export default function App() {
     gpsAccuracyRef.current = null;
     gpsAutoPausedRef.current = false;
     gpsLastPointRef.current = null;
+    lastMovementTimestampRef.current = null;
+    startAccuracyRef.current = null;
+    speedHistoryRef.current = [];
     smoothedSpeedRef.current = 0;
     accumulatedDistanceRef.current = 0;
     accumulatedDurationRef.current = 0;
@@ -1366,221 +1371,130 @@ export default function App() {
 
             const wLat = watchPos.coords.latitude;
             const wLng = watchPos.coords.longitude;
-            const wAccuracy = watchPos.coords.accuracy;
+            const wAccuracy = watchPos.coords.accuracy || 15;
             gpsAccuracyRef.current = wAccuracy;
 
-            // STAGE 1: Accuracy Filter
             if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
-              addLog(`GPS: Poor signal accuracy (${Math.round(wAccuracy)}m > 25m). Discarding point.`);
-              console.log(`[RUN ENGINE] Phase: ${wStatus.toUpperCase()} | Discarded poor accuracy: ${Math.round(wAccuracy)}m`);
-              return;
+              console.log(`[GPS REJECT] reason: poor-accuracy | accuracy: ${Math.round(wAccuracy)}m | stepMeters: 0 | speed: 0`);
+              return; // Do NOT update gpsLastPointRef
             }
 
-            // STAGE 2: Territory Boundary Check
             const newPoint = [wLat, wLng];
             processTerritoryTransition(newPoint);
 
-            // STAGE 3: Settling Phase (First 4s or < 3 samples)
+            // STAGE 2: Settling Phase (First 3s or < 3 samples)
             const elapsedSettlingSec = (Date.now() - settlingStartTimeRef.current) / 1000;
             settlingSamplesCountRef.current += 1;
 
             if (elapsedSettlingSec < RUN_ENGINE_CONFIG.SETTLING_DURATION_SEC || settlingSamplesCountRef.current < RUN_ENGINE_CONFIG.SETTLING_MIN_SAMPLES) {
               gpsLastPointRef.current = newPoint;
+              startAccuracyRef.current = wAccuracy;
               if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(newPoint);
               if (mapInstanceRef.current && mapAutoFollowRef.current) mapInstanceRef.current.panTo(newPoint);
               gpsSpeedRef.current = 0;
               gpsPaceRef.current = '--:--';
-              console.log(`[RUN ENGINE] Phase: SETTLING (${elapsedSettlingSec.toFixed(1)}s, ${settlingSamplesCountRef.current} samples) | Position updated | Speed: 0 | Dist: 0.000km`);
               return;
             }
 
-            // STAGE 4: Time & Distance Window Accumulation
+            // STAGE 3: Distance & Segment Speed Calculation
             const nowTime = Date.now();
             if (lastPointTimeRef.current === null || !gpsLastPointRef.current) {
               lastPointTimeRef.current = nowTime;
+              lastMovementTimestampRef.current = nowTime;
               gpsLastPointRef.current = newPoint;
+              startAccuracyRef.current = wAccuracy;
+              if (gpsPathRef.current.length === 0) {
+                gpsPathRef.current.push(newPoint);
+              }
               return;
             }
 
             const dtSeconds = (nowTime - lastPointTimeRef.current) / 1000;
             if (dtSeconds <= 0) return;
 
-            // Reject inaccurate raw GPS samples early (PART 3)
-            if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
-              console.log(`[GPS REJECTED] Bad accuracy sample discarded: ${Math.round(wAccuracy)}m (threshold: ${RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD}m).`);
-              lastPointTimeRef.current = nowTime;
-              return;
-            }
-
             const stepMeters = getDistanceInMeters(gpsLastPointRef.current[0], gpsLastPointRef.current[1], wLat, wLng);
-            accumulatedDistanceRef.current += stepMeters;
-            accumulatedDurationRef.current += dtSeconds;
+            const segmentSpeedKmh = (stepMeters / dtSeconds) * 3.6;
+
+            // STAGE 4: Micro Movement Filter (< 0.8m)
+            if (stepMeters < RUN_ENGINE_CONFIG.MIN_MOVEMENT_SEGMENT_METERS) {
+              console.log(`[GPS REJECT] reason: micro-jitter | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(2)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
+
+              // Stationary Timeout Check (Auto-pause after 10.0 seconds without movement)
+              const secondsWithoutMovement = (nowTime - (lastMovementTimestampRef.current || nowTime)) / 1000;
+              if (secondsWithoutMovement >= RUN_ENGINE_CONFIG.AUTO_PAUSE_STATIONARY_TIMEOUT_SEC && !gpsAutoPausedRef.current && runStateRef.current.status === 'tracking') {
+                gpsAutoPausedRef.current = true;
+                gpsSpeedRef.current = 0;
+                gpsPaceRef.current = '--:--';
+                setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
+                addLog(`GPS: Auto-paused after ${Math.round(secondsWithoutMovement)}s stationary.`);
+                console.log(`[AUTO PAUSE] secondsWithoutMovement: ${secondsWithoutMovement.toFixed(1)}s`);
+              }
+              return; // Retain previous gpsLastPointRef so displacement accumulates into next fix
+            }
+
+            // STAGE 5: Large GPS Jump Filter (> 30 km/h or > 50m jump)
+            if (segmentSpeedKmh > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_KMH || stepMeters > 50.0) {
+              addLog(`GPS: Teleport jump rejected (${stepMeters.toFixed(1)}m at ${segmentSpeedKmh.toFixed(1)} km/h).`);
+              console.log(`[GPS REJECT] reason: teleport-jump | accuracy: ${Math.round(wAccuracy)}m | stepMeters: ${stepMeters.toFixed(1)}m | speed: ${segmentSpeedKmh.toFixed(1)}km/h`);
+              return; // Do NOT advance gpsLastPointRef
+            }
+
+            // STAGE 6: ACCEPTED MOVEMENT
             lastPointTimeRef.current = nowTime;
+            lastMovementTimestampRef.current = nowTime;
 
-            if (accumulatedDurationRef.current < RUN_ENGINE_CONFIG.MIN_TIME_COMPUTATION_WINDOW) {
-              return;
-            }
-
-            // STAGE 5: Shared Window Motion Evaluation
-            const windowDistMeters = accumulatedDistanceRef.current;
-            const windowTimeSec = accumulatedDurationRef.current;
-            const rawSpeedMS = windowDistMeters / windowTimeSec;
-
-            // Reset window accumulators
-            accumulatedDistanceRef.current = 0;
-            accumulatedDurationRef.current = 0;
-
-            // Anti-cheat Teleport Cutoff (> 12 m/s / 43.2 km/h) (PART 3 & 4)
-            if (rawSpeedMS > RUN_ENGINE_CONFIG.MAX_INSTANT_SPEED_MS) {
-              addLog(`GPS: Extreme speed jump detected (${(rawSpeedMS * 3.6).toFixed(1)} km/h). Discarding window.`);
-              console.log(`[GPS REJECTED] Teleport cutoff rejected speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h, dist: ${windowDistMeters.toFixed(1)}m. Retaining last valid coordinate.`);
-              return; // Do NOT update gpsLastPointRef.current to bad coordinate
-            }
-
-            // Valid window accepted — update last valid point reference
+            // NO INTERNAL ROUNDING ON EVERY SAMPLE!
+            // Exact floating-point addition to preserve small-loop distance:
+            gpsDistanceRef.current += stepMeters / 1000;
             gpsLastPointRef.current = newPoint;
+            gpsPathRef.current.push(newPoint);
+            updateMapDisplay(newPoint);
 
-            // Candidate Motion Check
-            const isCandidateMoving = (rawSpeedMS >= RUN_ENGINE_CONFIG.RESUME_SPEED_THRESHOLD)
-              && (windowDistMeters >= RUN_ENGINE_CONFIG.STATIONARY_DISPLACEMENT_MIN)
-              && (wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD);
+            // Rolling Speed Calculation (last 5 accepted segments)
+            speedHistoryRef.current.push({ distM: stepMeters, dtSec: dtSeconds });
+            if (speedHistoryRef.current.length > 5) {
+              speedHistoryRef.current.shift();
+            }
 
-            const currStatus = runStateRef.current.status;
+            const totalSegDistM = speedHistoryRef.current.reduce((acc, s) => acc + s.distM, 0);
+            const totalSegTimeS = speedHistoryRef.current.reduce((acc, s) => acc + s.dtSec, 0);
+            const rollingSpeedKmh = totalSegTimeS > 0 ? parseFloat(((totalSegDistM / totalSegTimeS) * 3.6).toFixed(1)) : 0;
 
-            // STAGE 6: State Machine & Hysteresis Transitions
-            if (currStatus === 'waiting' || currStatus === 'paused') {
-              if (isCandidateMoving) {
-                consecutiveMovingWindowsRef.current += 1;
-                consecutiveStationaryWindowsRef.current = 0;
+            if (rollingSpeedKmh >= 1.2) {
+              gpsSpeedRef.current = rollingSpeedKmh;
+              gpsPaceRef.current = calculatePaceFromSpeed(rollingSpeedKmh);
+            } else {
+              gpsSpeedRef.current = 0;
+              gpsPaceRef.current = '--:--';
+            }
 
-                if (consecutiveMovingWindowsRef.current >= RUN_ENGINE_CONFIG.REQUIRED_MOVING_WINDOWS) {
-                  // TRANSITION ➔ TRACKING
-                  gpsAutoPausedRef.current = false;
-                  smoothedSpeedRef.current = rawSpeedMS;
-                  const speedKmH = parseFloat((rawSpeedMS * 3.6).toFixed(1));
-                  gpsSpeedRef.current = speedKmH;
-                  gpsPaceRef.current = calculatePaceFromSpeed(speedKmH);
+            // Resume from auto-pause if auto-paused
+            if (gpsAutoPausedRef.current) {
+              gpsAutoPausedRef.current = false;
+              addLog("GPS: Motion resumed. Tracking active.");
+            }
 
-                  const distIncKm = windowDistMeters / 1000;
-                  const gpsDistBefore = gpsDistanceRef.current;
-                  const runStateDistBefore = runStateRef.current.distance;
+            setRunState(prev => ({
+              ...prev,
+              status: 'tracking',
+              distance: gpsDistanceRef.current,
+              speed: gpsSpeedRef.current,
+              pace: gpsPaceRef.current,
+              path: [...gpsPathRef.current],
+              isAutoPaused: false
+            }));
 
-                  gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
+            // Check distance to starting point for loop closure UI indicator
+            if (gpsPathRef.current.length > 0) {
+              const startPt = gpsPathRef.current[0];
+              const startDistM = getDistanceInMeters(newPoint[0], newPoint[1], startPt[0], startPt[1]);
+              setDistanceToStartMeters(startDistM);
 
-                  if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
-                    gpsPathRef.current.push(stableBaselinePointRef.current);
-                  }
-                  gpsPathRef.current.push(newPoint);
-                  updateMapDisplay(newPoint);
+              const closureRadius = Math.min(Math.max(12, startAccuracyRef.current || 15, wAccuracy), 22);
+              const isClosed = startDistM <= closureRadius && gpsPathRef.current.length >= RUN_ENGINE_CONFIG.MIN_LOOP_POINTS && gpsDistanceRef.current >= RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM;
 
-                  setRunState(prev => ({
-                    ...prev,
-                    status: 'tracking',
-                    distance: gpsDistanceRef.current,
-                    isAutoPaused: false
-                  }));
-
-                  console.log('[DISTANCE ENGINE]', {
-                    windowDistMeters: parseFloat(windowDistMeters.toFixed(2)),
-                    distanceIncKm: parseFloat(distIncKm.toFixed(3)),
-                    gpsDistanceBefore: gpsDistBefore,
-                    gpsDistanceAfter: gpsDistanceRef.current,
-                    runStateDistanceBefore: runStateDistBefore,
-                    runStateDistanceAfter: gpsDistanceRef.current,
-                    candidateMoving: isCandidateMoving,
-                    status: currStatus,
-                    manualPaused: runStateRef.current.manualPaused,
-                    isAutoPaused: gpsAutoPausedRef.current
-                  });
-
-                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} -> TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${speedKmH}km/h | Added: ${(distIncKm).toFixed(3)}km`);
-                  addLog(`GPS: Motion confirmed. Tracking resumed at ${speedKmH} km/h.`);
-                } else {
-                  gpsSpeedRef.current = 0;
-                  gpsPaceRef.current = '--:--';
-                  console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Validating motion (Window 1/2) | Dist: ${windowDistMeters.toFixed(2)}m | Speed: ${(rawSpeedMS * 3.6).toFixed(1)}km/h`);
-                }
-              } else {
-                consecutiveMovingWindowsRef.current = 0;
-                consecutiveStationaryWindowsRef.current += 1;
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-                console.log(`[RUN ENGINE] Phase: ${currStatus.toUpperCase()} | Stationary | Dist: ${windowDistMeters.toFixed(2)}m | Acc: ${Math.round(wAccuracy)}m | Speed: 0`);
-              }
-            } else if (currStatus === 'tracking') {
-              if (isCandidateMoving) {
-                consecutiveMovingWindowsRef.current += 1;
-                consecutiveStationaryWindowsRef.current = 0;
-                lowSpeedDurationRef.current = 0;
-
-                // Calculate rolling live speed from last 5 accepted segments
-                if (wAccuracy <= 15 && windowTimeSec > 0 && rawSpeedMS <= 7.5) {
-                  let validSegSpeedMS = rawSpeedMS;
-                  const deviceSpeedMS = pos.coords?.speed;
-                  if (typeof deviceSpeedMS === 'number' && deviceSpeedMS >= 0 && deviceSpeedMS <= 7.5 && wAccuracy <= 10) {
-                    validSegSpeedMS = (rawSpeedMS + deviceSpeedMS) / 2;
-                  }
-
-                  speedHistoryRef.current.push(validSegSpeedMS);
-                  if (speedHistoryRef.current.length > 5) {
-                    speedHistoryRef.current.shift();
-                  }
-
-                  const sum = speedHistoryRef.current.reduce((acc, v) => acc + v, 0);
-                  const avgMS = sum / speedHistoryRef.current.length;
-                  const currentSpeedKmH = parseFloat((avgMS * 3.6).toFixed(1));
-
-                  if (currentSpeedKmH >= 1.5) {
-                    gpsSpeedRef.current = currentSpeedKmH;
-                    gpsPaceRef.current = calculatePaceFromSpeed(currentSpeedKmH);
-                  } else {
-                    gpsSpeedRef.current = 0;
-                    gpsPaceRef.current = '--:--';
-                  }
-                } else {
-                  speedHistoryRef.current = [];
-                  gpsSpeedRef.current = 0;
-                  gpsPaceRef.current = '--:--';
-                }
-
-                const distIncKm = windowDistMeters / 1000;
-                const gpsDistBefore = gpsDistanceRef.current;
-                const runStateDistBefore = runStateRef.current.distance;
-
-                gpsDistanceRef.current = parseFloat((gpsDistanceRef.current + distIncKm).toFixed(3));
-
-                if (gpsPathRef.current.length === 0 && stableBaselinePointRef.current) {
-                  gpsPathRef.current.push(stableBaselinePointRef.current);
-                }
-                gpsPathRef.current.push(newPoint);
-                updateMapDisplay(newPoint);
-
-                setRunState(prev => ({
-                  ...prev,
-                  distance: gpsDistanceRef.current
-                }));
-
-                console.log(`[RUN ENGINE] Phase: TRACKING | Window: ${windowTimeSec.toFixed(1)}s | Dist: ${windowDistMeters.toFixed(2)}m | Live Speed: ${gpsSpeedRef.current}km/h | Added: ${(distIncKm).toFixed(3)}km`);
-              } else {
-                // Stationary in tracking
-                consecutiveStationaryWindowsRef.current += 1;
-                consecutiveMovingWindowsRef.current = 0;
-                lowSpeedDurationRef.current += windowTimeSec;
-
-                speedHistoryRef.current = [];
-                gpsSpeedRef.current = 0;
-                gpsPaceRef.current = '--:--';
-
-                if (lowSpeedDurationRef.current >= RUN_ENGINE_CONFIG.AUTO_PAUSE_DELAY && !gpsAutoPausedRef.current) {
-                  gpsAutoPausedRef.current = true;
-                  smoothedSpeedRef.current = 0;
-                  setRunState(prev => ({ ...prev, status: 'paused', isAutoPaused: true }));
-                  addLog("GPS: Auto-paused (runner stopped).");
-                  console.log(`[RUN ENGINE] Phase: TRACKING -> AUTO_PAUSED | Stationary for ${lowSpeedDurationRef.current.toFixed(1)}s`);
-                } else {
-                  console.log(`[RUN ENGINE] Phase: TRACKING | Low speed window (${lowSpeedDurationRef.current.toFixed(1)}s / 4s) | Dist: ${windowDistMeters.toFixed(2)}m`);
-                }
-              }
+              console.log(`[GPS ACCEPT] stepMeters: ${stepMeters.toFixed(2)}m | accuracy: ${Math.round(wAccuracy)}m | dt: ${dtSeconds.toFixed(1)}s | speed: ${segmentSpeedKmh.toFixed(1)}km/h | totalDistance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length}`);
+              console.log(`[LOOP CHECK] distance: ${gpsDistanceRef.current.toFixed(3)}km | pathPoints: ${gpsPathRef.current.length} | startDistance: ${startDistM.toFixed(1)}m | closureRadius: ${closureRadius}m | closed: ${isClosed}`);
             }
           },
           (watchErr) => {
@@ -1633,10 +1547,14 @@ export default function App() {
   };
 
   const validateLoopRoute = (path, distanceKm) => {
-    const minPoints = RUN_ENGINE_CONFIG.MIN_LOOP_POINTS || 5;
-    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM ?? 0;
-    const minAreaSqm = RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM || 200;
-    const closureThreshold = RUN_ENGINE_CONFIG.LOOP_CLOSURE_DISTANCE_METERS || 25.0;
+    const minPoints = RUN_ENGINE_CONFIG.MIN_LOOP_POINTS || 8;
+    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM || 0.04;
+    const minAreaSqm = RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM || 80;
+    const minDurationSec = RUN_ENGINE_CONFIG.MIN_LOOP_DURATION_SEC || 25;
+
+    const currentAccuracy = gpsAccuracyRef.current || 15;
+    const startAccuracy = startAccuracyRef.current || 15;
+    const closureThreshold = Math.min(Math.max(12, startAccuracy, currentAccuracy), 22);
 
     const diag = {
       pathPointCount: path ? path.length : 0,
@@ -1647,7 +1565,7 @@ export default function App() {
       closureThresholdMeters: closureThreshold,
       selfIntersectionDetected: false,
       minimumPointsPassed: false,
-      minimumDistancePassed: true,
+      minimumDistancePassed: false,
       polygonAreaSqm: 0,
       minimumAreaSqm: minAreaSqm,
       coordinatesClosed: false,
@@ -1658,16 +1576,20 @@ export default function App() {
       diag.validationFailureReason = `Not enough GPS points recorded (${path ? path.length : 0} of ${minPoints} required).`;
       return { valid: false, diagnostic: diag };
     }
-
     diag.minimumPointsPassed = true;
 
-    if (minDistanceKm > 0 && distanceKm < minDistanceKm) {
+    if (distanceKm < minDistanceKm) {
       diag.minimumDistancePassed = false;
-      diag.validationFailureReason = `Route distance too short: ${distanceKm.toFixed(2)} km (minimum ${minDistanceKm} km required).`;
+      diag.validationFailureReason = `Route distance too short: ${Math.round(distanceKm * 1000)} m (minimum ${Math.round(minDistanceKm * 1000)} m required).`;
       return { valid: false, diagnostic: diag };
     }
-
     diag.minimumDistancePassed = true;
+
+    const activeSec = (Date.now() - (startTimeRef.current ? startTimeRef.current.getTime() : Date.now())) / 1000;
+    if (activeSec < minDurationSec) {
+      diag.validationFailureReason = `Run duration too short (${Math.round(activeSec)}s of ${minDurationSec}s required).`;
+      return { valid: false, diagnostic: diag };
+    }
 
     const firstP = path[0];
     const lastP = path[path.length - 1];
@@ -1718,12 +1640,19 @@ export default function App() {
         : (runState.path && runState.path.length > 0 ? [...runState.path] : []);
       const currentDistance = gpsDistanceRef.current || runState.distance || 0;
 
+      // Short-run graceful cancellation (< 5 points or < 0.01 km)
+      if (currentPath.length < 5 || currentDistance < 0.01) {
+        addLog("Run Cancelled: Short run under 5 GPS points recorded.");
+        showToast("Run cancelled: Insufficient GPS points recorded.", 3500);
+        stopTracking("Short run cancelled");
+        return;
+      }
+
       const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
 
       if (!valid) {
         addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
-        setToastMessage(diagnostic.validationFailureReason);
-        setTimeout(() => setToastMessage(null), 6000);
+        showToast(diagnostic.validationFailureReason, 5000);
         stopTracking(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
         return;
       }

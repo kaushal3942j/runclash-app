@@ -457,61 +457,89 @@ export class RunEngine {
       this.pausedCandidateWindow = [];
     }
 
-    // Check if current fix shows progressive departure away from pause anchor relative to previous candidate fix
-    let isProgressiveDeparture = true;
-    if (this.pausedCandidateWindow.length > 0) {
-      const prevCand = this.pausedCandidateWindow[this.pausedCandidateWindow.length - 1];
-      const prevDistFromAnchor = getDistanceInMeters(anchor[0], anchor[1], prevCand.lat, prevCand.lng);
-      if (distFromAnchor < prevDistFromAnchor - 0.5) {
-        isProgressiveDeparture = false;
+    // STALE CANDIDATE EXPIRATION: Remove candidates older than 12 seconds
+    // Prevents ancient candidates from inflating the window when user hasn't actually moved
+    const CANDIDATE_MAX_AGE_MS = 12000;
+    this.pausedCandidateWindow = this.pausedCandidateWindow.filter(
+      c => fixTime - c.timestamp <= CANDIDATE_MAX_AGE_MS
+    );
+
+    // CANDIDATE ADMISSION: Fix must be >= 2.0m from pause anchor
+    if (distFromAnchor >= 2.0) {
+      // Check progressive departure with NOISE-TOLERANT regression allowance
+      let isProgressiveDeparture = true;
+      if (this.pausedCandidateWindow.length > 0) {
+        const prevCand = this.pausedCandidateWindow[this.pausedCandidateWindow.length - 1];
+        const prevDistFromAnchor = getDistanceInMeters(anchor[0], anchor[1], prevCand.lat, prevCand.lng);
+        // Allow up to 1.5m regression from previous candidate (GPS noise tolerance for terrace walks)
+        if (distFromAnchor < prevDistFromAnchor - 1.5) {
+          isProgressiveDeparture = false;
+        }
       }
-    }
 
-    if (distFromAnchor >= 2.0 && isProgressiveDeparture) {
-      this.pausedCandidateWindow.push({
-        lat: newPoint[0],
-        lng: newPoint[1],
-        distFromAnchor,
-        timestamp: fixTime
-      });
+      if (isProgressiveDeparture) {
+        this.pausedCandidateWindow.push({
+          lat: newPoint[0],
+          lng: newPoint[1],
+          distFromAnchor,
+          timestamp: fixTime
+        });
 
-      console.log('[PAUSED RESUME CANDIDATE]', {
-        candidateCount: this.pausedCandidateWindow.length,
-        distFromAnchor: distFromAnchor.toFixed(1)
-      });
+        console.log('[PAUSED RESUME CANDIDATE]', {
+          candidateCount: this.pausedCandidateWindow.length,
+          distFromAnchor: distFromAnchor.toFixed(1)
+        });
+      } else {
+        // SIGNIFICANT regression (>1.5m): Trim only the most recent candidate, not ALL progress
+        // This prevents one bad fix from erasing legitimate accumulated evidence
+        if (this.pausedCandidateWindow.length > 1) {
+          this.pausedCandidateWindow.pop();
+        } else {
+          this.pausedCandidateWindow = [];
+        }
+      }
 
-      const oldestCand = this.pausedCandidateWindow[0];
-      const newestCand = this.pausedCandidateWindow[this.pausedCandidateWindow.length - 1];
-      const windowTimeSec = (newestCand.timestamp - oldestCand.timestamp) / 1000;
-      const netCandDisplacement = getDistanceInMeters(oldestCand.lat, oldestCand.lng, newestCand.lat, newestCand.lng);
-      const candSpeedKmh = windowTimeSec > 0 ? (netCandDisplacement / windowTimeSec) * 3.6 : 0;
-      const distProgressed = newestCand.distFromAnchor - oldestCand.distFromAnchor;
+      // Evaluate resume consensus from surviving candidates
+      if (this.pausedCandidateWindow.length >= 3) {
+        const oldestCand = this.pausedCandidateWindow[0];
+        const newestCand = this.pausedCandidateWindow[this.pausedCandidateWindow.length - 1];
+        const windowTimeSec = (newestCand.timestamp - oldestCand.timestamp) / 1000;
+        const netCandDisplacement = getDistanceInMeters(oldestCand.lat, oldestCand.lng, newestCand.lat, newestCand.lng);
+        const candSpeedKmh = windowTimeSec > 0 ? (netCandDisplacement / windowTimeSec) * 3.6 : 0;
+        const distProgressed = newestCand.distFromAnchor - oldestCand.distFromAnchor;
 
-      // PAUSED RESUME CONSENSUS REQUIREMENT (PART 7):
-      // 1. At least 3 candidate fixes spanning >= 3.0 seconds
-      // 2. Progressive distance away from pause anchor >= 2.5m (rejects back-and-forth jitter around 4m)
-      // 3. Final net displacement from pause anchor >= 4.5m
-      // 4. Candidate speed is human walking/running speed (>= 0.8 km/h and <= 14.0 km/h)
-      const hasMinTime = windowTimeSec >= 3.0;
-      const hasMinPoints = this.pausedCandidateWindow.length >= 3;
-      const hasProgression = distProgressed >= RUN_ENGINE_CONFIG.RESUME_MIN_PROGRESSION;
-      const hasMinDisplacement = newestCand.distFromAnchor >= RUN_ENGINE_CONFIG.RESUME_MIN_DISPLACEMENT;
-      const hasValidSpeed = candSpeedKmh >= 0.8 && candSpeedKmh <= RUN_ENGINE_CONFIG.RESUME_MAX_SPEED_KMH;
+        // PAUSED RESUME CONSENSUS REQUIREMENT (PART 7):
+        // 1. At least 3 candidate fixes spanning >= 3.0 seconds
+        // 2. Progressive distance away from pause anchor >= 2.5m (rejects back-and-forth jitter around 4m)
+        // 3. Final net displacement from pause anchor >= 4.5m
+        // 4. Candidate speed is human walking/running speed (>= 0.8 km/h and <= 14.0 km/h)
+        const hasMinTime = windowTimeSec >= 3.0;
+        const hasMinPoints = this.pausedCandidateWindow.length >= 3;
+        const hasProgression = distProgressed >= RUN_ENGINE_CONFIG.RESUME_MIN_PROGRESSION;
+        const hasMinDisplacement = newestCand.distFromAnchor >= RUN_ENGINE_CONFIG.RESUME_MIN_DISPLACEMENT;
+        const hasValidSpeed = candSpeedKmh >= 0.8 && candSpeedKmh <= RUN_ENGINE_CONFIG.RESUME_MAX_SPEED_KMH;
 
-      if (hasMinPoints && hasMinTime && hasProgression && hasMinDisplacement && hasValidSpeed) {
-        console.log('[PAUSED RESUME CONFIRMED]', { candidates: this.pausedCandidateWindow.length, speedKmh: candSpeedKmh.toFixed(1) });
-        // RESUME CONFIRMED: Transition to TRACKING
-        this.lastPoint = newPoint;
-        this.pausedCandidateWindow = [];
-        this.resumeCandidatesCount = 0;
-        this.transitionTo('tracking', 'Consensus progressive motion resumed from pause', fixTime);
+        if (hasMinPoints && hasMinTime && hasProgression && hasMinDisplacement && hasValidSpeed) {
+          console.log('[PAUSED RESUME CONFIRMED]', { candidates: this.pausedCandidateWindow.length, speedKmh: candSpeedKmh.toFixed(1) });
+          // RESUME CONFIRMED: Transition to TRACKING
+          this.lastPoint = newPoint;
+          this.pausedCandidateWindow = [];
+          this.resumeCandidatesCount = 0;
+          this.transitionTo('tracking', 'Consensus progressive motion resumed from pause', fixTime);
+        }
       }
     } else {
-      // Single drift excursion back towards anchor INSTANTLY RESETS candidates!
-      this.pausedCandidateWindow = [];
-      this.resumeCandidatesCount = 0;
+      // Fix is within 2.0m of anchor — clear only if we have no established momentum
+      // (3+ candidates that span >= 2s show real departure intent)
+      if (this.pausedCandidateWindow.length < 3) {
+        this.pausedCandidateWindow = [];
+        this.resumeCandidatesCount = 0;
+      }
+      // If >= 3 candidates exist, allow one near-anchor fix without clearing
+      // (GPS can temporarily report near-anchor due to accuracy wobble)
     }
   }
+
 
   /**
    * Returns current canonical metrics snapshot.

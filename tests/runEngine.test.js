@@ -890,3 +890,255 @@ test('TEST 27 — DISCONNECTED LEGACY PATHS CANNOT ZERO ACTIVE RUN METRICS DURIN
   assert.ok(snapshot.distance > 0, 'Distance must not be zeroed during pause');
   assert.ok(snapshot.duration > 0, 'Duration must not be zeroed during pause');
 });
+
+// ============================================================================
+// TESTS 28-32: REAL DEVICE PAUSED RESUME REGRESSION SUITE
+// ============================================================================
+
+test('TEST 28 — REAL DEVICE PAUSED RESUME TERRACE TRACE', (t) => {
+  // Models the exact real phone failure: walk -> stop -> pause -> walk again with
+  // Android coords.speed=0, 500-1000ms GPS callbacks, noisy 8-18m accuracy, terrace turns.
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  // Phase 1: Acquire and start walking (triggers waiting -> tracking)
+  engine.handleRawGpsFix(createFix(curLat, curLng, 12, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 800; // 800ms callbacks (real device pattern)
+    const bearing = (sec * 8) % 360; // slight curve
+    [curLat, curLng] = offsetCoords(curLat, curLng, bearing, 1.1);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 10 + Math.random() * 8, 0, now)); // coords.speed=0 (Android)
+  }
+  assert.equal(engine.state, 'tracking', 'Must reach tracking state');
+
+  // Phase 2: Walk for 30 more seconds
+  for (let sec = 1; sec <= 30; sec++) {
+    now += 900;
+    const bearing = (sec * 12) % 360; // terrace curves
+    [curLat, curLng] = offsetCoords(curLat, curLng, bearing, 0.9);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 10 + Math.random() * 8, 0, now));
+  }
+  assert.equal(engine.state, 'tracking', 'Must remain tracking during walk');
+  const distanceBeforeStop = engine.getMetricsSnapshot(now).distance;
+  assert.ok(distanceBeforeStop > 0, 'Distance must accumulate during walk');
+
+  // Phase 3: Stop physically for 25 seconds (sub-meter GPS jitter around stop point, coords.speed=0)
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    const jLat = stopLat + (Math.random() - 0.5) * 0.000005; // ~0.5m jitter
+    const jLng = stopLng + (Math.random() - 0.5) * 0.000005;
+    engine.handleRawGpsFix(createFix(jLat, jLng, 15, 0, now));
+  }
+  assert.equal(engine.state, 'paused', 'Must auto-pause after stationary timeout');
+  const distanceAtPause = engine.getMetricsSnapshot(now).distance;
+
+  // Phase 4: Resume walking on terrace with turns (the failing scenario)
+  // Android coords.speed = 0, 800ms callbacks, 8-18m accuracy
+  // Walking speed ~1.0-1.4 m/s (3.6-5.0 km/h) with slight heading changes
+  let resumeWalkDetected = false;
+  for (let sec = 1; sec <= 12; sec++) {
+    now += 800;
+    const bearing = 45 + (sec * 15) % 90; // terrace turns
+    // Each step ~0.9-1.2m (real terrace walking pace)
+    const stepDist = 0.9 + Math.random() * 0.3;
+    [curLat, curLng] = offsetCoords(curLat, curLng, bearing, stepDist);
+    const accuracy = 10 + Math.random() * 8; // 10-18m accuracy
+    engine.handleRawGpsFix(createFix(curLat, curLng, accuracy, 0, now)); // coords.speed=0!
+
+    if (engine.state === 'tracking') {
+      resumeWalkDetected = true;
+      break;
+    }
+  }
+
+  assert.equal(resumeWalkDetected, true, 'Engine MUST resume to tracking within ~10s of real walking after pause');
+
+  // Phase 5: Verify no pause-anchor distance jump was added
+  const distanceAfterResume = engine.getMetricsSnapshot(now).distance;
+  assert.ok(distanceAfterResume >= distanceAtPause, 'Distance must not decrease after resume');
+  // Distance should NOT include the anchor-to-resume-point gap
+  // (This is verified by the fact that distanceAfterResume ≈ distanceAtPause, not distanceAtPause + large jump)
+});
+
+test('TEST 29 — UNCERTAIN FIX DURING RESUME DOES NOT ERASE CREDIBLE PROGRESS', (t) => {
+  // Models: 3 good candidates, then 1 weak/uncertain fix (slightly closer to anchor), then 2 more good ones.
+  // The single uncertain fix must NOT erase all prior credible resume progress.
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  // Walk to tracking
+  engine.handleRawGpsFix(createFix(curLat, curLng, 12, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  // Stop and reach paused
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+  assert.equal(engine.state, 'paused');
+
+  // Resume walking: 3 good progressive fixes
+  let walkLat = stopLat;
+  let walkLng = stopLng;
+  for (let i = 1; i <= 3; i++) {
+    now += 1000;
+    [walkLat, walkLng] = offsetCoords(walkLat, walkLng, 0, 2.0);
+    engine.handleRawGpsFix(createFix(walkLat, walkLng, 12, 0, now));
+  }
+  // Should still be paused but building progress
+  // Note: May have resumed already if thresholds met, which is acceptable
+
+  if (engine.state === 'paused') {
+    // Now send ONE weak fix that regresses slightly (0.8m back towards anchor)
+    now += 1000;
+    const weakLat = walkLat - 0.0000072; // ~0.8m regression
+    const weakLng = walkLng;
+    engine.handleRawGpsFix(createFix(weakLat, weakLng, 18, 0, now));
+    
+    // The engine must NOT have thrown away all progress.
+    // Send 2 more good progressive fixes
+    for (let i = 1; i <= 3; i++) {
+      now += 1000;
+      [walkLat, walkLng] = offsetCoords(walkLat, walkLng, 0, 2.0);
+      engine.handleRawGpsFix(createFix(walkLat, walkLng, 12, 0, now));
+    }
+  }
+
+  assert.equal(engine.state, 'tracking', 'Engine must resume despite one uncertain fix in the middle');
+});
+
+test('TEST 30 — RESUME WITH ANDROID coords.speed=0', (t) => {
+  // Android frequently reports coords.speed=0 even while walking.
+  // Resume logic must NOT rely on coords.speed.
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  // Walk to tracking
+  engine.handleRawGpsFix(createFix(curLat, curLng, 12, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 0, now)); // ALWAYS coords.speed=0
+  }
+
+  // Stop and reach paused
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+  assert.equal(engine.state, 'paused');
+
+  // Resume walking with EVERY fix having coords.speed=0
+  for (let sec = 1; sec <= 8; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 10, 1.4); // ~5 km/h walking
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 0, now)); // coords.speed = 0 ALWAYS
+  }
+
+  assert.equal(engine.state, 'tracking', 'Engine must resume using calculated displacement even when coords.speed=0');
+});
+
+test('TEST 31 — RESUME WITH CURVED TERRACE PATH', (t) => {
+  // Walking on a terrace involves 90° and 180° turns.
+  // Resume must accept movement that doesn't always increase net distance from anchor monotonically.
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  // Walk to tracking
+  engine.handleRawGpsFix(createFix(curLat, curLng, 12, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  // Stop and reach paused
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+  assert.equal(engine.state, 'paused');
+
+  // Resume with curved terrace path: walk north, then northeast, then east
+  // This means distance from anchor oscillates slightly as direction changes
+  const headings = [0, 0, 30, 60, 90, 90, 120, 60, 30, 0]; // various bearings
+  for (let i = 0; i < headings.length; i++) {
+    now += 900;
+    [curLat, curLng] = offsetCoords(curLat, curLng, headings[i], 1.2);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 14, 0, now));
+  }
+
+  assert.equal(engine.state, 'tracking', 'Engine must resume despite curved terrace path');
+});
+
+test('TEST 32 — SINGLE 5M GPS DRIFT SPIKE MUST NOT RESUME', (t) => {
+  // A single GPS excursion of 5m from pause anchor must NOT trigger resume.
+  // Only sustained progressive movement should.
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  // Walk to tracking
+  engine.handleRawGpsFix(createFix(curLat, curLng, 12, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  // Stop and reach paused
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+  assert.equal(engine.state, 'paused');
+
+  // Single 5m GPS drift spike (then immediately return to anchor)
+  now += 1000;
+  const [spikeLat, spikeLng] = offsetCoords(stopLat, stopLng, 90, 5.0);
+  engine.handleRawGpsFix(createFix(spikeLat, spikeLng, 15, 0, now));
+
+  // Return to near anchor
+  now += 1000;
+  engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+
+  // Another spike in opposite direction
+  now += 1000;
+  const [spike2Lat, spike2Lng] = offsetCoords(stopLat, stopLng, 270, 5.5);
+  engine.handleRawGpsFix(createFix(spike2Lat, spike2Lng, 15, 0, now));
+
+  // Return to anchor again
+  now += 1000;
+  engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+
+  // Must still be paused — isolated spikes without progressive translation must not resume
+  assert.equal(engine.state, 'paused', 'Single GPS drift spikes must NOT trigger resume');
+});

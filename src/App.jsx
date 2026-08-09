@@ -23,6 +23,9 @@ import { PublicProfileScreen } from './screens/PublicProfileScreen';
 import { createRunActivity, createTerritoryActivity } from './services/activityService';
 import { RankBadge } from './components/profile/RankBadge';
 import { runEngine } from './run-engine/runEngine';
+import { validateTerritoryCapture } from './territory-engine/geometryEngine.js';
+import { TERRITORY_ENGINE_CONFIG } from './territory-engine/territoryEngineConfig.js';
+import { rechargeSector, DECAY_DURATION_HOURS } from './territory-engine/decayEngine.js';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
 import { TerritoryHealthBar } from './components/territory/TerritoryHealthBar';
 import { usePremiumAccess } from './hooks/usePremiumAccess';
@@ -1320,93 +1323,37 @@ export default function App() {
     return false;
   };
 
-  const hasSelfIntersection = (path) => {
-    if (!path || path.length < 4) return false;
-    const n = path.length;
-    for (let i = 0; i < n - 1; i++) {
-      for (let j = i + 2; j < n - 1; j++) {
-        if (i === 0 && j === n - 2) continue;
-        if (doSegmentsIntersect(path[i], path[i + 1], path[j], path[j + 1])) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-
-  const validateLoopRoute = (path, distanceKm) => {
-    const minPoints = RUN_ENGINE_CONFIG.MIN_LOOP_POINTS || 8;
-    const minDistanceKm = RUN_ENGINE_CONFIG.MIN_LOOP_DISTANCE_KM || 0.04;
-    const minAreaSqm = RUN_ENGINE_CONFIG.MIN_LOOP_AREA_SQM || 80;
-    const minDurationSec = RUN_ENGINE_CONFIG.MIN_LOOP_DURATION_SEC || 25;
-
-    const currentAccuracy = gpsAccuracyRef.current || 15;
-    const startAccuracy = startAccuracyRef.current || 15;
-    const closureThreshold = Math.min(Math.max(12, startAccuracy, currentAccuracy), 22);
-
-    const diag = {
-      pathPointCount: path ? path.length : 0,
-      totalDistanceKm: distanceKm || 0,
-      firstPoint: (path && path.length > 0) ? path[0] : null,
-      lastPoint: (path && path.length > 0) ? path[path.length - 1] : null,
-      distanceFromEndToStartMeters: 0,
-      closureThresholdMeters: closureThreshold,
-      selfIntersectionDetected: false,
-      minimumPointsPassed: false,
-      minimumDistancePassed: false,
-      polygonAreaSqm: 0,
-      minimumAreaSqm: minAreaSqm,
-      coordinatesClosed: false,
-      validationFailureReason: null
-    };
-
-    if (!path || path.length < minPoints) {
-      diag.validationFailureReason = `Not enough GPS points recorded (${path ? path.length : 0} of ${minPoints} required).`;
-      return { valid: false, diagnostic: diag };
-    }
-    diag.minimumPointsPassed = true;
-
-    if (distanceKm < minDistanceKm) {
-      diag.minimumDistancePassed = false;
-      diag.validationFailureReason = `Route distance too short: ${Math.round(distanceKm * 1000)} m (minimum ${Math.round(minDistanceKm * 1000)} m required).`;
-      return { valid: false, diagnostic: diag };
-    }
-    diag.minimumDistancePassed = true;
-
+  const validateLoopRouteWrapper = (path, distanceKm) => {
+    // Wrap the new engine to include the legacy run duration check
     const activeSec = (Date.now() - (startTimeRef.current ? startTimeRef.current.getTime() : Date.now())) / 1000;
+    const minDurationSec = TERRITORY_ENGINE_CONFIG.MIN_LOOP_DURATION_SEC || 25;
+
     if (activeSec < minDurationSec) {
-      diag.validationFailureReason = `Run duration too short (${Math.round(activeSec)}s of ${minDurationSec}s required).`;
-      return { valid: false, diagnostic: diag };
+      return { 
+        valid: false, 
+        diagnostic: { validationFailureReason: `Run duration too short (${Math.round(activeSec)}s of ${minDurationSec}s required).` } 
+      };
     }
 
-    const firstP = path[0];
-    const lastP = path[path.length - 1];
-    const distEndToStart = getDistanceInMeters(lastP[0], lastP[1], firstP[0], firstP[1]);
-    diag.distanceFromEndToStartMeters = parseFloat(distEndToStart.toFixed(1));
-
-    const selfIntersected = hasSelfIntersection(path);
-    diag.selfIntersectionDetected = selfIntersected;
-
-    const isClosed = distEndToStart <= closureThreshold || selfIntersected;
-
-    if (!isClosed) {
-      diag.validationFailureReason = `Loop not closed — you are ${Math.round(distEndToStart)} m from your starting point. Finish within ${Math.round(closureThreshold)} m.`;
-      return { valid: false, diagnostic: diag };
+    const res = validateTerritoryCapture(path, TERRITORY_ENGINE_CONFIG);
+    if (!res.valid) {
+      // Map reason to message
+      let msg = 'Unknown validation error';
+      if (res.reason === 'INSUFFICIENT_POINTS') msg = `Not enough GPS points recorded (${res.pointCount} of ${TERRITORY_ENGINE_CONFIG.MIN_LOOP_POINTS} required).`;
+      if (res.reason === 'PATH_TOO_SHORT') msg = `Route distance too short: ${Math.round(res.pathDistanceKm * 1000)} m (minimum ${Math.round(TERRITORY_ENGINE_CONFIG.MIN_PATH_DISTANCE_KM * 1000)} m required).`;
+      if (res.reason === 'LOOP_NOT_CLOSED') msg = `Loop not closed — you are ${Math.round(res.closureDistanceMeters)} m from your starting point. Finish within ${Math.round(TERRITORY_ENGINE_CONFIG.CLOSURE_THRESHOLD_METERS)} m.`;
+      if (res.reason === 'AREA_TOO_SMALL') msg = `Territory area too small — minimum ${TERRITORY_ENGINE_CONFIG.MIN_LOOP_AREA_SQM} m² (currently ${res.areaSqM.toLocaleString()} m²).`;
+      return { valid: false, diagnostic: { validationFailureReason: msg } };
     }
 
-    // Append first coordinate to end of polygon exactly once before area calculation and database insertion
-    const closedCoords = [...path, firstP];
-    diag.coordinatesClosed = true;
-
-    const areaSqM = calculatePolygonArea(closedCoords);
-    diag.polygonAreaSqm = areaSqM;
-
-    if (areaSqM < minAreaSqm) {
-      diag.validationFailureReason = `Territory area too small — minimum ${minAreaSqm} m² (currently ${areaSqM.toLocaleString()} m²).`;
-      return { valid: false, diagnostic: diag };
-    }
-
-    return { valid: true, diagnostic: diag, closedCoords };
+    return { 
+      valid: true, 
+      diagnostic: { 
+        validationFailureReason: null,
+        polygonAreaSqm: res.areaSqM
+      }, 
+      closedCoords: res.normalizedPath 
+    };
   };
 
   const handleStopAndClaim = async (e) => {
@@ -1436,7 +1383,7 @@ export default function App() {
         return;
       }
 
-      const { valid, diagnostic, closedCoords } = validateLoopRoute(currentPath, currentDistance);
+      const { valid, diagnostic, closedCoords } = validateLoopRouteWrapper(currentPath, currentDistance);
 
       if (!valid) {
         addLog(`Claim Validation Failed: ${diagnostic.validationFailureReason}`);
@@ -1783,50 +1730,7 @@ export default function App() {
     ]);
   };
 
-  // Line Intersection Checker
-  const checkSegmentsIntersect = (p1, q1, p2, q2) => {
-    const orientation = (p, q, r) => {
-      const val = (q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0]);
-      if (Math.abs(val) < 1e-9) return 0; // collinear
-      return val > 0 ? 1 : 2; // clock or counterclock
-    };
 
-    const onSegment = (p, q, r) => {
-      return q[0] <= Math.max(p[0], r[0]) && q[0] >= Math.min(p[0], r[0]) &&
-             q[1] <= Math.max(p[1], r[1]) && q[1] >= Math.min(p[1], r[1]);
-    };
-
-    const o1 = orientation(p1, q1, p2);
-    const o2 = orientation(p1, q1, q2);
-    const o3 = orientation(p2, q2, p1);
-    const o4 = orientation(p2, q2, q1);
-
-    if (o1 !== o2 && o3 !== o4) return true;
-
-    if (o1 === 0 && onSegment(p1, p2, q1)) return true;
-    if (o2 === 0 && onSegment(p1, q2, q1)) return true;
-    if (o3 === 0 && onSegment(p2, p1, q2)) return true;
-    if (o4 === 0 && onSegment(p2, q1, q2)) return true;
-
-    return false;
-  };
-
-  const checkPathSelfIntersection = (path) => {
-    if (path.length < 5) return null;
-    const lastIdx = path.length - 1;
-    const p1 = path[lastIdx - 1];
-    const q1 = path[lastIdx];
-
-    // Check last segment against all previous segments
-    for (let i = 0; i < lastIdx - 3; i++) {
-      const p2 = path[i];
-      const q2 = path[i + 1];
-      if (checkSegmentsIntersect(p1, q1, p2, q2)) {
-        return i;
-      }
-    }
-    return null;
-  };
 
   const getClanStandings = () => {
     const clanAreas = {};
@@ -2035,27 +1939,7 @@ export default function App() {
     return R * c;
   };
 
-  // Shoelace formula area computation
-  const calculatePolygonArea = (points) => {
-    if (points.length < 3) return 0;
-    let area = 0;
-    const latRef = points[0][0];
-    const lonRef = points[0][1];
 
-    const meters = points.map(p => {
-      const y = (p[0] - latRef) * 111139;
-      const x = (p[1] - lonRef) * 111139 * Math.cos(latRef * Math.PI / 180);
-      return [x, y];
-    });
-
-    const len = meters.length;
-    for (let i = 0; i < len; i++) {
-      const curr = meters[i];
-      const next = meters[(i + 1) % len];
-      area += (curr[0] * next[1]) - (next[0] * curr[1]);
-    }
-    return Math.round(Math.abs(area / 2));
-  };
 
   /**
    * Calculates overall average pace string (MM:SS) from cumulative duration (seconds) and distance (km).
@@ -2108,10 +1992,17 @@ export default function App() {
     if (!terr) return;
 
     setInventory(prev => ({ ...prev, shields: prev.shields - 1 }));
-    const newDecay = Math.min(terr.decayHours + 24, terr.maxDecayHours || 72);
+    
+    // Instead of raw +24 decayHours, we use the new decayEngine to recharge health to 100%
+    const rechargedTerr = rechargeSector(terr, Date.now());
 
-    await updateTerritory(territoryId, { decayHours: newDecay });
-    addLog(`System: Fortified '${terr.name}' with Shield (+24 hours).`);
+    await updateTerritory(territoryId, { 
+      last_recharged_at: rechargedTerr.last_recharged_at,
+      expires_at: rechargedTerr.expires_at,
+      decay_hours: DECAY_DURATION_HOURS // For legacy compat if needed
+    });
+    
+    addLog(`System: Recharged '${terr.name}' to full health with Shield.`);
   };
 
   // ----------------------------------------------------

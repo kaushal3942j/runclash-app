@@ -1,5 +1,6 @@
 import React from 'react';
 import { Target, Compass, Shield, Coins, Award, RefreshCw, Zap } from 'lucide-react';
+import { getDecayStatus } from '../territory-engine/decayEngine.js';
 
 export const ConquestsScreen = ({
   currentUser,
@@ -39,9 +40,9 @@ export const ConquestsScreen = ({
           ) : (
             activeUserTerritories.map(terr => {
               const clanColor = typeof getClanColor === 'function' ? getClanColor(terr.clan) : '#FC4C02';
-              const maxDecay = terr.maxDecayHours || 72;
-              const currentDecay = terr.decayHours || 72;
-              const percentage = Math.max(0, Math.min(100, (currentDecay / maxDecay) * 100));
+              const status = getDecayStatus(terr, Date.now());
+              const currentDecay = status.hoursRemaining;
+              const percentage = status.health;
               
               return (
                 <div key={terr.id} className="clash-card p-4 gap-3" style={{ display: 'flex', flexDirection: 'column', borderLeft: `4px solid ${clanColor}` }}>

@@ -22,6 +22,7 @@ import { ProfileScreen } from './screens/ProfileScreen';
 import { PublicProfileScreen } from './screens/PublicProfileScreen';
 import { createRunActivity, createTerritoryActivity } from './services/activityService';
 import { RankBadge } from './components/profile/RankBadge';
+import { runEngine } from './run-engine/runEngine';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
 import { TerritoryHealthBar } from './components/territory/TerritoryHealthBar';
 import { usePremiumAccess } from './hooks/usePremiumAccess';
@@ -819,6 +820,34 @@ export default function App() {
     };
   }, []);
 
+  // ----------------------------------------------------
+  // RunEngine Subscription & UI Synchronization
+  // ----------------------------------------------------
+  useEffect(() => {
+    const unsubscribe = runEngine.subscribe((eventType, data) => {
+      const snap = data.metrics;
+      setRunState(prev => ({
+        ...prev,
+        status: data.engineState,
+        distance: snap.distance,
+        duration: snap.duration,
+        speed: snap.speed,
+        pace: snap.pace,
+        avgSpeed: snap.avgSpeed,
+        avgPace: snap.avgPace,
+        path: snap.path,
+        isAutoPaused: data.engineState === 'paused'
+      }));
+
+      // Update visual map marker safely
+      if (snap.lastPoint) {
+        updateMapDisplay(snap.lastPoint);
+      }
+    });
+
+    return unsubscribe;
+  }, []);
+
   // Fetch leaderboard when clans tab becomes active
   useEffect(() => {
     if (activeTab === 'clans') {
@@ -1284,6 +1313,10 @@ export default function App() {
     if (runState.status !== 'idle' && runState.status !== 'finished') return;
 
     requestWakeLock();
+
+    // Start canonical Run Engine session and register GPS watch
+    runEngine.startSession();
+    runEngine.registerGpsWatch();
 
     // Reset timing reference timestamps
     startTimeRef.current = new Date();
@@ -2340,6 +2373,9 @@ export default function App() {
   };
 
   const stopTracking = (reason = "Explicit User Request") => {
+    runEngine.cancelSession(reason);
+    runEngine.clearGpsWatch();
+
     if (watchIdRef.current) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;

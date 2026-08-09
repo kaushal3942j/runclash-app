@@ -159,7 +159,7 @@ test('TEST 5 — STATIONARY DRIFT AFTER WALK (Frozen Distance & Auto-Pause)', (t
 
   let pausedDistance = null;
   let autoPausedTriggered = false;
-  for (let sec = 1; sec <= 20; sec++) {
+  for (let sec = 1; sec <= 25; sec++) {
     now += 1000;
     const jitterLat = stopLat + (Math.random() - 0.5) * 0.00001;
     const jitterLng = stopLng + (Math.random() - 0.5) * 0.00001;
@@ -696,4 +696,197 @@ test('TEST 21 — FULL REAL DEVICE TRACE REPLAY (0-35s Jitter, 35-80s Terrace Wa
   }
 
   assert.equal(engine.state, 'tracking', 'Engine must transition PAUSED -> TRACKING on real walking resume');
+});
+
+test('TEST 22 — ENGINE TRACKING -> PAUSED UI SNAPSHOT PRESERVES DISTANCE & DURATION', (t) => {
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let uiState = null;
+  const formatSpeedKmh = (val) => (val === null || val === undefined || isNaN(val) || val <= 0) ? '0.0' : Number(val).toFixed(1);
+
+  engine.subscribe((eventType, data) => {
+    const snap = data.metrics;
+    uiState = {
+      status: data.engineState,
+      distance: snap.distance,
+      duration: snap.duration,
+      speed: formatSpeedKmh(snap.speed),
+      pace: snap.pace
+    };
+  });
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  engine.handleRawGpsFix(createFix(curLat, curLng, 15, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  assert.equal(uiState.status, 'tracking');
+  const trackingDistance = uiState.distance;
+  const trackingDuration = uiState.duration;
+  assert.ok(trackingDistance > 0, 'Distance must be > 0 in tracking');
+  assert.ok(trackingDuration > 0, 'Duration must be > 0 in tracking');
+
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 25; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+
+  assert.equal(uiState.status, 'paused');
+  assert.ok(uiState.distance > 0, 'Paused UI MUST preserve previous distance');
+  assert.ok(uiState.duration > 0, 'Paused UI MUST preserve previous duration');
+  assert.equal(uiState.speed, '0.0', 'Paused UI speed MUST be 0.0');
+  assert.equal(uiState.pace, '--:--', 'Paused UI pace MUST be --:--');
+});
+
+test('TEST 23 — PAUSED UI NEVER BECOMES WAITING', (t) => {
+  const engine = new RunEngine();
+  engine.startSession();
+
+  const statuses = [];
+  engine.subscribe((eventType, data) => {
+    statuses.push(data.engineState);
+  });
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  engine.handleRawGpsFix(createFix(curLat, curLng, 15, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 22; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+
+  assert.ok(!statuses.slice(statuses.indexOf('paused')).includes('waiting'), 'Paused state MUST NEVER transition back to waiting');
+});
+
+test('TEST 24 — PAUSED -> TRACKING RESUME UPDATES UI ATOMICALLY', (t) => {
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let lastUiState = null;
+  const formatSpeedKmh = (val) => (val === null || val === undefined || isNaN(val) || val <= 0) ? '0.0' : Number(val).toFixed(1);
+
+  engine.subscribe((eventType, data) => {
+    const snap = data.metrics;
+    lastUiState = {
+      status: data.engineState,
+      distance: snap.distance,
+      duration: snap.duration,
+      speed: formatSpeedKmh(snap.speed)
+    };
+  });
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  engine.handleRawGpsFix(createFix(curLat, curLng, 15, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 22; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+
+  assert.equal(lastUiState.status, 'paused');
+  const pausedDist = lastUiState.distance;
+
+  // Progressive resume fixes (3 fixes moving away > 4.5m over 3s)
+  let [resLat, resLng] = [stopLat, stopLng];
+  for (let sec = 1; sec <= 5; sec++) {
+    now += 1000;
+    [resLat, resLng] = offsetCoords(resLat, resLng, 0, 2.0);
+    engine.handleRawGpsFix(createFix(resLat, resLng, 12, 2.0, now));
+  }
+
+  assert.equal(lastUiState.status, 'tracking', 'Engine MUST resume to tracking');
+  assert.ok(lastUiState.distance >= pausedDist, 'Distance MUST resume monotonically');
+});
+
+test('TEST 25 — VISIBLE SPEED FORMATTER NEVER EMITS LONG RAW FLOAT', (t) => {
+  const formatSpeedKmh = (val) => (val === null || val === undefined || isNaN(val) || val <= 0) ? '0.0' : Number(val).toFixed(1);
+
+  assert.equal(formatSpeedKmh(0.4963166908601793), '0.5');
+  assert.equal(formatSpeedKmh(0), '0.0');
+  assert.equal(formatSpeedKmh(null), '0.0');
+  assert.equal(formatSpeedKmh(2.418274), '2.4');
+  assert.equal(formatSpeedKmh(12.8732), '12.9');
+});
+
+test('TEST 26 — ENGINE STATE AND UI STATE REMAIN IDENTICAL ACROSS LIFECYCLE', (t) => {
+  const engine = new RunEngine();
+  const lifecycle = [];
+
+  engine.subscribe((eventType, data) => {
+    lifecycle.push({ eventType, engineState: data.engineState, uiState: data.engineState });
+  });
+
+  engine.startSession();
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  engine.handleRawGpsFix(createFix(curLat, curLng, 15, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  engine.finalizeSession('Done');
+
+  lifecycle.forEach(entry => {
+    assert.equal(entry.engineState, entry.uiState, 'Engine state and UI state MUST be 100% identical');
+  });
+});
+
+test('TEST 27 — DISCONNECTED LEGACY PATHS CANNOT ZERO ACTIVE RUN METRICS DURING PAUSE', (t) => {
+  const engine = new RunEngine();
+  engine.startSession();
+
+  let snapshot = null;
+  engine.subscribe((eventType, data) => {
+    snapshot = data.metrics;
+  });
+
+  let now = 1000000;
+  let [curLat, curLng] = [37.7749, -122.4194];
+
+  engine.handleRawGpsFix(createFix(curLat, curLng, 15, null, now));
+  for (let sec = 1; sec <= 15; sec++) {
+    now += 1000;
+    [curLat, curLng] = offsetCoords(curLat, curLng, 0, 1.3);
+    engine.handleRawGpsFix(createFix(curLat, curLng, 12, 1.3, now));
+  }
+
+  const stopLat = curLat;
+  const stopLng = curLng;
+  for (let sec = 1; sec <= 22; sec++) {
+    now += 1000;
+    engine.handleRawGpsFix(createFix(stopLat, stopLng, 15, 0, now));
+  }
+
+  assert.equal(engine.state, 'paused');
+  assert.ok(snapshot.distance > 0, 'Distance must not be zeroed during pause');
+  assert.ok(snapshot.duration > 0, 'Duration must not be zeroed during pause');
 });

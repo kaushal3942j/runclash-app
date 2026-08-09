@@ -362,7 +362,7 @@ export class RunEngine {
     // ACTIVE WINDOW STALE-WALK CHECK (SECTION 6):
     // When device speed is 0 or step is stationary, prune old walking points older than 3s
     const activeMaxAge = (coordsSpeedKmh === 0 || stepMeters < 0.3) ? 3000 : RUN_ENGINE_CONFIG.TRACKING_WINDOW_SEC * 1000;
-    this.activeMovementWindow = this.activeMovementWindow.filter(p => fixTime - p.timestamp <= activeMaxAge);
+    this.activeMovementWindow = this.activeMovementWindow.filter(p => fixTime - p.timestamp <= RUN_ENGINE_CONFIG.TRACKING_WINDOW_SEC * 1000);
 
     // 1. Run Tracking Consensus Motion Classifier (PART 5 & PART 6)
     const motion = classifyTrackingWindow(this.activeMovementWindow, coordsSpeedKmh, wAccuracy);
@@ -444,6 +444,8 @@ export class RunEngine {
    * Distance & duration remain strictly frozen. Stationary drift excursions CANNOT trigger resume.
    */
   _handlePausedFix(fix, newPoint, wAccuracy, fixTime) {
+    console.log('[PAUSED FIX RECEIVED]', { lat: newPoint[0], lng: newPoint[1], accuracy: wAccuracy, fixTime });
+
     if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
       return; // Ignore poor accuracy fixes while paused
     }
@@ -473,6 +475,11 @@ export class RunEngine {
         timestamp: fixTime
       });
 
+      console.log('[PAUSED RESUME CANDIDATE]', {
+        candidateCount: this.pausedCandidateWindow.length,
+        distFromAnchor: distFromAnchor.toFixed(1)
+      });
+
       const oldestCand = this.pausedCandidateWindow[0];
       const newestCand = this.pausedCandidateWindow[this.pausedCandidateWindow.length - 1];
       const windowTimeSec = (newestCand.timestamp - oldestCand.timestamp) / 1000;
@@ -492,6 +499,7 @@ export class RunEngine {
       const hasValidSpeed = candSpeedKmh >= 0.8 && candSpeedKmh <= RUN_ENGINE_CONFIG.RESUME_MAX_SPEED_KMH;
 
       if (hasMinPoints && hasMinTime && hasProgression && hasMinDisplacement && hasValidSpeed) {
+        console.log('[PAUSED RESUME CONFIRMED]', { candidates: this.pausedCandidateWindow.length, speedKmh: candSpeedKmh.toFixed(1) });
         // RESUME CONFIRMED: Transition to TRACKING
         this.lastPoint = newPoint;
         this.pausedCandidateWindow = [];

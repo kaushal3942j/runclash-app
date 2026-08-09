@@ -1,6 +1,7 @@
 /**
- * RunClash 2.0 — Motion Classifier
- * Pure evaluation logic for WAITING and TRACKING motion states using rolling time windows.
+ * RunClash 2.0 — Consensus Motion Classifier
+ * Robust time-window classification designed for real mobile hardware.
+ * Handles Android coords.speed=0 unreliability, tight terrace curves, and stationary drift protection.
  */
 
 import { RUN_ENGINE_CONFIG } from './runEngineConfig.js';
@@ -49,7 +50,7 @@ export function classifyWaitingBuffer(buffer, baseline) {
     accuracy: latestFix.accuracy
   };
 
-  // Primary Pass: Sustained coherent motion over 8s window
+  // Primary Pass: Sustained coherent motion over rolling window
   const primaryPass =
     netDisplacementMeters >= RUN_ENGINE_CONFIG.WAITING_MIN_NET_DISPLACEMENT &&
     totalPathMeters >= RUN_ENGINE_CONFIG.WAITING_MIN_PATH_METERS &&
@@ -74,8 +75,8 @@ export function classifyWaitingBuffer(buffer, baseline) {
 }
 
 /**
- * Classifies rolling window of GPS fixes in TRACKING state.
- * Evaluates whether movement is MOVING, UNCERTAIN, or STATIONARY.
+ * Classifies rolling window of GPS fixes in TRACKING state using Consensus Logic.
+ * Solves real device Android coords.speed=0 unreliability and tight terrace curves.
  * 
  * @param {Array} activeWindow Array of fix objects { lat, lng, accuracy, stepMeters, segmentSpeedKmh, coordsSpeedKmh, timestamp }
  * @param {number|null} latestCoordsSpeed Device coords.speed in km/h or null
@@ -84,7 +85,6 @@ export function classifyWaitingBuffer(buffer, baseline) {
  */
 export function classifyTrackingWindow(activeWindow, latestCoordsSpeed, wAccuracy) {
   if (!activeWindow || activeWindow.length < 2) {
-    // Single fix without history is treated as UNCERTAIN until window establishes
     return {
       classification: 'UNCERTAIN',
       windowNetDisplacement: 0,
@@ -112,18 +112,33 @@ export function classifyTrackingWindow(activeWindow, latestCoordsSpeed, wAccurac
   const medianSpeed = calculateMedian(speeds);
   const directionEfficiency = calculateDirectionEfficiency(windowNetDisplacement, windowPathMeters);
 
-  // Recent 3-fix displacement (current motion check vs 8s window history)
-  let recent3Displacement = windowNetDisplacement;
+  // Calculate median speed over last 3 fixes (current fix trend vs 8s history)
+  let recent3MedianSpeed = medianSpeed;
   if (activeWindow.length >= 3) {
-    const pRecent = activeWindow[activeWindow.length - 3];
-    recent3Displacement = getDistanceInMeters(pRecent.lat, pRecent.lng, latest.lat, latest.lng);
+    const recent3 = activeWindow.slice(-3);
+    const rSpeeds = [];
+    for (let i = 1; i < recent3.length; i++) {
+      const dM = getDistanceInMeters(recent3[i - 1].lat, recent3[i - 1].lng, recent3[i].lat, recent3[i].lng);
+      const dtS = (recent3[i].timestamp - recent3[i - 1].timestamp) / 1000;
+      if (dtS > 0) rSpeeds.push((dM / dtS) * 3.6);
+    }
+    recent3MedianSpeed = calculateMedian(rSpeeds);
   }
 
-  // PHYSICAL STOP PROTECTION: If device coords.speed < 0.6 km/h or recent 3 fixes show < 1.0m movement, classify STATIONARY immediately
-  const isZeroSpeed = (latestCoordsSpeed !== null && latestCoordsSpeed < 0.6);
-  const isRecentSlow = (activeWindow.length >= 3 && recent3Displacement < 1.0 && (latestCoordsSpeed === null || latestCoordsSpeed < 0.6));
+  // ==============================================================
+  // PART 5 — STATIONARY STRONG CONSENSUS RULE
+  // ==============================================================
+  // STATIONARY requires CONSENSUS across parameters.
+  // If recent 3 fixes show median speed < 0.6 km/h OR window net < 1.5m and path < 2.0m
+  const isRecentSlow = (activeWindow.length >= 3 && recent3MedianSpeed < 0.6);
+  const isLowNet = windowNetDisplacement < 1.5;
+  const isLowPath = windowPathMeters < 2.0;
+  const isLowMedianSpeed = medianSpeed < 0.8;
+  const isGoodAccuracy = wAccuracy <= RUN_ENGINE_CONFIG.GPS_STATIONARY_ACCURACY;
 
-  if ((isZeroSpeed || isRecentSlow) && wAccuracy <= RUN_ENGINE_CONFIG.GPS_STATIONARY_ACCURACY) {
+  const isStationaryConsensus = (isRecentSlow || (isLowNet && isLowPath && isLowMedianSpeed)) && isGoodAccuracy;
+
+  if (isStationaryConsensus) {
     return {
       classification: 'STATIONARY',
       windowNetDisplacement,
@@ -133,39 +148,35 @@ export function classifyTrackingWindow(activeWindow, latestCoordsSpeed, wAccurac
     };
   }
 
-  // Multi-Signal Evidence Evaluation:
-  // 1. Displacement Evidence: Net displacement >= 2.5m AND accumulated path >= 3.0m
-  const displacementEvidence =
-    (windowNetDisplacement >= RUN_ENGINE_CONFIG.MOVING_NET_DISPLACEMENT) &&
-    (windowPathMeters >= RUN_ENGINE_CONFIG.MOVING_MIN_PATH_METERS);
+  // ==============================================================
+  // PART 6 — MOVING STRONG CONSENSUS RULE
+  // ==============================================================
+  // Supports slow terrace walking and tight curved turns while rejecting back-and-forth jitter.
+  // 1. Path Evidence: Accumulated path length >= 2.5m AND net displacement >= 1.5m AND median speed >= 0.7 km/h
+  const pathEvidence = (windowPathMeters >= 2.5) && (windowNetDisplacement >= 1.5) && (medianSpeed >= 0.7);
 
-  // 2. Speed Evidence: Median window speed >= 1.0 km/h OR reliable coords.speed >= 1.0 km/h
-  const speedEvidence =
-    (medianSpeed >= RUN_ENGINE_CONFIG.MOVING_MIN_SPEED_KMH) ||
-    (latestCoordsSpeed !== null && latestCoordsSpeed >= RUN_ENGINE_CONFIG.MOVING_MIN_SPEED_KMH);
+  // 2. Net Displacement Evidence: Net displacement >= 1.8m AND directionEfficiency >= 0.25 AND median speed >= 0.7 km/h
+  const displacementEvidence = (windowNetDisplacement >= 1.8) && (directionEfficiency >= 0.25) && (medianSpeed >= 0.7);
 
-  // 3. Translation Coherence Evidence: Direction efficiency >= 0.40 (progressive translation vs stationary jitter)
-  const translationEvidence = directionEfficiency >= RUN_ENGINE_CONFIG.MOVING_MIN_EFFICIENCY;
+  // 3. Hardware Speed Evidence (if reliable): coords.speed >= 1.0 km/h AND windowPathMeters >= 1.5m
+  const coordsSpeedEvidence = (latestCoordsSpeed !== null && latestCoordsSpeed >= 1.0) && (windowPathMeters >= 1.5);
 
-  // MOVING requires displacementEvidence AND (speedEvidence OR translationEvidence)
-  // CRITICAL SAFETY: 2.5m net displacement ALONE CANNOT classify MOVING!
-  const isMovingCredible = displacementEvidence && (speedEvidence || translationEvidence);
+  const isMovingConsensus = pathEvidence || displacementEvidence || coordsSpeedEvidence;
 
-  let classification = 'UNCERTAIN';
-
-  if (isMovingCredible) {
-    classification = 'MOVING';
-  } else if (
-    windowNetDisplacement < 1.2 &&
-    (latestCoordsSpeed === null || latestCoordsSpeed < 0.6) &&
-    medianSpeed < 0.8 &&
-    wAccuracy <= RUN_ENGINE_CONFIG.GPS_STATIONARY_ACCURACY
-  ) {
-    classification = 'STATIONARY';
+  if (isMovingConsensus) {
+    return {
+      classification: 'MOVING',
+      windowNetDisplacement,
+      windowPathMeters,
+      medianSpeed,
+      directionEfficiency
+    };
   }
 
+  // Weak or conflicting evidence (e.g. noisy jitter without consensus) -> UNCERTAIN
+  // UNCERTAIN freezes official distance, does NOT advance stationary timeout, and does NOT trigger pause.
   return {
-    classification,
+    classification: 'UNCERTAIN',
     windowNetDisplacement,
     windowPathMeters,
     medianSpeed,

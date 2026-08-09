@@ -2,6 +2,7 @@
  * RunClash 2.0 — Run Metrics Manager
  * Single authoritative owner of official distance, active duration, official path,
  * live speed, and live pace. Enforces distance & duration monotonicity invariants.
+ * Formats all UI metrics to clean, human-readable numbers at the snapshot boundary.
  */
 
 import { calculateConsistentRunStats } from './gpsMath.js';
@@ -17,7 +18,7 @@ export class RunMetricsManager {
     this.lastPoint = null;
     this.activeDurationAccumulated = 0;
     this.trackingSegmentStart = null;
-    this.liveSpeedKmh = 0;
+    this.liveSpeedKmh = 0.0;
     this.livePace = '--:--';
     this.speedHistory = [];
     this.acceptedFixesCount = 0;
@@ -52,7 +53,7 @@ export class RunMetricsManager {
     if (this.speedHistory.length > 5) this.speedHistory.shift();
 
     const avgSpeed = this.speedHistory.reduce((a, b) => a + b.speed, 0) / this.speedHistory.length;
-    this.liveSpeedKmh = parseFloat(avgSpeed.toFixed(1));
+    this.liveSpeedKmh = Number(avgSpeed.toFixed(1));
 
     const currentDuration = this.getDurationSeconds(nowTime);
     const stats = calculateConsistentRunStats(this.officialDistanceKm, currentDuration);
@@ -67,7 +68,7 @@ export class RunMetricsManager {
    * Official distance remains strictly frozen.
    */
   freezeStationarySpeed() {
-    this.liveSpeedKmh = 0;
+    this.liveSpeedKmh = 0.0;
     this.livePace = '--:--';
     this.speedHistory = [];
   }
@@ -115,18 +116,19 @@ export class RunMetricsManager {
 
   /**
    * Generates an immutable snapshot of metrics for UI display or Stop & Claim finalization.
+   * Formats all visible metrics to clean, human-readable numbers at the snapshot boundary.
    */
   getSnapshot(nowTimeMs = Date.now()) {
     const durationSec = this.getDurationSeconds(nowTimeMs);
     const stats = calculateConsistentRunStats(this.officialDistanceKm, durationSec);
 
     return {
-      distance: this.officialDistanceKm,
+      distance: Number(this.officialDistanceKm.toFixed(3)),
       duration: durationSec,
-      speed: this.liveSpeedKmh,
-      pace: this.livePace,
-      avgSpeed: stats.averageSpeedKmh,
-      avgPace: stats.formattedPace,
+      speed: Number((this.liveSpeedKmh || 0).toFixed(1)),
+      pace: this.livePace || '--:--',
+      avgSpeed: Number((stats.averageSpeedKmh || 0).toFixed(1)),
+      avgPace: stats.formattedPace || '--:--',
       path: [...this.officialPath],
       lastPoint: this.lastPoint ? [...this.lastPoint] : null,
       acceptedFixesCount: this.acceptedFixesCount,

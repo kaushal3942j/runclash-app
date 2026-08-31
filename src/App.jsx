@@ -999,9 +999,17 @@ export default function App() {
       preferCanvas: true
     }).setView([24.5950, 73.6800], 13.5);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
-      maxZoom: 20
-    }).addTo(map);
+    const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (mapboxToken) {
+      L.tileLayer(`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}@2x?access_token=${mapboxToken}`, {
+        maxZoom: 20,
+        attribution: '© <a href="https://www.mapbox.com/about/maps/">Mapbox</a>'
+      }).addTo(map);
+    } else {
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+        maxZoom: 20
+      }).addTo(map);
+    }
 
     mapInstanceRef.current = map;
     addLog("System: Leaflet Map loaded.");

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Geolocation } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
 import L from 'leaflet';
+import 'maplibre-gl';
+import '@maplibre/maplibre-gl-leaflet';
 import {
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass,
   Coins, MessageSquare, Send, Sparkles, AlertCircle, RefreshCw, Trophy, Target,
@@ -1076,17 +1078,16 @@ export default function App() {
       preferCanvas: true
     }).setView([24.5950, 73.6800], 13.5);
 
-    const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (mapboxToken) {
-      L.tileLayer(`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/256/{z}/{x}/{y}@2x?access_token=${mapboxToken}`, {
-        maxZoom: 20,
-        attribution: '© <a href="https://www.mapbox.com/about/maps/">Mapbox</a>'
-      }).addTo(map);
-    } else {
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
-        maxZoom: 20
-      }).addTo(map);
+    const cartoApiKey = import.meta.env.VITE_CARTO_API_KEY;
+    let styleUrl = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+    if (cartoApiKey) {
+      styleUrl += `?api_key=${cartoApiKey}`;
     }
+
+    L.maplibreGL({
+      style: styleUrl,
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
 
     mapInstanceRef.current = map;
     addLog("System: Leaflet Map loaded.");

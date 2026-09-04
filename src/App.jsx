@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Geolocation } from '@capacitor/geolocation';
+import { Capacitor } from '@capacitor/core';
 import L from 'leaflet';
 import {
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass,
@@ -48,6 +50,79 @@ const getClanColor = (clanName) => {
 
 import { SkeletonCard } from './components/common/SkeletonCard';
 
+// ----------------------------------------------------
+// NATIVE GPS ADAPTER
+// Wraps Capacitor's Promise-based Geolocation in the HTML5 sync API
+// ----------------------------------------------------
+const capacitorGeoAdapter = {
+  activeWatches: {},
+  nextId: 1,
+
+  getCurrentPosition: (success, error, options) => {
+    console.log('[GPS ADAPTER] Requesting current position...', options);
+    Geolocation.getCurrentPosition(options)
+      .then(pos => {
+        console.log('[GPS ADAPTER] Received position:', pos.coords.latitude, pos.coords.longitude);
+        success(pos);
+      })
+      .catch(err => {
+        console.error('[GPS ADAPTER] getCurrentPosition error:', err);
+        if (error) error(err);
+      });
+  },
+
+  watchPosition: (success, error, options) => {
+    const id = capacitorGeoAdapter.nextId++;
+    console.log(`[GPS ADAPTER] Starting watchPosition (Adapter ID: ${id})`);
+    capacitorGeoAdapter.activeWatches[id] = { nativeIdPromise: null, cancelled: false };
+
+    capacitorGeoAdapter.activeWatches[id].nativeIdPromise = Geolocation.watchPosition(options, (pos, err) => {
+      if (err) {
+        console.error(`[GPS ADAPTER] Watch error (Adapter ID: ${id}):`, err);
+        if (error) error(err);
+        return;
+      }
+      if (pos) {
+        success(pos);
+      }
+    });
+
+    return id;
+  },
+
+  clearWatch: (id) => {
+    console.log(`[GPS ADAPTER] Clearing watch (Adapter ID: ${id})`);
+    const watch = capacitorGeoAdapter.activeWatches[id];
+    if (watch) {
+      watch.cancelled = true;
+      if (watch.nativeIdPromise) {
+        watch.nativeIdPromise.then(nativeId => {
+          if (nativeId != null) {
+            Geolocation.clearWatch({ id: nativeId }).catch(e => console.error('[GPS ADAPTER] Failed native clearWatch:', e));
+          }
+        });
+      }
+      delete capacitorGeoAdapter.activeWatches[id];
+    }
+  }
+};
+
+// Unified helper to get Geolocation permissions natively on Android/iOS
+const requestGpsPermissions = async () => {
+  if (!Capacitor.isNativePlatform()) return true;
+  try {
+    const perm = await Geolocation.checkPermissions();
+    if (perm.location === 'granted') return true;
+
+    console.log('[GPS] Requesting runtime permissions...');
+    const req = await Geolocation.requestPermissions();
+    console.log('[GPS] Permission result:', req.location);
+    return req.location === 'granted';
+  } catch (err) {
+    console.error('[GPS] Error requesting permissions:', err);
+    return false;
+  }
+};
 // Predefined Simulation Routes for Udaipur (Developer Mode)
 const SIMULATION_ROUTES = {
   foothills: {
@@ -484,12 +559,14 @@ export default function App() {
       }
       setIsGpsReady(false);
 
-      const retrieveInitialLock = () => {
-        if (!navigator.geolocation) {
+      const retrieveInitialLock = async () => {
+        const hasPerms = await requestGpsPermissions();
+        if (!hasPerms) {
           setIsGpsReady(true);
           return;
         }
-        navigator.geolocation.getCurrentPosition(
+
+        capacitorGeoAdapter.getCurrentPosition(
           (position) => {
             setIsGpsReady(true);
             const lat = position.coords.latitude;
@@ -511,7 +588,7 @@ export default function App() {
             }
           },
           (error) => {
-            console.warn("[GPS] Initial lock failed:", error.message);
+            console.warn("[GPS] Initial lock failed:", error);
             setIsGpsReady(true); // Fallback to allow starting run
           },
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -811,7 +888,7 @@ export default function App() {
       window.removeEventListener('unhandledrejection', handleRejection);
       unsubscribeAuth();
       unsubscribeTerritories();
-      if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (watchIdRef.current) capacitorGeoAdapter.clearWatch(watchIdRef.current);
       if (simIntervalRef.current) {
         console.log(`[GPS Engine] Simulator interval cleared (unmount). ID: ${simIntervalRef.current}`);
         clearInterval(simIntervalRef.current);
@@ -881,8 +958,8 @@ export default function App() {
 
   // Center map on user location when entering Map tab in GPS mode
   useEffect(() => {
-    if (activeTab === 'map' && trackingMode === 'gps' && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
+    if (activeTab === 'map' && trackingMode === 'gps') {
+      capacitorGeoAdapter.getCurrentPosition(
         (position) => {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
@@ -891,7 +968,7 @@ export default function App() {
           }
         },
         (error) => {
-          console.warn("[GPS] Initial tab-load locate failed:", error.message);
+          console.warn("[GPS] Initial tab-load locate failed:", error);
         },
         { enableHighAccuracy: false, timeout: 60000, maximumAge: 60000 }
       );
@@ -1312,7 +1389,7 @@ export default function App() {
 
     // Start canonical Run Engine session and register GPS watch
     runEngine.startSession();
-    runEngine.registerGpsWatch();
+    runEngine.registerGpsWatch(capacitorGeoAdapter);
     addLog("GPS: Run session started. Tracking active.");
   };
 
@@ -1414,10 +1491,10 @@ export default function App() {
 
   const stopTracking = (reason = "Explicit User Request") => {
     runEngine.cancelSession(reason);
-    runEngine.clearGpsWatch();
+    runEngine.clearGpsWatch(capacitorGeoAdapter);
 
     if (watchIdRef.current) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
+      capacitorGeoAdapter.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
     if (simIntervalRef.current) {
@@ -1522,7 +1599,7 @@ export default function App() {
     const areaSqM = claimDiagnostic.polygonAreaSqm || calculatePolygonArea(loopCoordinates);
     const formattedArea = `${areaSqM.toLocaleString()} m²`;
 
-    if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+    if (watchIdRef.current) capacitorGeoAdapter.clearWatch(watchIdRef.current);
     if (simIntervalRef.current) {
       console.log(`[GPS Engine] Simulator interval cleared (finish). Interval ID: ${simIntervalRef.current}`);
       clearInterval(simIntervalRef.current);

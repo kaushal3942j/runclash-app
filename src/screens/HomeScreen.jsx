@@ -9,11 +9,15 @@ export const HomeScreen = ({
   getTodayLatestRun,
   formatDisplayDistance,
   territories = [],
-  leaderboard = []
+  leaderboard = [],
+  trackingMode,
+  setShowSettingsDrawer
 }) => {
   return (
-    <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '18px' }} className="fade-in">
+    <div style={{ display: activeTab === 'dashboard' ? 'flex' : 'none', flexDirection: 'column', gap: '20px', padding: '0 16px 18px 16px' }} className="fade-in">
       
+
+
       {/* Greeting Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
         <div>
@@ -26,7 +30,7 @@ export const HomeScreen = ({
             })()}
           </span>
           <h3 className="clash-title" style={{ margin: '2px 0 0 0', fontSize: '24px' }}>
-            {currentUser.displayName || 'Runner'}
+            {currentUser?.displayName || 'Runner'}
           </h3>
         </div>
         <div style={{
@@ -39,7 +43,7 @@ export const HomeScreen = ({
           textTransform: 'uppercase',
           letterSpacing: '0.8px'
         }}>
-          {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
+          {(!currentUser?.clan || currentUser?.clan === 'None') ? 'No Clan' : currentUser?.clan}
         </div>
       </div>
 
@@ -164,7 +168,7 @@ export const HomeScreen = ({
             <Coins size={14} style={{ color: '#FC4C02' }} />
             <span className="clash-label" style={{ fontSize: '10px' }}>Coins</span>
           </div>
-          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>{currentUser.coins}</h4>
+          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>{currentUser?.coins}</h4>
           <span className="clash-body" style={{ fontSize: '9px' }}>Spend in Armory &rarr;</span>
         </div>
 
@@ -174,8 +178,8 @@ export const HomeScreen = ({
             <Zap size={14} style={{ color: '#FC4C02' }} />
             <span className="clash-label" style={{ fontSize: '10px' }}>XP Level</span>
           </div>
-          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>LVL {currentUser.level}</h4>
-          <span className="clash-body" style={{ fontSize: '9px' }}>{currentUser.xp} total XP</span>
+          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>LVL {currentUser?.level}</h4>
+          <span className="clash-body" style={{ fontSize: '9px' }}>{currentUser?.xp} total XP</span>
         </div>
 
         {/* Sectors Conquered Card */}
@@ -185,7 +189,7 @@ export const HomeScreen = ({
             <span className="clash-label" style={{ fontSize: '10px' }}>Sectors</span>
           </div>
           <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>
-            {territories.filter(t => t.ownerId === currentUser.uid).length}
+            {territories.filter(t => t.ownerId === currentUser?.uid).length}
           </h4>
           <span className="clash-body" style={{ fontSize: '9px' }}>View conquered loops &rarr;</span>
         </div>
@@ -198,7 +202,7 @@ export const HomeScreen = ({
           </div>
           <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>
             {(() => {
-              const userRankIndex = leaderboard.findIndex(p => p.displayName === currentUser.displayName);
+              const userRankIndex = leaderboard.findIndex(p => p.displayName === currentUser?.displayName);
               return userRankIndex !== -1 ? `#${userRankIndex + 1}` : '#5';
             })()}
           </h4>
@@ -211,7 +215,7 @@ export const HomeScreen = ({
       <div className="clash-card" style={{ gap: '10px' }}>
         <span className="clash-label" style={{ fontSize: '10px' }}>Active Holding</span>
         {(() => {
-          const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
+          const userTerrs = territories.filter(t => t.ownerId === currentUser?.uid);
           const latest = userTerrs[userTerrs.length - 1];
           if (latest) {
             return (
@@ -240,7 +244,7 @@ export const HomeScreen = ({
       <div className="clash-card" style={{ gap: '10px' }}>
         <span className="clash-label" style={{ fontSize: '10px' }}>Recent Captures</span>
         {(() => {
-          const userTerrs = territories.filter(t => t.ownerId === currentUser.uid);
+          const userTerrs = territories.filter(t => t.ownerId === currentUser?.uid);
           if (userTerrs.length > 0) {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

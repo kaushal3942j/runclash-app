@@ -3,7 +3,7 @@ import React, { Component } from 'react';
 export class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, errorInfo: null };
   }
 
   static getDerivedStateFromError(error) {
@@ -12,6 +12,7 @@ export class ErrorBoundary extends Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[RUNCLASH ERROR BOUNDARY]', error, errorInfo);
+    this.setState({ errorInfo });
   }
 
   render() {
@@ -33,9 +34,21 @@ export class ErrorBoundary extends Component {
           <h2 style={{ margin: 0, color: '#FC4C02', fontSize: '18px', fontWeight: '800', textTransform: 'uppercase' }}>
             Tactical Subsystem Exception
           </h2>
-          <p style={{ fontSize: '12px', color: '#888888', maxWidth: '320px', margin: 0, lineHeight: 1.5 }}>
-            {this.state.error ? this.state.error.toString() : 'An unexpected UI state occurred.'}
-          </p>
+          <div style={{ textAlign: 'left', background: '#222', padding: '10px', borderRadius: '8px', overflow: 'auto', maxHeight: '40vh', width: '90%' }}>
+            <p style={{ fontSize: '12px', color: '#ff6b6b', margin: '0 0 10px 0', fontFamily: 'monospace' }}>
+              {this.state.error ? this.state.error.toString() : 'An unexpected UI state occurred.'}
+            </p>
+            {this.state.error?.stack && (
+              <pre style={{ fontSize: '10px', color: '#ccc', margin: '0 0 10px 0', whiteSpace: 'pre-wrap' }}>
+                {this.state.error.stack}
+              </pre>
+            )}
+            {this.state.errorInfo?.componentStack && (
+              <pre style={{ fontSize: '10px', color: '#888', margin: 0, whiteSpace: 'pre-wrap' }}>
+                {this.state.errorInfo.componentStack}
+              </pre>
+            )}
+          </div>
           <button
             onClick={() => window.location.reload()}
             style={{

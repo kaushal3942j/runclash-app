@@ -19,6 +19,7 @@ import {
 import { PhotoGalleryModal } from './components/profile/PhotoGalleryModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { HomeScreen } from './screens/HomeScreen';
+import { GlobalHeader } from './components/ui/GlobalHeader';
 import { ConquestsScreen } from './screens/ConquestsScreen';
 import { SocialScreen } from './screens/SocialScreen';
 import { CoachScreen } from './screens/CoachScreen';
@@ -307,29 +308,29 @@ export default function App() {
   });
   const debugHistoryRef = useRef([]);
 
-  const showToast = useCallback((message, durationMs = 4000) => {
+  const showToast = useCallback((message) => {
     if (!message) return;
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(message);
-    toastTimerRef.current = setTimeout(() => {
-      setToastMessage(null);
-      toastTimerRef.current = null;
-    }, durationMs);
   }, []);
-
-
 
   useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    };
-  }, []);
+    if (!toastMessage) return;
+    const timer = setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
+
+  const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+
+  useEffect(() => {
+    setToastMessage(null);
+  }, [activeTab, showSettingsDrawer]);
 
   const [showCameraFlash, setShowCameraFlash] = useState(false);
 
   const lastEnteredSectorIdRef = useRef(null);
 
-  const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState(false);
 
   // Selected Territory State & Fade-in transition handler
@@ -1489,8 +1490,7 @@ export default function App() {
       const errMsg = `Claim Exception: ${err.message || 'Unknown Error'}`;
       addLog(errMsg);
       setToastMessage(errMsg);
-      setTimeout(() => setToastMessage(null), 6000);
-    } finally {
+          } finally {
       setIsFinalizingRun(false);
     }
   };
@@ -1633,8 +1633,7 @@ export default function App() {
           { distance: runState.distance, duration: runState.duration, avgSpeed: overallAvgSpeed }
         );
         setToastMessage("Anti-Cheat Triggered: Average speed exceeds realistic running limits.");
-        setTimeout(() => setToastMessage(null), 4000);
-        stopTracking("Anti-Cheat Average Speed Spike Cutoff");
+                stopTracking("Anti-Cheat Average Speed Spike Cutoff");
         return;
       }
 
@@ -1661,8 +1660,7 @@ export default function App() {
           { suspicionScore, metrics: cheatMetricsRef.current, avgSpeed: overallAvgSpeed }
         );
         setToastMessage("Anti-Cheat Triggered: Unrealistic movement signals detected.");
-        setTimeout(() => setToastMessage(null), 4000);
-        stopTracking("Anti-Cheat High Suspicion Score Invalidation");
+                stopTracking("Anti-Cheat High Suspicion Score Invalidation");
         return;
       }
 
@@ -1744,8 +1742,7 @@ export default function App() {
     if (territoryRes?.queued) {
       addLog(`System: Territory '${sectorName}' saved locally and queued for sync.`);
       setToastMessage("Territory saved locally and queued for sync");
-      setTimeout(() => setToastMessage(null), 4000);
-    } else if (territoryRes?.error) {
+          } else if (territoryRes?.error) {
       addLog(`System: Territory Notice: ${territoryRes.error}`);
     } else {
       addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
@@ -2361,115 +2358,18 @@ export default function App() {
 
           {/* Header */}
           <div style={{
-            padding: '16px',
-            borderBottom: '1px solid var(--border-color)',
-            display: activeTab === 'map' ? 'none' : 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: 'rgba(10, 10, 20, 0.9)',
-            backdropFilter: 'blur(10px)',
+            paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+            paddingLeft: '16px',
+            paddingRight: '16px',
+            display: activeTab === 'map' ? 'none' : 'block',
             zIndex: 100
           }}>
-            {/* Offline Banner Notice — ONLY when identityMode is offline-local */}
-            {identityMode === 'offline-local' && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                background: 'rgba(252, 76, 2, 0.1)',
-                borderBottom: '1px solid rgba(252, 76, 2, 0.3)',
-                padding: '5px 12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                fontSize: '10px',
-                color: '#FC4C02',
-                fontWeight: '700',
-                zIndex: 99
-              }}>
-                <AlertCircle size={12} />
-                <span>Offline profile active. Connect to sync your progress.</span>
-              </div>
-            )}
-
-            {/* Auth Error Banner Notice — ONLY when identityMode is error */}
-            {identityMode === 'error' && authErrorMessage && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                background: 'rgba(252, 76, 2, 0.15)',
-                borderBottom: '1px solid rgba(252, 76, 2, 0.4)',
-                padding: '5px 12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                fontSize: '10px',
-                color: '#FC4C02',
-                fontWeight: '700',
-                zIndex: 99
-              }}>
-                <AlertCircle size={12} />
-                <span>{authErrorMessage}</span>
-              </div>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{
-                width: '34px',
-                height: '34px',
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, var(--neon-blue) 0%, var(--neon-purple) 100%)',
-                border: '2px solid var(--neon-blue)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: '800',
-                fontSize: '13px',
-                color: 'white',
-                boxShadow: 'var(--glow-blue)'
-              }}>
-                {currentUser.displayName?.substring(0,1).toUpperCase() || 'U'}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', letterSpacing: '-0.3px' }}>{currentUser.displayName}</span>
-                <span style={{ fontSize: '9px', color: 'var(--neon-blue)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{currentUser.clan}</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(255, 251, 0, 0.08)', border: '1px solid rgba(255, 251, 0, 0.15)', padding: '4px 8px', borderRadius: '20px', boxShadow: 'var(--glow-yellow)' }}>
-                <Coins size={11} className="text-neon-yellow" />
-                <span style={{ fontSize: '11px', fontWeight: '800', fontFamily: 'var(--font-mono)', color: 'white' }}>{currentUser.coins}</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
-                <span style={{ fontSize: '9px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>LVL {currentUser.level}</span>
-                <div style={{ width: '45px', height: '4px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ width: `${(currentUser.xp / (currentUser.nextLevelXp || 2500)) * 100}%`, height: '100%', background: 'var(--neon-pink)' }}></div>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSettingsDrawer(prev => !prev)}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1.5px solid var(--border-color)',
-                  borderRadius: '10px',
-                  color: showSettingsDrawer ? 'var(--neon-pink)' : 'white',
-                  cursor: 'pointer',
-                  padding: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'all 0.2s ease'
-                }}
-                title="Settings"
-              >
-                <Settings size={14} style={{ transition: 'transform 0.3s ease', transform: showSettingsDrawer ? 'rotate(90deg)' : 'rotate(0)' }} />
-              </button>
-            </div>
+            <GlobalHeader
+              currentUser={currentUser}
+              runState={runState}
+              trackingMode={trackingMode}
+              setShowSettingsDrawer={setShowSettingsDrawer}
+            />
           </div>
 
           {/* Active Tab Screen Content */}
@@ -3170,8 +3070,7 @@ export default function App() {
                               localStorage.setItem('clash_user', JSON.stringify(updatedUser));
                               setActiveSettingSubpage(null);
                               setToastMessage("Account settings updated successfully!");
-                              setTimeout(() => setToastMessage(null), 3000);
-                            }}
+                                                          }}
                             className="clash-btn-primary"
                             style={{ height: '42px', fontSize: '11px', marginTop: '6px', cursor: 'pointer' }}
                           >
@@ -3294,8 +3193,7 @@ export default function App() {
                           onClick={() => {
                             navigator.clipboard.writeText(`Check out my RunClash stats! LVL ${currentUser.level} | ${currentUser.clan}`);
                             setToastMessage("Profile details copied to clipboard!");
-                            setTimeout(() => setToastMessage(null), 3000);
-                          }}
+                                                      }}
                           className="clash-btn-secondary btn-sm"
                           style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', fontWeight: '800', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
                         >
@@ -3713,6 +3611,8 @@ export default function App() {
               formatDisplayDistance={formatDisplayDistance}
               territories={territories}
               leaderboard={leaderboard}
+              trackingMode={trackingMode}
+              setShowSettingsDrawer={setShowSettingsDrawer}
             />
 
             {/* TAB: MAP */}
@@ -3759,7 +3659,7 @@ export default function App() {
                 top: 0,
                 left: 0,
                 right: 0,
-                paddingTop: 'calc(16px + env(safe-area-inset-top, 0px))',
+                paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
                 paddingLeft: '16px',
                 paddingRight: '16px',
                 display: 'flex',
@@ -3769,145 +3669,56 @@ export default function App() {
                 pointerEvents: 'none'
               }}>
                 {/* 1. Floating top Command Header */}
-                {runState.status === 'idle' && (
-                  <div
-                    className="clash-glass-panel animate-fade-in-down"
-                    style={{
-                      borderRadius: '24px',
-                      padding: '10px 12px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
-                      gap: '6px',
-                      pointerEvents: 'auto'
-                    }}
-                  >
-                    {/* LEFT: Profile & Clan Info */}
-                    <div
-                      onClick={() => setShowSettingsDrawer(true)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0 }}
-                    >
-                      <div style={{
-                        width: '44px',
-                        height: '44px',
-                        borderRadius: '50%',
-                        background: '#FC4C02',
-                        border: '1.5px solid rgba(255, 255, 255, 0.2)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '16px',
-                        fontWeight: '800',
-                        color: 'white',
-                        flexShrink: 0
-                      }}
-                      className="clash-btn-press"
-                      >
-                        {(currentUser.displayName || 'R')[0].toUpperCase()}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flexShrink: 0 }}>
-                        <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', lineHeight: 1 }}>
-                          {currentUser.displayName}
-                        </span>
-                        <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
+                <GlobalHeader
+                  currentUser={currentUser}
+                  runState={runState}
+                  trackingMode={trackingMode}
+                  setShowSettingsDrawer={setShowSettingsDrawer}
+                />
+                {/* Run Tracking Info Badges (Floating below top header) */}
+                {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'none' }}>
+                    
+                    {/* Left: GPS Badges during run */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', pointerEvents: 'auto' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(252, 76, 2, 0.08)', padding: '4px 10px', borderRadius: '12px', border: '1px solid rgba(252, 76, 2, 0.2)' }}>
+                        <span style={{
+                          width: '6px', height: '6px', borderRadius: '50%',
+                          background: runState.status === 'paused' ? '#FBBF24' : '#FC4C02',
+                          display: 'inline-block', animation: 'pulse 1.2s infinite'
+                        }}></span>
+                        <span style={{ fontSize: '9px', fontWeight: '800', color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : '#FC4C02', letterSpacing: '0.5px' }}>
+                          {runState.manualPaused ? 'MANUALLY PAUSED' : runState.status === 'acquiring' ? 'ACQUIRING GPS' : runState.status === 'waiting' ? 'WAITING MOVEMENT' : runState.status === 'paused' ? 'AUTO-PAUSED' : 'LIVE REC'}
                         </span>
                       </div>
-                    </div>
-
-                    {/* CENTER: Coin Counter */}
-                    <div style={{
-                      background: 'rgba(0, 0, 0, 0.25)',
-                      border: '1px solid rgba(255, 255, 255, 0.05)',
-                      height: '34px',
-                      padding: '0 10px',
-                      borderRadius: '17px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      flexShrink: 0
-                    }}>
-                      <Coins size={12} style={{ color: '#FC4C02' }} />
-                      <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
-                        {currentUser.coins}
-                      </span>
-                    </div>
-
-                    {/* RIGHT: Level, GPS Status & Settings */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                      <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02', background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.2)', padding: '4px 8px', borderRadius: '8px', flexShrink: 0 }}>
-                        LVL {currentUser.level}
-                      </span>
-
-                      <div style={{
-                        background: 'rgba(0, 0, 0, 0.25)',
-                        border: '1px solid rgba(255, 255, 255, 0.05)',
-                        height: '34px',
-                        padding: '0 10px',
-                        borderRadius: '17px',
-                        fontSize: '10px',
-                        fontWeight: '800',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        color: 'white',
-                        flexShrink: 0
-                      }}>
-                        {(() => {
-                          if (trackingMode === 'sim') {
-                            return (
-                              <>
-                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }} className="gps-pulse"></span>
-                                <span>Sim</span>
-                              </>
-                            );
-                          }
-                          if (runState.gpsAccuracy === null) {
-                            return (
-                              <>
-                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#888888', display: 'inline-block' }}></span>
-                                <span>GPS</span>
-                              </>
-                            );
-                          }
-                          if (runState.gpsAccuracy < 30) {
-                            return (
-                              <>
-                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} className="gps-pulse"></span>
-                                <span>GPS</span>
-                              </>
-                            );
-                          }
-                          return (
-                            <>
-                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#EF4444', display: 'inline-block' }}></span>
-                              <span>Lost</span>
-                            </>
-                          );
-                        })()}
+                      
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(11, 11, 13, 0.9)', padding: '4px 10px', borderRadius: '12px', border: '1px solid #2A2A2A', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+                        <span style={{
+                          fontSize: '9px', fontWeight: '800',
+                          color: (() => {
+                            if (trackingMode === 'sim') return '#10B981';
+                            const acc = runState.gpsAccuracy;
+                            if (acc === null) return '#EF4444';
+                            if (acc < 10) return '#10B981';
+                            if (acc <= 25) return '#FBBF24';
+                            if (acc <= 50) return '#F97316';
+                            return '#EF4444';
+                          })()
+                        }}>
+                          {(() => {
+                            if (trackingMode === 'sim') return '🟢 GPS LOCKED';
+                            const acc = runState.gpsAccuracy;
+                            if (acc === null) return '🔴 GPS WEAK';
+                            if (acc < 10) return '🟢 GPS LOCKED';
+                            if (acc <= 25) return '🟡 GPS GOOD';
+                            if (acc <= 50) return '🟠 GPS FAIR';
+                            return '🔴 GPS WEAK';
+                          })()}
+                        </span>
+                        <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
+                          {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
+                        </span>
                       </div>
-
-                      <button
-                        onClick={() => setShowSettingsDrawer(true)}
-                        style={{
-                          background: 'rgba(0, 0, 0, 0.25)',
-                          border: '1px solid rgba(255, 255, 255, 0.05)',
-                          color: 'white',
-                          width: '44px',
-                          height: '44px',
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          flexShrink: 0
-                        }}
-                        className="clash-btn-press"
-                        title="Tactical settings"
-                      >
-                        <Settings size={18} style={{ color: '#FC4C02' }} />
-                      </button>
                     </div>
                   </div>
                 )}
@@ -4590,95 +4401,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* COMPACT TOP HUD */}
-              {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
-                <div
-                  className="clash-glass-panel animate-fade-in-down"
-                  style={{
-                    position: 'absolute',
-                    top: '16px',
-                    left: '16px',
-                    right: '16px',
-                    borderRadius: '24px',
-                    padding: '8px 16px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    zIndex: 1000,
-                    background: 'rgba(11, 11, 13, 0.9)',
-                    border: '1px solid #2A2A2A',
-                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{
-                      width: '28px',
-                      height: '28px',
-                      borderRadius: '50%',
-                      background: '#FC4C02',
-                      border: '1.5px solid rgba(255, 255, 255, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '11px',
-                      fontWeight: '800',
-                      color: 'white',
-                      flexShrink: 0
-                    }}>
-                      {(currentUser.displayName || 'R')[0].toUpperCase()}
-                    </div>
-                    <span style={{ fontSize: '12px', fontWeight: '800', color: 'white' }}>
-                      {currentUser.displayName}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(252, 76, 2, 0.08)', padding: '4px 10px', borderRadius: '12px', border: '1px solid rgba(252, 76, 2, 0.2)' }}>
-                    <span style={{
-                      width: '6px',
-                      height: '6px',
-                      borderRadius: '50%',
-                      background: runState.status === 'paused' ? '#FBBF24' : '#FC4C02',
-                      display: 'inline-block',
-                      animation: 'pulse 1.2s infinite'
-                    }}></span>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: (runState.manualPaused || runState.status === 'paused') ? '#FBBF24' : '#FC4C02', letterSpacing: '0.5px' }}>
-                      {runState.manualPaused ? 'MANUALLY PAUSED' : runState.status === 'acquiring' ? 'ACQUIRING GPS' : runState.status === 'waiting' ? 'WAITING MOVEMENT' : runState.status === 'paused' ? 'AUTO-PAUSED' : 'LIVE REC'}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: '800',
-                      color: (() => {
-                        if (trackingMode === 'sim') return '#10B981';
-                        const acc = runState.gpsAccuracy;
-                        if (acc === null) return '#EF4444';
-                        if (acc < 10) return '#10B981';
-                        if (acc <= 25) return '#FBBF24';
-                        if (acc <= 50) return '#F97316';
-                        return '#EF4444';
-                      })()
-                    }}>
-                      {(() => {
-                        if (trackingMode === 'sim') return '🟢 GPS LOCKED';
-                        const acc = runState.gpsAccuracy;
-                        if (acc === null) return '🔴 GPS WEAK';
-                        if (acc < 10) return '🟢 GPS LOCKED';
-                        if (acc <= 25) return '🟡 GPS GOOD';
-                        if (acc <= 50) return '🟠 GPS FAIR';
-                        return '🔴 GPS WEAK';
-                      })()}
-                    </span>
-                    <span style={{ fontSize: '13px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-mono)' }}>
-                      {Math.floor(runState.duration / 60)}:{(runState.duration % 60).toString().padStart(2, '0')}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-
-
               {/* FLOATING CAMERA ACTION SHEET */}
               {cameraSheetOpen && (
                 <div
@@ -4724,8 +4446,7 @@ export default function App() {
                         setShowCameraFlash(true);
                         setTimeout(() => setShowCameraFlash(false), 200);
                         setToastMessage("Snapshot Saved: Drone Recon Record logged.");
-                        setTimeout(() => setToastMessage(null), 3000);
-                        setCameraSheetOpen(false);
+                                                setCameraSheetOpen(false);
                       }}
                       className="clash-btn-primary"
                       style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
@@ -4738,8 +4459,7 @@ export default function App() {
                         setShowCameraFlash(true);
                         setTimeout(() => setShowCameraFlash(false), 200);
                         setToastMessage("Recon Video Saved: Tactical story created.");
-                        setTimeout(() => setToastMessage(null), 3000);
-                        setCameraSheetOpen(false);
+                                                setCameraSheetOpen(false);
                       }}
                       className="clash-btn-primary"
                       style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
@@ -5128,8 +4848,7 @@ export default function App() {
               <PremiumScreen currentUser={currentUser} onUpgrade={() => {
                 setCurrentUser(prev => ({ ...prev, subscription_tier: 'premium' }));
                 setToastMessage('Success: Upgraded to RunClash Pro Membership!');
-                setTimeout(() => setToastMessage(null), 5000);
-              }} />
+                              }} />
             </div>
 
           </div>
@@ -5771,8 +5490,7 @@ export default function App() {
                           <button
                             onClick={() => {
                               setToastMessage("🚧 Tactical chat channel coming soon!");
-                              setTimeout(() => setToastMessage(null), 3000);
-                              setSelectedProfileUser(null);
+                                                            setSelectedProfileUser(null);
                             }}
                             className="clash-btn-primary clash-btn-press"
                             style={{ height: '42px', flex: 1.2, borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}

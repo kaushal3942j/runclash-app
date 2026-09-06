@@ -4,7 +4,7 @@ import { RefreshCw, Trash2, AlertOctagon } from 'lucide-react';
 export class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, errorInfo: null };
   }
 
   static getDerivedStateFromError(error) {
@@ -13,6 +13,7 @@ export class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[ERROR BOUNDARY] error captured:', error, errorInfo);
+    this.setState({ errorInfo });
   }
 
   handleRetry = () => {
@@ -74,9 +75,25 @@ export class ErrorBoundary extends React.Component {
               RunClash could not start
             </h2>
 
-            <p style={{ fontSize: '13px', color: '#A0A0A0', margin: '0 0 28px 0', lineHeight: '1.5' }}>
+            <p style={{ fontSize: '13px', color: '#A0A0A0', margin: '0 0 12px 0', lineHeight: '1.5' }}>
               A temporary initialization error occurred. Your workout and territory progress is safe.
             </p>
+
+            <div style={{ textAlign: 'left', background: '#222', padding: '10px', borderRadius: '8px', overflow: 'auto', maxHeight: '40vh', marginBottom: '20px' }}>
+              <p style={{ fontSize: '12px', color: '#ff6b6b', margin: '0 0 10px 0', fontFamily: 'monospace' }}>
+                {this.state.error ? this.state.error.toString() : 'Unknown error'}
+              </p>
+              {this.state.error?.stack && (
+                <pre style={{ fontSize: '10px', color: '#ccc', margin: '0 0 10px 0', whiteSpace: 'pre-wrap' }}>
+                  {this.state.error.stack}
+                </pre>
+              )}
+              {this.state.errorInfo?.componentStack && (
+                <pre style={{ fontSize: '10px', color: '#888', margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {this.state.errorInfo.componentStack}
+                </pre>
+              )}
+            </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <button

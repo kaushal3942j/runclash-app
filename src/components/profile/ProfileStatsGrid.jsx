@@ -1,7 +1,7 @@
 import React from 'react';
 import { Activity, Map, Zap, Flame, Trophy, Maximize2 } from 'lucide-react';
 
-export const ProfileStatsGrid = ({ stats }) => {
+export const ProfileStatsGrid = ({ stats, isLoading }) => {
   const safeStats = stats || {
     totalDistanceKm: 0,
     totalRuns: 0,
@@ -46,9 +46,13 @@ export const ProfileStatsGrid = ({ stats }) => {
               <span className="clash-label" style={{ fontSize: '9px', letterSpacing: '1px' }}>{item.label}</span>
               <IconComp size={14} style={{ color: item.color }} />
             </div>
-            <span style={{ fontSize: '18px', fontWeight: '900', color: 'white', letterSpacing: '-0.5px' }}>
-              {item.value}
-            </span>
+            {isLoading ? (
+              <div className="skeleton" style={{ width: '60%', height: '24px', marginTop: '4px' }}></div>
+            ) : (
+              <span style={{ fontSize: '18px', fontWeight: '900', color: 'white', letterSpacing: '-0.5px' }}>
+                {item.value}
+              </span>
+            )}
           </div>
         );
       })}

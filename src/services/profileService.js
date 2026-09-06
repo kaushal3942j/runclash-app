@@ -248,30 +248,34 @@ export const loadProfileStats = async (targetUserId) => {
   }
 
   try {
-    const { data: runs } = await supabase
+    const { data: runs, error: runsError } = await supabase
       .from('runs')
-      .select('distance, duration, pace')
+      .select('distance_km, duration_seconds, pace_seconds_per_km')
       .eq('user_id', targetUserId);
 
-    const { data: territories } = await supabase
+    if (runsError) console.warn('[PROFILE STATS] runs fetch error:', runsError.message);
+
+    const { data: territories, error: terrError } = await supabase
       .from('territories')
-      .select('id, area')
+      .select('id, area_sqm')
       .eq('owner_id', targetUserId);
+
+    if (terrError) console.warn('[PROFILE STATS] territories fetch error:', terrError.message);
 
     const runList = runs || [];
     const terrList = territories || [];
 
     const totalRuns = runList.length;
-    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance) || 0), 0);
-    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance) || 0), 0);
+    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance_km) || 0), 0);
+    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance_km) || 0), 0);
 
-    const validPaces = runList.map(r => Number(r.pace)).filter(p => p > 0);
+    const validPaces = runList.map(r => Number(r.pace_seconds_per_km)).filter(p => p > 0);
     const fastestPaceSec = validPaces.length ? Math.min(...validPaces) : 0;
     const avgPaceSec = validPaces.length ? Math.round(validPaces.reduce((a, b) => a + b, 0) / validPaces.length) : 0;
 
     const territoriesOwned = terrList.length;
-    const totalControlledAreaM2 = terrList.reduce((acc, t) => acc + (Number(t.area) || 0), 0);
-    const biggestTerritoryM2 = terrList.reduce((max, t) => Math.max(max, Number(t.area) || 0), 0);
+    const totalControlledAreaM2 = terrList.reduce((acc, t) => acc + (Number(t.area_sqm) || 0), 0);
+    const biggestTerritoryM2 = terrList.reduce((max, t) => Math.max(max, Number(t.area_sqm) || 0), 0);
 
     return {
       success: true,

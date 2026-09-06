@@ -44,7 +44,7 @@ export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut }) =>
           </h4>
           {isLoadingStats && <RefreshCw size={12} className="spin" style={{ color: '#FC4C02' }} />}
         </div>
-        <ProfileStatsGrid stats={stats} />
+        <ProfileStatsGrid stats={stats} isLoading={isLoadingStats} />
       </div>
 
       {/* Account Settings Action */}

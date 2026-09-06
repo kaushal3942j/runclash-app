@@ -3,6 +3,7 @@ import { Geolocation } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
 import L from 'leaflet';
 import 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import '@maplibre/maplibre-gl-leaflet';
 import {
   MapPin, Play, Square, Shield, Zap, Award, Users, Compass,
@@ -564,7 +565,7 @@ export default function App() {
       const retrieveInitialLock = async () => {
         const hasPerms = await requestGpsPermissions();
         if (!hasPerms) {
-          setIsGpsReady(true);
+          setIsGpsReady(false);
           return;
         }
 
@@ -591,7 +592,7 @@ export default function App() {
           },
           (error) => {
             console.warn("[GPS] Initial lock failed:", error);
-            setIsGpsReady(true); // Fallback to allow starting run
+            setIsGpsReady(false); // Do not allow starting run if lock failed completely
           },
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
@@ -1084,10 +1085,26 @@ export default function App() {
       styleUrl += `?api_key=${cartoApiKey}`;
     }
 
-    L.maplibreGL({
-      style: styleUrl,
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+    let isMapLibreSuccessful = false;
+    try {
+      if (typeof maplibregl !== 'undefined' && maplibregl.supported()) {
+        L.maplibreGL({
+          style: styleUrl,
+          attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        isMapLibreSuccessful = true;
+      }
+    } catch (e) {
+      console.warn('[Map Initialization] MapLibreGL failed, falling back to raster tiles:', e);
+    }
+
+    if (!isMapLibreSuccessful) {
+      console.log('[Map Initialization] Using reliable OSM raster fallback with dark filter.');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        className: 'map-tiles-dark'
+      }).addTo(map);
+    }
 
     mapInstanceRef.current = map;
     addLog("System: Leaflet Map loaded.");
@@ -1100,11 +1117,14 @@ export default function App() {
       setMapAutoFollow(false);
     });
 
-    setTimeout(() => {
+    const invalidateMap = () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.invalidateSize();
       }
-    }, 150);
+    };
+
+    setTimeout(invalidateMap, 300);
+    window.addEventListener('resize', invalidateMap);
 
     return () => {
       if (mapInstanceRef.current) {
@@ -1123,6 +1143,7 @@ export default function App() {
           mapInstanceRef.current = null;
         }
       }
+      window.removeEventListener('resize', invalidateMap);
       territoryPolygonsRef.current = {};
     };
   }, [isLoadingIdentity, currentUser]);
@@ -3719,7 +3740,7 @@ export default function App() {
               {/* Segmented Map Mode Switch (SOLO MAP / CLAN MAP - TASK 3) */}
               <div style={{
                 position: 'absolute',
-                top: runState.status === 'idle' ? '72px' : '16px',
+                top: runState.status === 'idle' ? '16px' : '70px',
                 left: '50%',
                 transform: 'translateX(-50%)',
                 zIndex: 1001,
@@ -3771,7 +3792,7 @@ export default function App() {
               {mapMode === 'clan' && (!currentUser.clan || currentUser.clan === 'None') && (
                 <div style={{
                   position: 'absolute',
-                  top: runState.status === 'idle' ? '120px' : '65px',
+                  top: runState.status === 'idle' ? '65px' : '115px',
                   left: '16px',
                   right: '16px',
                   zIndex: 1000,
@@ -4606,7 +4627,7 @@ export default function App() {
                 <div
                   style={{
                     position: 'absolute',
-                    top: '70px',
+                    top: '165px',
                     left: '16px',
                     right: '16px',
                     zIndex: 1005,
@@ -4701,7 +4722,7 @@ export default function App() {
                   className="animate-slide-down"
                   style={{
                     position: 'absolute',
-                    top: '80px',
+                    top: '115px',
                     left: '16px',
                     right: '16px',
                     zIndex: 1001,

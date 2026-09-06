@@ -128,8 +128,8 @@ export const useIdentity = () => {
       }
     }
 
-    // GUARD 2: If already synchronized for this user UUID and profile has a non-default display name, return
-    if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id && !isDefaultName(currentProfile?.displayName)) {
+    // GUARD 2: If already synchronized for this user UUID, return
+    if (profileSyncUserIdRef.current === user.id && currentProfile?.uid === user.id) {
       setIdentityMode('authenticated');
       setAuthErrorMessage(null);
       return { success: true, data: currentProfile };

@@ -280,9 +280,6 @@ export default function App() {
   const toastTimerRef = useRef(null);
 
   // REAL DEVICE GPS DIAGNOSTIC MODE STATES
-  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false);
-  const [showDebugModal, setShowDebugModal] = useState(false);
-  const [debugModalText, setDebugModalText] = useState('');
   const [liveDebugInfo, setLiveDebugInfo] = useState({
     engineState: 'idle',
     accuracy: 0,
@@ -320,20 +317,7 @@ export default function App() {
     }, durationMs);
   }, []);
 
-  const handleCopyGpsDebug = useCallback(() => {
-    const jsonText = JSON.stringify(debugHistoryRef.current, null, 2);
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(jsonText)
-        .then(() => showToast("Copied 20 GPS debug records to clipboard!"))
-        .catch(() => {
-          setDebugModalText(jsonText);
-          setShowDebugModal(true);
-        });
-    } else {
-      setDebugModalText(jsonText);
-      setShowDebugModal(true);
-    }
-  }, [showToast]);
+
 
   useEffect(() => {
     return () => {
@@ -3737,100 +3721,6 @@ export default function App() {
               {/* Fullscreen Map Hero */}
               <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
 
-              {/* Segmented Map Mode Switch (SOLO MAP / CLAN MAP - TASK 3) */}
-              <div style={{
-                position: 'absolute',
-                top: runState.status === 'idle' ? '16px' : '70px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                zIndex: 1001,
-                display: 'flex',
-                background: 'rgba(11, 11, 13, 0.88)',
-                backdropFilter: 'blur(8px)',
-                padding: '3px',
-                borderRadius: '16px',
-                border: '1.5px solid rgba(255, 255, 255, 0.12)',
-                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)'
-              }}>
-                <button
-                  onClick={() => setMapMode('solo')}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '12px',
-                    fontSize: '10px',
-                    fontWeight: '800',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: mapMode === 'solo' ? '#FC4C02' : 'transparent',
-                    color: mapMode === 'solo' ? 'white' : 'var(--clash-text-secondary)',
-                    transition: 'all 0.2s ease',
-                    letterSpacing: '0.5px'
-                  }}
-                >
-                  SOLO MAP
-                </button>
-                <button
-                  onClick={() => setMapMode('clan')}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '12px',
-                    fontSize: '10px',
-                    fontWeight: '800',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: mapMode === 'clan' ? '#3B82F6' : 'transparent',
-                    color: mapMode === 'clan' ? 'white' : 'var(--clash-text-secondary)',
-                    transition: 'all 0.2s ease',
-                    letterSpacing: '0.5px'
-                  }}
-                >
-                  CLAN MAP
-                </button>
-              </div>
-
-              {/* CLAN MAP: No Clan Overlay Banner */}
-              {mapMode === 'clan' && (!currentUser.clan || currentUser.clan === 'None') && (
-                <div style={{
-                  position: 'absolute',
-                  top: runState.status === 'idle' ? '65px' : '115px',
-                  left: '16px',
-                  right: '16px',
-                  zIndex: 1000,
-                  background: 'rgba(15, 23, 42, 0.92)',
-                  backdropFilter: 'blur(10px)',
-                  border: '1.5px solid rgba(59, 130, 246, 0.4)',
-                  borderRadius: '16px',
-                  padding: '12px 16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '12px',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)'
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <Shield size={20} style={{ color: '#3B82F6', flexShrink: 0 }} />
-                    <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>
-                      Join or create a clan to access Clan Map
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setActiveTab('clans')}
-                    style={{
-                      background: '#3B82F6',
-                      color: 'white',
-                      border: 'none',
-                      padding: '6px 12px',
-                      borderRadius: '10px',
-                      fontSize: '10px',
-                      fontWeight: '800',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    Go to Social
-                  </button>
-                </div>
-              )}
 
               {/* CLAN MAP: Legend Overlay */}
               {mapMode === 'clan' && (
@@ -3863,203 +3753,368 @@ export default function App() {
                 </div>
               )}
 
-              {/* Empty World State Banner */}
-              {runState.status === 'idle' && (() => {
-                const hasPlayerTerritories = territories.some(t => !t.isLandmark);
-                return !hasPlayerTerritories;
-              })() && (
-                <div
-                  className="animate-slide-down"
-                  style={{
-                    position: 'absolute',
-                    top: '80px',
-                    left: '16px',
-                    right: '16px',
-                    zIndex: 1000,
-                    display: 'flex',
-                    justifyContent: 'center',
-                    pointerEvents: 'none'
-                  }}
-                >
+              {/* MAP TOP HUD STACK (Prevents Overlap & Handles Safe Area) */}
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                paddingTop: 'calc(16px + env(safe-area-inset-top, 0px))',
+                paddingLeft: '16px',
+                paddingRight: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+                zIndex: 1001,
+                pointerEvents: 'none'
+              }}>
+                {/* 1. Floating top Command Header */}
+                {runState.status === 'idle' && (
                   <div
+                    className="clash-glass-panel animate-fade-in-down"
                     style={{
-                      background: 'rgba(11, 11, 13, 0.9)',
-                      backdropFilter: 'blur(8px)',
-                      border: '1.5px solid #2A2A2A',
-                      borderRadius: '16px',
-                      padding: '12px 18px',
+                      borderRadius: '24px',
+                      padding: '10px 12px',
                       display: 'flex',
+                      justifyContent: 'space-between',
                       alignItems: 'center',
-                      gap: '12px',
-                      maxWidth: '400px',
-                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
+                      gap: '6px',
+                      pointerEvents: 'auto'
                     }}
                   >
-                    <span style={{ fontSize: '18px', flexShrink: 0 }}>🌍</span>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', letterSpacing: '0.3px' }}>
-                        No territories exist yet.
-                      </span>
-                      <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
-                        Be the first runner to create one.
-                      </span>
+                    {/* LEFT: Profile & Clan Info */}
+                    <div
+                      onClick={() => setShowSettingsDrawer(true)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <div style={{
+                        width: '44px',
+                        height: '44px',
+                        borderRadius: '50%',
+                        background: '#FC4C02',
+                        border: '1.5px solid rgba(255, 255, 255, 0.2)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '16px',
+                        fontWeight: '800',
+                        color: 'white',
+                        flexShrink: 0
+                      }}
+                      className="clash-btn-press"
+                      >
+                        {(currentUser.displayName || 'R')[0].toUpperCase()}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', lineHeight: 1 }}>
+                          {currentUser.displayName}
+                        </span>
+                        <span style={{ fontSize: '9px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              )}
 
-              {/* Floating top Command Header */}
-              {runState.status === 'idle' && (
-              <div
-                className="clash-glass-panel animate-fade-in-down"
-                style={{
-                  position: 'absolute',
-                  top: '16px',
-                  left: '16px',
-                  right: '16px',
-                  borderRadius: '24px',
-                  padding: '10px 12px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  zIndex: 999,
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)',
-                  gap: '6px'
-                }}
-              >
-                {/* LEFT: Profile & Clan Info */}
-                <div
-                  onClick={() => setShowSettingsDrawer(true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0 }}
-                >
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    background: '#FC4C02',
-                    border: '1.5px solid rgba(255, 255, 255, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '12px',
-                    fontWeight: '800',
-                    color: 'white',
-                    flexShrink: 0
-                  }}
-                  className="clash-btn-press"
-                  >
-                    {(currentUser.displayName || 'R')[0].toUpperCase()}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flexShrink: 0 }}>
-                    <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', lineHeight: 1 }}>
-                      {currentUser.displayName}
-                    </span>
-                    <span style={{ fontSize: '7px', fontWeight: '800', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {(!currentUser.clan || currentUser.clan === 'None') ? 'No Clan' : currentUser.clan}
-                    </span>
-                  </div>
-                </div>
-
-                {/* CENTER: Coin Counter */}
-                <div style={{
-                  background: 'rgba(0, 0, 0, 0.25)',
-                  border: '1px solid rgba(255, 255, 255, 0.05)',
-                  height: '30px',
-                  padding: '0 8px',
-                  borderRadius: '15px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  flexShrink: 0
-                }}>
-                  <Coins size={11} style={{ color: '#FC4C02' }} />
-                  <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
-                    {currentUser.coins}
-                  </span>
-                </div>
-
-                {/* RIGHT: Level, GPS Status & Settings */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                  {/* Level Badge */}
-                  <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.2)', padding: '3px 6px', borderRadius: '8px', flexShrink: 0 }}>
-                    LVL {currentUser.level}
-                  </span>
-
-                  {/* GPS Status Indicator */}
-                  <div style={{
-                    background: 'rgba(0, 0, 0, 0.25)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                    height: '30px',
-                    padding: '0 8px',
-                    borderRadius: '15px',
-                    fontSize: '9px',
-                    fontWeight: '800',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    color: 'white',
-                    flexShrink: 0
-                  }}>
-                    {(() => {
-                      if (trackingMode === 'sim') {
-                        return (
-                          <>
-                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }} className="gps-pulse"></span>
-                            <span style={{ fontSize: '9px' }}>Sim</span>
-                          </>
-                        );
-                      }
-                      if (runState.gpsAccuracy === null) {
-                        return (
-                          <>
-                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#888888', display: 'inline-block' }}></span>
-                            <span style={{ fontSize: '9px' }}>GPS</span>
-                          </>
-                        );
-                      }
-                      if (runState.gpsAccuracy < 30) {
-                        return (
-                          <>
-                            <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} className="gps-pulse"></span>
-                            <span style={{ fontSize: '9px' }}>GPS</span>
-                          </>
-                        );
-                      }
-                      return (
-                        <>
-                          <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#EF4444', display: 'inline-block' }}></span>
-                          <span style={{ fontSize: '9px' }}>Lost</span>
-                        </>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Settings Button */}
-                  <button
-                    onClick={() => setShowSettingsDrawer(true)}
-                    style={{
+                    {/* CENTER: Coin Counter */}
+                    <div style={{
                       background: 'rgba(0, 0, 0, 0.25)',
                       border: '1px solid rgba(255, 255, 255, 0.05)',
-                      color: 'white',
-                      width: '30px',
-                      height: '30px',
-                      borderRadius: '50%',
+                      height: '34px',
+                      padding: '0 10px',
+                      borderRadius: '17px',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
+                      gap: '4px',
                       flexShrink: 0
+                    }}>
+                      <Coins size={12} style={{ color: '#FC4C02' }} />
+                      <span style={{ fontSize: '12px', fontWeight: '800', color: 'white', fontFamily: 'var(--clash-font-family)' }}>
+                        {currentUser.coins}
+                      </span>
+                    </div>
+
+                    {/* RIGHT: Level, GPS Status & Settings */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: '#FC4C02', background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.2)', padding: '4px 8px', borderRadius: '8px', flexShrink: 0 }}>
+                        LVL {currentUser.level}
+                      </span>
+
+                      <div style={{
+                        background: 'rgba(0, 0, 0, 0.25)',
+                        border: '1px solid rgba(255, 255, 255, 0.05)',
+                        height: '34px',
+                        padding: '0 10px',
+                        borderRadius: '17px',
+                        fontSize: '10px',
+                        fontWeight: '800',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        color: 'white',
+                        flexShrink: 0
+                      }}>
+                        {(() => {
+                          if (trackingMode === 'sim') {
+                            return (
+                              <>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#FC4C02', display: 'inline-block' }} className="gps-pulse"></span>
+                                <span>Sim</span>
+                              </>
+                            );
+                          }
+                          if (runState.gpsAccuracy === null) {
+                            return (
+                              <>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#888888', display: 'inline-block' }}></span>
+                                <span>GPS</span>
+                              </>
+                            );
+                          }
+                          if (runState.gpsAccuracy < 30) {
+                            return (
+                              <>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} className="gps-pulse"></span>
+                                <span>GPS</span>
+                              </>
+                            );
+                          }
+                          return (
+                            <>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#EF4444', display: 'inline-block' }}></span>
+                              <span>Lost</span>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      <button
+                        onClick={() => setShowSettingsDrawer(true)}
+                        style={{
+                          background: 'rgba(0, 0, 0, 0.25)',
+                          border: '1px solid rgba(255, 255, 255, 0.05)',
+                          color: 'white',
+                          width: '44px',
+                          height: '44px',
+                          borderRadius: '50%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          flexShrink: 0
+                        }}
+                        className="clash-btn-press"
+                        title="Tactical settings"
+                      >
+                        <Settings size={18} style={{ color: '#FC4C02' }} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Segmented Map Mode Switch (SOLO MAP / CLAN MAP - TASK 3) */}
+                <div style={{
+                  alignSelf: 'center',
+                  display: 'flex',
+                  background: 'rgba(11, 11, 13, 0.88)',
+                  backdropFilter: 'blur(8px)',
+                  padding: '3px',
+                  borderRadius: '16px',
+                  border: '1.5px solid rgba(255, 255, 255, 0.12)',
+                  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+                  pointerEvents: 'auto'
+                }}>
+                  <button
+                    onClick={() => setMapMode('solo')}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '12px',
+                      fontSize: '10px',
+                      fontWeight: '800',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: mapMode === 'solo' ? '#FC4C02' : 'transparent',
+                      color: mapMode === 'solo' ? 'white' : 'var(--clash-text-secondary)',
+                      transition: 'all 0.2s ease',
+                      letterSpacing: '0.5px'
                     }}
-                    className="clash-btn-press"
-                    title="Tactical settings"
                   >
-                    <Settings size={12} style={{ color: '#FC4C02' }} />
+                    SOLO MAP
+                  </button>
+                  <button
+                    onClick={() => setMapMode('clan')}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '12px',
+                      fontSize: '10px',
+                      fontWeight: '800',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: mapMode === 'clan' ? '#3B82F6' : 'transparent',
+                      color: mapMode === 'clan' ? 'white' : 'var(--clash-text-secondary)',
+                      transition: 'all 0.2s ease',
+                      letterSpacing: '0.5px'
+                    }}
+                  >
+                    CLAN MAP
                   </button>
                 </div>
+
+                {/* 3. CLAN MAP: No Clan Overlay Banner */}
+                {mapMode === 'clan' && (!currentUser.clan || currentUser.clan === 'None') && (
+                  <div style={{
+                    background: 'rgba(15, 23, 42, 0.92)',
+                    backdropFilter: 'blur(10px)',
+                    border: '1.5px solid rgba(59, 130, 246, 0.4)',
+                    borderRadius: '16px',
+                    padding: '12px 16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+                    pointerEvents: 'auto'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <Shield size={20} style={{ color: '#3B82F6', flexShrink: 0 }} />
+                      <span style={{ fontSize: '11px', fontWeight: '800', color: 'white' }}>
+                        Join or create a clan to access Clan Map
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('clans')}
+                      style={{
+                        background: '#3B82F6',
+                        color: 'white',
+                        border: 'none',
+                        padding: '6px 12px',
+                        borderRadius: '10px',
+                        fontSize: '10px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      Go to Social
+                    </button>
+                  </div>
+                )}
+
+                {/* 4. Empty World State Banner */}
+                {runState.status === 'idle' && (() => {
+                  const hasPlayerTerritories = territories.some(t => !t.isLandmark);
+                  return !hasPlayerTerritories;
+                })() && (
+                  <div
+                    className="animate-slide-down"
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'center',
+                      pointerEvents: 'auto'
+                    }}
+                  >
+                    <div
+                      style={{
+                        background: 'rgba(11, 11, 13, 0.9)',
+                        backdropFilter: 'blur(8px)',
+                        border: '1.5px solid #2A2A2A',
+                        borderRadius: '16px',
+                        padding: '12px 18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        maxWidth: '400px',
+                        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+                      }}
+                    >
+                      <span style={{ fontSize: '18px', flexShrink: 0 }}>🌍</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', letterSpacing: '0.3px' }}>
+                          No territories exist yet.
+                        </span>
+                        <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>
+                          Be the first runner to create one.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. DYNAMIC TERRITORY NOTIFICATION BANNER */}
+                {activeBanner && (
+                  <div
+                    className="animate-slide-down"
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'center',
+                      pointerEvents: 'none'
+                    }}
+                  >
+                    <div
+                      style={{
+                        background: '#0B0B0B',
+                        border: (() => {
+                          if (activeBanner.type === 'entering_friendly') return '1px solid #10B981';
+                          if (activeBanner.type === 'entering_enemy') return '1px solid #EF4444';
+                          if (activeBanner.type === 'entering_neutral') return '1px solid #FC4C02';
+                          if (activeBanner.type === 'captured') return '1px solid #FC4C02';
+                          if (activeBanner.type === 'lost') return '1px solid #EF4444';
+                          return '1px solid #2A2A2A';
+                        })(),
+                        borderRadius: '16px',
+                        padding: '10px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+                        maxWidth: '320px',
+                        width: '100%',
+                        pointerEvents: 'auto'
+                      }}
+                    >
+                      <div style={{
+                        width: '24px',
+                        height: '24px',
+                        borderRadius: '50%',
+                        background: (() => {
+                          if (activeBanner.type === 'entering_friendly') return 'rgba(16, 185, 129, 0.1)';
+                          if (activeBanner.type === 'entering_enemy') return 'rgba(239, 68, 68, 0.1)';
+                          if (activeBanner.type === 'entering_neutral') return 'rgba(252, 76, 2, 0.1)';
+                          if (activeBanner.type === 'captured') return 'rgba(252, 76, 2, 0.1)';
+                          if (activeBanner.type === 'lost') return 'rgba(239, 68, 68, 0.1)';
+                          return 'rgba(255, 255, 255, 0.05)';
+                        })(),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: (() => {
+                          if (activeBanner.type === 'entering_friendly') return '#10B981';
+                          if (activeBanner.type === 'entering_enemy') return '#EF4444';
+                          return '#FC4C02';
+                        })()
+                      }}>
+                        {activeBanner.type === 'captured' ? <Trophy size={14} /> : <Compass size={14} />}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>
+                          {(() => {
+                            if (activeBanner.type === 'entering_friendly') return 'Entering Friendly Sector';
+                            if (activeBanner.type === 'entering_enemy') return 'Entering Hostile Sector';
+                            if (activeBanner.type === 'entering_neutral') return 'Entering Neutral Sector';
+                            if (activeBanner.type === 'captured') return 'Sector Secured';
+                            if (activeBanner.type === 'lost') return 'Sector Compromised';
+                            if (activeBanner.type === 'leaving') return 'Leaving Sector';
+                            return 'Sector Alert';
+                          })()}
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'white', fontWeight: '800' }}>
+                          {activeBanner.sectorName}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-
-              )}
-
               {/* Accuracy floating indicator (Hidden/relegated to Top HUD capsule in 2.0) */}
               {false && (runState.status === 'tracking' || runState.status === 'paused') && trackingMode === 'gps' && runState.gpsAccuracy && (
                 <div style={{
@@ -4622,178 +4677,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* REAL DEVICE GPS DIAGNOSTIC PANEL (COLLAPSIBLE) */}
-              {(runState.status === 'tracking' || runState.status === 'paused' || runState.status === 'acquiring' || runState.status === 'waiting') && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '165px',
-                    left: '16px',
-                    right: '16px',
-                    zIndex: 1005,
-                    background: 'rgba(10, 10, 14, 0.95)',
-                    border: '1px solid #334155',
-                    borderRadius: '16px',
-                    padding: '10px 14px',
-                    color: '#E0E0E0',
-                    fontFamily: 'monospace',
-                    fontSize: '11px',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.8)'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isDebugPanelOpen ? '8px' : '0' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontWeight: 'bold', color: '#10B981' }}>🛠️ GPS DEBUG</span>
-                      <span style={{ fontSize: '10px', background: '#1E293B', padding: '2px 6px', borderRadius: '4px', color: '#38BDF8' }}>
-                        STATE: {runEngineStateRef.current.toUpperCase()}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        onClick={handleCopyGpsDebug}
-                        style={{
-                          background: '#FC4C02',
-                          border: 'none',
-                          color: 'white',
-                          fontWeight: 'bold',
-                          fontSize: '10px',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        📋 COPY DEBUG
-                      </button>
-                      <button
-                        onClick={() => setIsDebugPanelOpen(prev => !prev)}
-                        style={{
-                          background: '#334155',
-                          border: 'none',
-                          color: 'white',
-                          fontSize: '10px',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {isDebugPanelOpen ? '▲ HIDE' : '▼ SHOW'}
-                      </button>
-                    </div>
-                  </div>
 
-                  {isDebugPanelOpen && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', borderTop: '1px solid #334155', paddingTop: '8px', maxHeight: '240px', overflowY: 'auto' }}>
-                      <div><strong style={{ color: '#94A3B8' }}>STATE:</strong> <span style={{ color: '#F59E0B' }}>{runEngineStateRef.current}</span></div>
-                      <div><strong style={{ color: '#94A3B8' }}>ACCURACY:</strong> <span style={{ color: liveDebugInfo.accuracy <= 30 ? '#10B981' : '#EF4444' }}>{liveDebugInfo.accuracy}m</span></div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>COORDS SPEED:</strong> {liveDebugInfo.coordsSpeedKmh} {liveDebugInfo.coordsSpeedKmh !== 'N/A' ? 'km/h' : ''}</div>
-                      <div><strong style={{ color: '#94A3B8' }}>LAT/LNG:</strong> {liveDebugInfo.lat.toFixed(4)}, {liveDebugInfo.lng.toFixed(4)}</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>BUF FIXES:</strong> {liveDebugInfo.bufferFixes} / 6</div>
-                      <div><strong style={{ color: '#94A3B8' }}>WIN SECONDS:</strong> {liveDebugInfo.windowSeconds}s</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>TOTAL PATH:</strong> {liveDebugInfo.totalPathMeters}m</div>
-                      <div><strong style={{ color: '#94A3B8' }}>NET DISPLACE:</strong> {liveDebugInfo.netDisplacementMeters}m</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>DIR EFFICIENCY:</strong> {liveDebugInfo.directionEfficiency}</div>
-                      <div><strong style={{ color: '#94A3B8' }}>MEDIAN SPEED:</strong> {liveDebugInfo.medianSpeedKmh} km/h</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>MEDIAN ACC:</strong> {liveDebugInfo.medianAccuracy}m</div>
-                      <div><strong style={{ color: '#94A3B8' }}>FIRST FIX DIST:</strong> {liveDebugInfo.distFromFirstWindowFix}m</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>PRIMARY PASS:</strong> <span style={{ color: liveDebugInfo.primaryPass ? '#10B981' : '#EF4444' }}>{liveDebugInfo.primaryPass ? 'TRUE' : 'FALSE'}</span></div>
-                      <div><strong style={{ color: '#94A3B8' }}>FALLBACK PASS:</strong> <span style={{ color: liveDebugInfo.fallbackPass ? '#10B981' : '#EF4444' }}>{liveDebugInfo.fallbackPass ? 'TRUE' : 'FALSE'}</span></div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>LAST STEP:</strong> {liveDebugInfo.lastStepMeters}m ({liveDebugInfo.lastFixDtSeconds}s)</div>
-                      <div><strong style={{ color: '#94A3B8' }}>SEGMENT SPEED:</strong> {liveDebugInfo.calculatedSegmentSpeedKmh} km/h</div>
-
-                      <div><strong style={{ color: '#94A3B8' }}>FIX COUNTS:</strong> {liveDebugInfo.gpsFixCount} (Acc: {liveDebugInfo.acceptedFixCount}, Rej: {liveDebugInfo.rejectedAccuracyCount})</div>
-                      <div><strong style={{ color: '#94A3B8' }}>DECISION:</strong> <span style={{ color: '#38BDF8' }}>{liveDebugInfo.lastDecision}</span></div>
-
-                      <div style={{ gridColumn: 'span 2' }}><strong style={{ color: '#94A3B8' }}>REASON:</strong> <span style={{ color: '#CBD5E1' }}>{liveDebugInfo.lastReason}</span></div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* DYNAMIC TERRITORY NOTIFICATION BANNER */}
-              {activeBanner && (
-                <div
-                  className="animate-slide-down"
-                  style={{
-                    position: 'absolute',
-                    top: '115px',
-                    left: '16px',
-                    right: '16px',
-                    zIndex: 1001,
-                    display: 'flex',
-                    justifyContent: 'center',
-                    pointerEvents: 'none'
-                  }}
-                >
-                  <div
-                    style={{
-                      background: '#0B0B0B',
-                      border: (() => {
-                        if (activeBanner.type === 'entering_friendly') return '1px solid #10B981';
-                        if (activeBanner.type === 'entering_enemy') return '1px solid #EF4444';
-                        if (activeBanner.type === 'entering_neutral') return '1px solid #FC4C02';
-                        if (activeBanner.type === 'captured') return '1px solid #FC4C02';
-                        if (activeBanner.type === 'lost') return '1px solid #EF4444';
-                        return '1px solid #2A2A2A';
-                      })(),
-                      borderRadius: '16px',
-                      padding: '10px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-                      maxWidth: '320px',
-                      width: '100%'
-                    }}
-                  >
-                    <div style={{
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '50%',
-                      background: (() => {
-                        if (activeBanner.type === 'entering_friendly') return 'rgba(16, 185, 129, 0.1)';
-                        if (activeBanner.type === 'entering_enemy') return 'rgba(239, 68, 68, 0.1)';
-                        if (activeBanner.type === 'entering_neutral') return 'rgba(252, 76, 2, 0.1)';
-                        if (activeBanner.type === 'captured') return 'rgba(252, 76, 2, 0.1)';
-                        if (activeBanner.type === 'lost') return 'rgba(239, 68, 68, 0.1)';
-                        return 'rgba(255, 255, 255, 0.05)';
-                      })(),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: (() => {
-                        if (activeBanner.type === 'entering_friendly') return '#10B981';
-                        if (activeBanner.type === 'entering_enemy') return '#EF4444';
-                        return '#FC4C02';
-                      })()
-                    }}>
-                      {activeBanner.type === 'captured' ? <Trophy size={14} /> : <Compass size={14} />}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: '8px', color: 'var(--clash-text-secondary)', textTransform: 'uppercase', fontWeight: '800', letterSpacing: '0.5px' }}>
-                        {(() => {
-                          if (activeBanner.type === 'entering_friendly') return 'Entering Friendly Sector';
-                          if (activeBanner.type === 'entering_enemy') return 'Entering Hostile Sector';
-                          if (activeBanner.type === 'entering_neutral') return 'Entering Neutral Sector';
-                          if (activeBanner.type === 'captured') return 'Sector Secured';
-                          if (activeBanner.type === 'lost') return 'Sector Compromised';
-                          if (activeBanner.type === 'leaving') return 'Leaving Sector';
-                          return 'Sector Alert';
-                        })()}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'white', fontWeight: '800' }}>
-                        {activeBanner.sectorName}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* FLOATING CAMERA ACTION SHEET */}
               {cameraSheetOpen && (
@@ -5971,68 +5855,7 @@ export default function App() {
             />
           )}
 
-          {/* SELECTABLE DEBUG TEXT MODAL (FALLBACK FOR CLIPBOARD) */}
-          {showDebugModal && (
-            <div
-              style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                zIndex: 9999,
-                background: 'rgba(0,0,0,0.85)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '20px'
-              }}
-            >
-              <div
-                style={{
-                  background: '#0F172A',
-                  border: '1px solid #334155',
-                  borderRadius: '16px',
-                  width: '100%',
-                  maxWidth: '500px',
-                  maxHeight: '80vh',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  padding: '16px',
-                  color: 'white',
-                  boxShadow: '0 12px 40px rgba(0,0,0,0.8)'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h3 style={{ margin: 0, fontSize: '13px', color: '#10B981', fontFamily: 'monospace' }}>📋 GPS DEBUG DATA (LAST 20 FIXES)</h3>
-                  <button
-                    onClick={() => setShowDebugModal(false)}
-                    style={{ background: '#334155', border: 'none', color: 'white', borderRadius: '8px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer' }}
-                  >
-                    ✕ CLOSE
-                  </button>
-                </div>
-                <p style={{ fontSize: '10px', color: '#94A3B8', margin: '0 0 8px 0', fontFamily: 'sans-serif' }}>Select all text below and copy it manually:</p>
-                <textarea
-                  readOnly
-                  value={debugModalText}
-                  style={{
-                    flex: 1,
-                    minHeight: '260px',
-                    background: '#020617',
-                    color: '#38BDF8',
-                    border: '1px solid #1E293B',
-                    borderRadius: '8px',
-                    padding: '10px',
-                    fontFamily: 'monospace',
-                    fontSize: '10px',
-                    resize: 'none'
-                  }}
-                  onClick={(e) => e.target.select()}
-                />
-              </div>
-            </div>
-          )}
+
 
         </div>
       </div>

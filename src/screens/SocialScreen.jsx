@@ -169,28 +169,28 @@ export const SocialScreen = ({
       </div>
 
       {/* Screen Body */}
-      {socialTab === 'feed' && (
+      <div style={{ display: socialTab === 'feed' ? 'block' : 'none', flex: 1 }}>
         <ActivityFeedScreen
           onActorClick={onSelectPlayer}
           onTerritoryClick={onTerritoryClick}
         />
-      )}
+      </div>
 
-      {socialTab === 'friends' && (
+      <div style={{ display: socialTab === 'friends' ? 'block' : 'none', flex: 1 }}>
         <FriendsScreen
           currentUserId={currentUser?.uid || currentUser?.id}
           onSelectPlayer={onSelectPlayer}
         />
-      )}
+      </div>
 
-      {socialTab === 'leaderboard' && (
+      <div style={{ display: socialTab === 'leaderboard' ? 'block' : 'none', flex: 1 }}>
         <LeaderboardScreen
           currentUserId={currentUser?.uid || currentUser?.id}
           onSelectPlayer={onSelectPlayer}
         />
-      )}
+      </div>
 
-      {socialTab === 'notifications' && (
+      <div style={{ display: socialTab === 'notifications' ? 'block' : 'none', flex: 1 }}>
         <NotificationsScreen
           userId={currentUser?.uid || currentUser?.id}
           onNotificationSelect={(notif) => {
@@ -200,9 +200,9 @@ export const SocialScreen = ({
           }}
           onCountUpdated={(c) => setUnreadNotifsCount(c)}
         />
-      )}
+      </div>
 
-      {socialTab === 'clan' && (
+      <div style={{ display: socialTab === 'clan' ? 'block' : 'none', flex: 1 }}>
         <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div className="clash-card" style={{ padding: '20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
             <Shield size={36} style={{ color: '#FC4C02' }} />
@@ -214,7 +214,7 @@ export const SocialScreen = ({
             </p>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 };

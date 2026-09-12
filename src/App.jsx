@@ -14,7 +14,8 @@ import {
 import { 
   isFirebaseActive, useSupabase, isValidUUID, generateUUID, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
   syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
-  saveCompletedRun, updateUserProfile, fetchClans, createClanInCloud, joinClanInCloud, leaveClanInCloud
+  saveCompletedRun, updateUserProfile, fetchClans, createClanInCloud, joinClanInCloud, leaveClanInCloud,
+  sendPhoneOtp, verifyPhoneOtp
 } from './supabase';
 import { PhotoGalleryModal } from './components/profile/PhotoGalleryModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -40,6 +41,7 @@ import { FEATURE_KEYS } from './config/premiumConfig';
 import { DEFAULT_DAILY_MISSIONS } from './utils/missions';
 import { getRankFromXp } from './utils/ranks';
 import { formatDisplayDistance, getDistanceInMeters } from './utils/distance';
+import PhoneVerificationModal from './components/PhoneVerificationModal';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -230,12 +232,16 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login'); // 'login', 'signup', 'guest'
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [authOtp, setAuthOtp] = useState('');
   const [authName, setAuthName] = useState('');
   const [authClan, setAuthClan] = useState('None');
   const [authError, setAuthError] = useState('');
+  const [authSuccessMessage, setAuthSuccessMessage] = useState('');
   const [isFinalizingRun, setIsFinalizingRun] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isPhoneVerificationOpen, setIsPhoneVerificationOpen] = useState(false);
 
   // Global App States
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'social', 'conquests', 'profile'
@@ -386,6 +392,11 @@ export default function App() {
 
   const handleCreateClanSubmit = async (e) => {
     e.preventDefault();
+    if (!currentProfile?.is_phone_verified) {
+      setIsPhoneVerificationOpen(true);
+      return;
+    }
+    
     if (!newClanName.trim()) {
       setClanErrorMsg("Clan Name cannot be empty.");
       return;
@@ -976,9 +987,21 @@ export default function App() {
     if (isAuthenticating) return;
     setIsAuthenticating(true);
     setAuthError('');
+    setAuthSuccessMessage('');
 
     try {
-      if (authMode !== 'guest') {
+      if (authMode === 'phone') {
+        const trimmedPhone = authPhone.trim();
+        if (!trimmedPhone) throw new Error("Phone number is required.");
+        await sendPhoneOtp(trimmedPhone);
+        setAuthMode('otp');
+        addLog(`Sent OTP to ${trimmedPhone}`);
+      } else if (authMode === 'otp') {
+        if (!authOtp.trim()) throw new Error("OTP is required.");
+        const profile = await verifyPhoneOtp(authPhone.trim(), authOtp.trim(), authName.trim(), authClan);
+        setCurrentUser(profile);
+        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nmethod: phone\nsession: active`);
+      } else if (authMode !== 'guest') {
         const trimmedEmail = authEmail.trim();
         if (!trimmedEmail) {
           throw new Error("Email address is required.");
@@ -1002,8 +1025,12 @@ export default function App() {
       } else if (authMode === 'signup') {
         if (!authName.trim()) throw new Error("Display name is required.");
         const profile = await registerUser(authEmail.trim(), authPassword, authName.trim(), authClan);
-        setCurrentUser(profile);
-        console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
+        if (profile.requiresEmailVerification) {
+          setAuthSuccessMessage(`Verification email sent to ${profile.email}. Please check your inbox.`);
+        } else {
+          setCurrentUser(profile);
+          console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
+        }
       } else if (authMode === 'guest') {
         const rawName = authPassword.trim() || authName.trim();
         const res = await loginGuestUser(rawName, 'None');
@@ -1013,7 +1040,11 @@ export default function App() {
         console.log(`[AUTH]\nauthenticated: true\nuserId: ${res.data.uid}\nsession: active`);
       }
     } catch (err) {
-      setAuthError(err.message || "Authentication failed.");
+      if (err.message === "unsupported_phone_provider") {
+        setAuthError("Phone authentication is not configured. Please sign up with email instead.");
+      } else {
+        setAuthError(err.message || "Authentication failed.");
+      }
       addLog(`Auth Error: ${err.message}`);
       console.log(`[AUTH]\nauthenticated: false\nuserId: null\nsession: null\nerror: ${err.message}`);
     } finally {
@@ -1455,6 +1486,12 @@ export default function App() {
     }
     console.log('[STOP CLAIM] 1 handler started');
 
+    if (!currentProfile?.is_phone_verified) {
+      console.log('[STOP CLAIM] Guard: Phone not verified.');
+      setIsPhoneVerificationOpen(true);
+      return;
+    }
+
     if (isFinalizingRun) {
       console.log('[STOP CLAIM] Guard: Finalization already in progress, ignoring duplicate tap.');
       return;
@@ -1725,6 +1762,9 @@ export default function App() {
     // CHECKPOINT 5: Territory cloud saved / queued / failed
     let territoryRes = null;
     try {
+      if (!currentUser.is_verified && !currentUser.isAnonymous) {
+        throw new Error("Phone verification required to claim cloud territories.");
+      }
       territoryRes = await saveNewTerritory(newTerritory);
       if (territoryRes?.cloud === true) {
         createTerritoryActivity(newTerritory, 'territory', newTerritory.claimId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
@@ -2084,6 +2124,11 @@ export default function App() {
     // Instead of raw +24 decayHours, we use the new decayEngine to recharge health to 100%
     const rechargedTerr = rechargeSector(terr, Date.now());
 
+    if (!currentUser.is_verified && !currentUser.isAnonymous) {
+      alert("Phone verification required to shield territories.");
+      return;
+    }
+
     await updateTerritory(territoryId, { 
       last_recharged_at: rechargedTerr.last_recharged_at,
       expires_at: rechargedTerr.expires_at,
@@ -2200,68 +2245,76 @@ export default function App() {
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
-            {authMode !== 'guest' && (
-              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="clash-label" style={{ fontSize: '9px' }}>Email Address</label>
-                <div style={{ position: 'relative' }}>
-                  <Mail size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--clash-text-secondary)' }} />
-                  <input
-                    type="email"
-                    value={authEmail}
-                    onChange={e => setAuthEmail(e.target.value)}
-                    required
-                    placeholder="email@provider.com"
-                    className="cyber-input cyber-input-with-icon focus-ring"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-              <label className="clash-label" style={{ fontSize: '9px' }}>Password / Nickname</label>
-              <div style={{ position: 'relative' }}>
-                <Lock size={14} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--clash-text-secondary)' }} />
-                <input
-                  type={authMode === 'guest' ? 'text' : 'password'}
-                  value={authPassword}
-                  onChange={e => setAuthPassword(e.target.value)}
-                  required={authMode !== 'guest'}
-                  placeholder={authMode === 'guest' ? 'e.g. Runner' : '••••••••'}
-                  className="cyber-input cyber-input-with-icon focus-ring"
-                />
-              </div>
+          {authSuccessMessage && (
+            <div style={{ background: 'rgba(46, 204, 113, 0.05)', border: '1px solid #2ECC71', color: 'white', borderRadius: '12px', padding: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontWeight: '500' }}>{authSuccessMessage}</span>
             </div>
+          )}
 
-            {authMode === 'signup' && (
-              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="clash-label" style={{ fontSize: '9px' }}>Display Name</label>
+          <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
+            {(authMode === 'signup' || authMode === 'phone') && (
+              <>
                 <input
                   type="text"
                   value={authName}
-                  onChange={e => setAuthName(e.target.value)}
-                  required
-                  placeholder="e.g. Runner"
-                  className="cyber-input focus-ring"
+                  onChange={(e) => setAuthName(e.target.value)}
+                  placeholder="Runner Name"
+                  className="cyber-input"
+                  disabled={isAuthenticating}
                 />
-              </div>
-            )}
-
-            {authMode === 'signup' && (
-              <div className="gap-2" style={{ display: 'flex', flexDirection: 'column' }}>
-                <label className="clash-label" style={{ fontSize: '9px' }}>Join a Clan (Optional)</label>
                 <select
                   value={authClan}
-                  onChange={e => setAuthClan(e.target.value)}
-                  className="cyber-select focus-ring"
+                  onChange={(e) => setAuthClan(e.target.value)}
+                  className="cyber-select"
+                  disabled={isAuthenticating}
                 >
-                  <option value="None">Skip for now</option>
+                  <option value="None">No Clan</option>
                 </select>
-              </div>
+              </>
+            )}
+
+            {authMode === 'phone' ? (
+              <input
+                type="tel"
+                value={authPhone}
+                onChange={(e) => setAuthPhone(e.target.value)}
+                placeholder="e.g. +1234567890"
+                className="cyber-input"
+                disabled={isAuthenticating}
+              />
+            ) : authMode === 'otp' ? (
+              <input
+                type="number"
+                value={authOtp}
+                onChange={(e) => setAuthOtp(e.target.value)}
+                placeholder="6-digit OTP code"
+                className="cyber-input"
+                disabled={isAuthenticating}
+              />
+            ) : (
+              <input
+                type={authMode === 'guest' ? 'text' : 'email'}
+                value={authMode === 'guest' ? authName : authEmail}
+                onChange={(e) => authMode === 'guest' ? setAuthName(e.target.value) : setAuthEmail(e.target.value)}
+                placeholder={authMode === 'guest' ? 'e.g. Runner' : 'runner@email.com'}
+                className="cyber-input"
+                disabled={isAuthenticating}
+              />
+            )}
+
+            {authMode !== 'phone' && authMode !== 'otp' && (
+              <input
+                type={authMode === 'guest' ? 'text' : 'password'}
+                value={authMode === 'guest' ? authClan : authPassword}
+                onChange={(e) => authMode === 'guest' ? setAuthClan(e.target.value) : setAuthPassword(e.target.value)}
+                placeholder={authMode === 'guest' ? 'e.g. RunnerHQ' : '••••••••'}
+                className="cyber-input"
+                disabled={isAuthenticating}
+              />
             )}
 
             <button type="submit" disabled={isAuthenticating} className="clash-btn-primary" style={{ marginTop: '12px', opacity: isAuthenticating ? 0.6 : 1 }}>
-              {isAuthenticating ? 'ENTERING ARENA...' : (authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : 'Enter Arena')}
+              {isAuthenticating ? 'ENTERING ARENA...' : (authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : authMode === 'phone' ? 'Send SMS Code' : authMode === 'otp' ? 'Verify Code' : 'Enter Arena')}
             </button>
           </form>
 
@@ -2270,10 +2323,19 @@ export default function App() {
             {authMode === 'login' ? (
               <>
                 <div className="clash-body" style={{ fontSize: '11px' }}>New runner? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
                 <div className="clash-body" style={{ fontSize: '11px' }}>Just exploring? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
               </>
             ) : authMode === 'signup' ? (
-              <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+              <>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
+              </>
+            ) : authMode === 'phone' || authMode === 'otp' ? (
+              <>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Use Email instead? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up with Email</span></div>
+                <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+              </>
             ) : (
               <div className="clash-body" style={{ fontSize: '11px' }}>Want cloud account? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
             )}
@@ -3094,6 +3156,24 @@ export default function App() {
                         Exit HQ
                       </button>
                     </div>
+
+                    {/* PHONE VERIFICATION BANNER */}
+                    {!currentProfile?.is_phone_verified && (
+                      <div className="runner-hq-card card-entrance" style={{ backgroundColor: 'rgba(252, 76, 2, 0.1)', borderColor: 'rgba(252, 76, 2, 0.3)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 'bold', color: '#FC4C02' }}>Action Required</h4>
+                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--clash-text-secondary)' }}>Verify phone to claim territories & create clans.</p>
+                          </div>
+                          <button 
+                            onClick={() => setIsPhoneVerificationOpen(true)}
+                            className="clash-btn-primary btn-sm" 
+                            style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                            Verify Now
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* 1. HERO PROFILE CARD */}
                     <div className="runner-hq-card runner-hq-hero-bg card-entrance" style={{
@@ -3956,8 +4036,8 @@ export default function App() {
               {/* Right Circular Map Controls (Aligned Vertically) */}
               <div style={{
                 position: 'absolute',
-                top: '200px',
-                right: '16px',
+                top: 'calc(200px + env(safe-area-inset-top, 0px))',
+                right: 'calc(16px + env(safe-area-inset-right, 0px))',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '10px',
@@ -4125,7 +4205,7 @@ export default function App() {
                     className="clash-bottom-sheet animate-slide-in-up"
                     style={{
                       position: 'absolute',
-                      bottom: '150px',
+                      bottom: 'calc(150px + env(safe-area-inset-bottom, 0px))',
                       left: '16px',
                       right: '16px',
                       zIndex: 998,
@@ -4351,7 +4431,7 @@ export default function App() {
                   className="clash-bottom-sheet"
                   style={{
                     position: 'absolute',
-                    bottom: '16px',
+                    bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
                     left: '16px',
                     right: '16px',
                     height: '110px',
@@ -4523,7 +4603,7 @@ export default function App() {
                   className="clash-bottom-sheet"
                   style={{
                     position: 'absolute',
-                    bottom: '16px',
+                    bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
                     left: '16px',
                     right: '16px',
                     zIndex: 999,
@@ -5573,7 +5653,14 @@ export default function App() {
             />
           )}
 
-
+          <PhoneVerificationModal 
+            isOpen={isPhoneVerificationOpen}
+            onClose={() => setIsPhoneVerificationOpen(false)}
+            onVerified={() => {
+              console.log('Phone verified successfully.');
+            }}
+            isDark={prefAppearance?.darkMode ?? true}
+          />
 
         </div>
       </div>

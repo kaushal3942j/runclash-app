@@ -892,6 +892,7 @@ body {
   border: none;
   border-radius: var(--clash-radius-button);
   padding: 12px 24px;
+  min-height: 48px;
   font-family: var(--clash-font-family);
   font-size: var(--clash-font-body);
   font-weight: 800;
@@ -917,6 +918,7 @@ body {
   border: 1px solid var(--clash-border);
   border-radius: var(--clash-radius-button);
   padding: 12px 24px;
+  min-height: 48px;
   font-family: var(--clash-font-family);
   font-size: var(--clash-font-body);
   font-weight: 800;
@@ -1302,3 +1304,13 @@ body {
 
 
 
+
+
+/* Ensure Mapbox/MapLibre controls do not overlap with safe-area and bottom sheet */
+.maplibregl-ctrl-bottom-left,
+.maplibregl-ctrl-bottom-right,
+.mapboxgl-ctrl-bottom-left,
+.mapboxgl-ctrl-bottom-right {
+  margin-bottom: calc(130px + env(safe-area-inset-bottom, 0px)) !important;
+  z-index: 990 !important;
+}

@@ -73,7 +73,7 @@ export const getPublicProfile = async (targetUserId) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, display_name, username, avatar_url, bio, country, state, city, clan_name, level, xp, coins, premium, is_profile_public, show_activity, allow_friend_requests, created_at, last_active_at')
+      .select('id, display_name, username, avatar_url, bio, country, state, city, clan_name, level, xp, coins, premium, is_profile_public, show_activity, allow_friend_requests, created_at, last_active_at, is_phone_verified')
       .eq('id', targetUserId)
       .maybeSingle();
 
@@ -196,7 +196,7 @@ export const searchProfiles = async (query, filters = {}) => {
 
     let req = supabase
       .from('profiles')
-      .select('id, display_name, username, avatar_url, clan_name, level, xp, country, city, is_profile_public')
+      .select('id, display_name, username, avatar_url, clan_name, level, xp, country, city, is_profile_public, is_phone_verified')
       .eq('is_profile_public', true)
       .limit(30);
 

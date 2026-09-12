@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { syncQueueService, generateUUID } from './services/syncQueueService';
-import { createAnonymousSession } from './services/authService';
+import { createAnonymousSession, getDeviceId } from './services/authService';
 
 // 1. Supabase Configuration & Credential Check
 const rawUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -212,10 +212,11 @@ export const subscribeToAuth = (callback) => {
             level: profile.level,
             xp: profile.xp,
             coins: profile.coins,
-            premium: profile.premium
+            premium: profile.premium,
+            is_verified: !!session.user.email_confirmed_at || !!session.user.phone_confirmed_at || profile.is_verified || false
           });
         } else {
-          callback({ uid: session.user.id, email: session.user.email, guest: true });
+          callback({ uid: session.user.id, email: session.user.email, guest: true, is_verified: !!session.user.email_confirmed_at || !!session.user.phone_confirmed_at });
         }
       } else {
         callback(null);
@@ -236,31 +237,78 @@ export const subscribeToAuth = (callback) => {
 
 export const registerUser = async (email, password, name, clan) => {
   if (useSupabase) {
-    const { data: authData, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
+    let user;
+    let session;
+    let isUpgrade = false;
+
+    // Check if there's an active anonymous session we can upgrade
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentSession = sessionData?.session;
+
+    if (currentSession?.user?.is_anonymous) {
+      isUpgrade = true;
+      const { data: updateData, error: updateError } = await supabase.auth.updateUser({
+        email,
+        password,
         data: {
           display_name: name,
           clan_name: clan || 'None'
         }
-      }
-    });
+      }, {
+        emailRedirectTo: 'https://runclash.vercel.app/'
+      });
+      if (updateError) throw updateError;
+      user = updateData.user;
+      session = currentSession;
+    } else {
+      const { data: authData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: 'https://runclash.vercel.app/',
+          data: {
+            display_name: name,
+            clan_name: clan || 'None'
+          }
+        }
+      });
 
-    if (signUpError) throw signUpError;
-    const user = authData.user;
+      if (signUpError) throw signUpError;
+      user = authData.user;
+      session = authData.session;
+    }
+
+    // If session is null (which happens on signUp when email confirmation is required)
+    // or if it's an upgrade and they have a pending new_email
+    const requiresVerification = !session || (isUpgrade && user?.new_email);
+
+    // Fetch existing profile to avoid overwriting stats during an upgrade
+    let existingProfile = null;
+    try {
+      const { data: fetchedProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      existingProfile = fetchedProfile;
+    } catch(e) {}
 
     const profile = {
       id: user.id,
       display_name: name,
       clan_name: clan || 'None',
-      level: 1,
-      xp: 0,
-      coins: 100,
-      premium: false
+      level: existingProfile ? existingProfile.level : 1,
+      xp: existingProfile ? existingProfile.xp : 0,
+      coins: existingProfile ? existingProfile.coins : 100,
+      premium: existingProfile ? existingProfile.premium : false,
+      is_verified: existingProfile ? existingProfile.is_verified : false
     };
 
-    // Use upsert to be robust against trigger presence or latency
+    try {
+      profile.device_id = await getDeviceId();
+    } catch(e) {}
+
+    // We still write/update the profile so they have it when they verify
     const { error: profileError } = await supabase
       .from('profiles')
       .upsert(profile);
@@ -269,15 +317,20 @@ export const registerUser = async (email, password, name, clan) => {
 
     if (profileError) throw profileError;
 
+    if (requiresVerification) {
+      return { requiresEmailVerification: true, email: email };
+    }
+
     return {
       uid: user.id,
       email: user.email,
       displayName: name,
       clan: clan || 'None',
-      level: 1,
-      xp: 0,
-      coins: 100,
-      premium: false
+      level: profile.level,
+      xp: profile.xp,
+      coins: profile.coins,
+      premium: profile.premium,
+      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at || profile.is_verified
     };
   } else {
     const profile = {
@@ -288,7 +341,8 @@ export const registerUser = async (email, password, name, clan) => {
       level: 1,
       xp: 0,
       coins: 100,
-      premium: false
+      premium: false,
+      is_verified: false
     };
     localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
@@ -325,7 +379,8 @@ export const loginUser = async (email, password) => {
       level: profile.level,
       xp: profile.xp,
       coins: profile.coins,
-      premium: profile.premium
+      premium: profile.premium,
+      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at || profile.is_verified || false
     };
   } else {
     const profile = {
@@ -336,7 +391,8 @@ export const loginUser = async (email, password) => {
       level: 1,
       xp: 0,
       coins: 0,
-      premium: false
+      premium: false,
+      is_verified: false
     };
     localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
@@ -364,8 +420,13 @@ export const loginGuest = async (name, clan) => {
         level: 1,
         xp: 0,
         coins: 50,
-        premium: false
+        premium: false,
+        is_verified: false
       };
+
+      try {
+        profile.device_id = await getDeviceId();
+      } catch (e) {}
 
       const normalizedProfile = {
         uid: user.id,
@@ -375,7 +436,8 @@ export const loginGuest = async (name, clan) => {
         xp: 0,
         coins: 50,
         premium: false,
-        isAnonymous: true
+        isAnonymous: true,
+        is_verified: false
       };
 
       // Save to localStorage immediately so UI renders guest profile instantly (<50ms)
@@ -402,7 +464,8 @@ export const loginGuest = async (name, clan) => {
         coins: 50,
         premium: false,
         isAnonymous: true,
-        offlineFallback: true
+        offlineFallback: true,
+        is_verified: false
       };
       localStorage.setItem('clash_user', JSON.stringify(profile));
       mockCurrentUser = profile;
@@ -418,7 +481,8 @@ export const loginGuest = async (name, clan) => {
       xp: 0,
       coins: 50,
       premium: false,
-      isAnonymous: true
+      isAnonymous: true,
+      is_verified: false
     };
     localStorage.setItem('clash_user', JSON.stringify(profile));
     mockCurrentUser = profile;
@@ -440,6 +504,94 @@ export const logout = async () => {
   localStorage.removeItem('clash_identity_migrated_v1');
   mockCurrentUser = null;
   mockAuthChangeListeners.forEach(cb => cb(null));
+};
+
+export const sendPhoneOtp = async (phone) => {
+  if (!useSupabase) throw new Error("Supabase is disabled. Cannot send OTP.");
+  const { data, error } = await supabase.auth.updateUser({
+    phone
+  });
+  if (error) {
+    if (error.status === 400 || (error.message && error.message.toLowerCase().includes('provider is disabled'))) {
+      throw new Error("unsupported_phone_provider");
+    }
+    throw error;
+  }
+  return data;
+};
+
+export const verifyPhoneOtp = async (phone, token, name, clan) => {
+  if (!useSupabase) throw new Error("Supabase is disabled. Cannot verify OTP.");
+  const { data: authData, error: verifyError } = await supabase.auth.verifyOtp({
+    phone,
+    token,
+    type: 'phone_change'
+  });
+
+  if (verifyError) throw verifyError;
+  const user = authData.user;
+
+  // Check if profile exists
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  if (profile) {
+    // If they were already registered
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ is_verified: true, phone_number: phone })
+      .eq('id', user.id);
+      
+    return {
+      uid: user.id,
+      phone: phone,
+      displayName: profile.display_name,
+      clan: profile.clan_name,
+      level: profile.level,
+      xp: profile.xp,
+      coins: profile.coins,
+      premium: profile.premium,
+      is_verified: true
+    };
+  } else {
+    // New user via Phone
+    const newProfile = {
+      id: user.id,
+      display_name: name || 'Runner',
+      clan_name: clan || 'None',
+      level: 1,
+      xp: 0,
+      coins: 100,
+      premium: false,
+      is_verified: true,
+      phone_number: phone
+    };
+    
+    try {
+      newProfile.device_id = await getDeviceId();
+    } catch(e) {}
+
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert(newProfile);
+
+    if (profileError) throw profileError;
+
+    return {
+      uid: user.id,
+      phone: phone,
+      displayName: newProfile.display_name,
+      clan: newProfile.clan_name,
+      level: 1,
+      xp: 0,
+      coins: 100,
+      premium: false,
+      is_verified: true
+    };
+  }
 };
 
 // 2. User Stats Sync

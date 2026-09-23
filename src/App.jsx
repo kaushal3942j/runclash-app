@@ -1545,12 +1545,6 @@ export default function App() {
     }
     console.log('[STOP CLAIM] 1 handler started');
 
-    if (!currentProfile?.is_phone_verified) {
-      console.log('[STOP CLAIM] Guard: Phone not verified.');
-      setIsPhoneVerificationOpen(true);
-      return;
-    }
-
     if (isFinalizingRun) {
       console.log('[STOP CLAIM] Guard: Finalization already in progress, ignoring duplicate tap.');
       return;

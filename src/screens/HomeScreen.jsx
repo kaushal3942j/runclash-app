@@ -168,7 +168,7 @@ export const HomeScreen = ({
             <Coins size={14} style={{ color: '#FC4C02' }} />
             <span className="clash-label" style={{ fontSize: '10px' }}>Coins</span>
           </div>
-          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>{currentUser?.coins}</h4>
+          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>{currentUser?.coins ?? 0}</h4>
           <span className="clash-body" style={{ fontSize: '9px' }}>Spend in Armory &rarr;</span>
         </div>
 
@@ -178,8 +178,8 @@ export const HomeScreen = ({
             <Zap size={14} style={{ color: '#FC4C02' }} />
             <span className="clash-label" style={{ fontSize: '10px' }}>XP Level</span>
           </div>
-          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>LVL {currentUser?.level}</h4>
-          <span className="clash-body" style={{ fontSize: '9px' }}>{currentUser?.xp} total XP</span>
+          <h4 className="clash-title" style={{ margin: 0, fontSize: '24px' }}>LVL {currentUser?.level ?? 1}</h4>
+          <span className="clash-body" style={{ fontSize: '9px' }}>{currentUser?.xp ?? 0} total XP</span>
         </div>
 
         {/* Sectors Conquered Card */}

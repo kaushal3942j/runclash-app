@@ -29,6 +29,7 @@ export class RunEngine {
     this.resumeCandidatesCount = 0;
     this.frozenSnapshot = null;
     this.fullGpsTraceBuffer = [];
+    this.lastAcceptedFixTime = null;
 
     // Allowed transition map
     this.ALLOWED_TRANSITIONS = {
@@ -97,6 +98,7 @@ export class RunEngine {
         this.stationaryAnchorPoint = null;
         this.resumeCandidatesCount = 0;
         this.frozenSnapshot = null;
+        this.lastAcceptedFixTime = null;
         break;
 
       case 'acquiring':
@@ -116,7 +118,7 @@ export class RunEngine {
         break;
 
       case 'tracking':
-        if (prevState === 'waiting') {
+        if (prevState === 'idle' || prevState === 'waiting') {
           this.metrics.reset();
           this.metrics.startTrackingSegment(timestamp);
           this.activeMovementWindow = [];
@@ -124,6 +126,7 @@ export class RunEngine {
           this.lastMovementTimestamp = timestamp;
           this.stationarySince = null;
           this.stationaryAnchorPoint = null;
+          this.lastAcceptedFixTime = timestamp;
         } else if (prevState === 'paused') {
           this.metrics.startTrackingSegment(timestamp);
           this.activeMovementWindow = [];
@@ -133,6 +136,7 @@ export class RunEngine {
           this.resumeCandidatesCount = 0;
           this.pauseAnchorPoint = null;
           this.stationaryAnchorPoint = null;
+          this.lastAcceptedFixTime = timestamp;
         }
         break;
 
@@ -167,7 +171,9 @@ export class RunEngine {
       console.warn('[RUN ENGINE] Cannot start session from state:', this.state);
       return;
     }
+    this.metrics.reset();
     this.transitionTo('acquiring', 'User initiated start run');
+    this.registerGpsWatch();
   }
 
   /**
@@ -221,8 +227,7 @@ export class RunEngine {
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
+        maximumAge: 5000
       }
     );
   }
@@ -300,6 +305,13 @@ export class RunEngine {
    * Strictly enforces: distance = 0, duration = 0, speed = 0, pace = '--:--'.
    */
   _handleWaitingFix(fix, newPoint, wAccuracy, fixTime) {
+    // Use 40m here to match the _handleAcquiringFix threshold.
+    // If we used GPS_ACCURACY_THRESHOLD (25m), we could acquire at 35m and then instantly reject all fixes in waiting.
+    if (wAccuracy > 40) {
+      console.warn('[GPS WAITING REJECTED]', { wAccuracy, fixTime });
+      return; // Reject poor accuracy fixes to keep the baseline and buffer clean
+    }
+
     this.waitingBuffer.push({
       lat: newPoint[0],
       lng: newPoint[1],
@@ -332,9 +344,17 @@ export class RunEngine {
       return;
     }
 
-    const prevPoint = this.lastPoint || newPoint;
+    // Initialize lastPoint on very first tracking fix to prevent 0-distance infinite loop
+    if (!this.lastPoint) {
+      this.lastPoint = newPoint;
+      this.lastAcceptedFixTime = fixTime;
+      this.notifyListeners('FIX_PROCESSED', { decision: 'TRACKING_INITIALIZED', motion: null });
+      return;
+    }
+
+    const prevPoint = this.lastPoint;
     const stepMeters = getDistanceInMeters(prevPoint[0], prevPoint[1], newPoint[0], newPoint[1]);
-    const dtSeconds = (fixTime - (this.lastMovementTimestamp || fixTime)) / 1000;
+    const dtSeconds = (fixTime - (this.lastAcceptedFixTime || this.lastMovementTimestamp || fixTime)) / 1000;
     const segmentSpeedKmh = calculateSpeedKmh(stepMeters, Math.max(0.5, dtSeconds));
 
     // Teleport & Speed Spike Filter (TEST 8)
@@ -409,10 +429,11 @@ export class RunEngine {
     }
 
     if (motion.classification === 'MOVING') {
-      // Distance write protection: MOVING && stepMeters >= 0.5m && accuracy <= 25m
-      if (stepMeters >= 0.5 && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+      // Distance write protection: MOVING && stepMeters >= TRACKING_MIN_STEP_METERS && accuracy <= GPS_ACCURACY_THRESHOLD
+      if (stepMeters >= RUN_ENGINE_CONFIG.TRACKING_MIN_STEP_METERS && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
         this.metrics.commitMovingStep(stepMeters, newPoint, segmentSpeedKmh, fixTime);
         this.lastPoint = newPoint;
+        this.lastAcceptedFixTime = fixTime;
         this.notifyListeners('FIX_PROCESSED', { decision: 'DISTANCE_ACCEPTED', stepMeters, motion });
       } else {
         this.notifyListeners('FIX_PROCESSED', { decision: 'MOVING_MICRO_STEP_HELD', stepMeters, motion });

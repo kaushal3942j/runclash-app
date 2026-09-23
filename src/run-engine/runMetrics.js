@@ -5,7 +5,7 @@
  * Formats all UI metrics to clean, human-readable numbers at the snapshot boundary.
  */
 
-import { calculateConsistentRunStats } from './gpsMath.js';
+import { calculateConsistentRunStats, formatPaceText } from './gpsMath.js';
 
 export class RunMetricsManager {
   constructor() {
@@ -57,7 +57,15 @@ export class RunMetricsManager {
 
     const currentDuration = this.getDurationSeconds(nowTime);
     const stats = calculateConsistentRunStats(this.officialDistanceKm, currentDuration);
-    this.livePace = stats.formattedPace;
+    
+    // Calculate live pace directly from the reliable live speed instead of average duration
+    if (this.liveSpeedKmh >= 1.0) {
+      const paceSecPerKm = 3600 / this.liveSpeedKmh;
+      this.livePace = formatPaceText(paceSecPerKm);
+    } else {
+      this.livePace = '--:--';
+    }
+
     this.acceptedFixesCount++;
 
     return true;

@@ -62,7 +62,9 @@ export const useIdentity = () => {
         xp: 0,
         coins: 100,
         premium: false,
-        isAnonymous: true
+        isAnonymous: true,
+        is_phone_verified: false,
+        phone: null
       };
 
       // 3. Immediately set React state & localStorage BEFORE any cloud fetch or background upsert
@@ -160,7 +162,9 @@ export const useIdentity = () => {
           xp: profile.xp,
           coins: profile.coins,
           clan: profile.clan_name || 'None',
-          premium: profile.premium || false
+          premium: profile.premium || false,
+          is_phone_verified: profile.is_phone_verified || false,
+          phone: profile.phone || null
         };
 
         setCurrentProfile(normalizedProfile);

@@ -9,8 +9,8 @@ export const RUN_ENGINE_CONFIG = {
   GPS_STATIONARY_ACCURACY: 25,      // Max accuracy allowed for stationary classification
 
   // Waiting State Thresholds
-  WAITING_BUFFER_WINDOW_SEC: 8,     // 8-second rolling window for waiting motion classification
-  WAITING_MIN_POINTS: 4,            // Min points required in buffer to analyze
+  WAITING_BUFFER_WINDOW_SEC: 12,    // 12-second rolling window for waiting motion classification
+  WAITING_MIN_POINTS: 3,            // Min points required in buffer to analyze
   WAITING_MIN_NET_DISPLACEMENT: 5.0,// Net meters required from baseline (armed at 5m)
   WAITING_MIN_PATH_METERS: 5.0,     // Total path meters in window (armed at 5m)
   WAITING_MIN_EFFICIENCY: 0.40,     // Direction efficiency ratio (net / path)
@@ -19,7 +19,7 @@ export const RUN_ENGINE_CONFIG = {
 
   // Tracking State Motion Classifier Thresholds
   TRACKING_WINDOW_SEC: 8,           // 8-second rolling active motion window
-  TRACKING_MIN_STEP_METERS: 0.5,    // Min step meters between fixes to register distance
+  TRACKING_MIN_STEP_METERS: 2.0,    // Min step meters between fixes to register distance
   TRACKING_MAX_STEP_METERS: 60.0,   // Max plausible step distance per fix (teleport filter)
   TRACKING_MAX_SPEED_KMH: 30.0,     // Max plausible human running speed (speed spike filter)
 

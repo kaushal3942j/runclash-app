@@ -117,15 +117,17 @@ const capacitorGeoAdapter = {
 const requestGpsPermissions = async () => {
   if (!Capacitor.isNativePlatform()) return true;
   try {
+    console.log('[ANDROID-DIAG] Geolocation.checkPermissions()');
     const perm = await Geolocation.checkPermissions();
+    console.log('[ANDROID-DIAG] Initial perm state:', perm.location);
     if (perm.location === 'granted') return true;
 
-    console.log('[GPS] Requesting runtime permissions...');
+    console.log('[ANDROID-DIAG] Requesting runtime permissions...');
     const req = await Geolocation.requestPermissions();
-    console.log('[GPS] Permission result:', req.location);
+    console.log('[ANDROID-DIAG] Requested perm state:', req.location);
     return req.location === 'granted';
   } catch (err) {
-    console.error('[GPS] Error requesting permissions:', err);
+    console.error('[ANDROID-DIAG] Permission error:', err);
     return false;
   }
 };
@@ -938,11 +940,30 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribe = runEngine.subscribe((eventType, data) => {
-      applyRunEngineSnapshot(eventType, data);
+    const unsubscribe = runEngine.subscribe((eventType, _payload) => {
+      applyRunEngineSnapshot(eventType, {
+        engineState: runEngine.state,
+        metrics: runEngine.getMetricsSnapshot()
+      });
     });
     return unsubscribe;
   }, []);
+
+  // TICK UI DURATION CONTINUOUSLY WHEN ACTIVE
+  useEffect(() => {
+    let tickInterval = null;
+    if (['tracking', 'acquiring', 'waiting'].includes(runState.status)) {
+      tickInterval = setInterval(() => {
+        applyRunEngineSnapshot('TICK', {
+          engineState: runEngine.state,
+          metrics: runEngine.getMetricsSnapshot()
+        });
+      }, 1000);
+    }
+    return () => {
+      if (tickInterval) clearInterval(tickInterval);
+    };
+  }, [runState.status]);
 
   // Fetch leaderboard when clans tab becomes active
   useEffect(() => {
@@ -1027,6 +1048,7 @@ export default function App() {
         const profile = await registerUser(authEmail.trim(), authPassword, authName.trim(), authClan);
         if (profile.requiresEmailVerification) {
           setAuthSuccessMessage(`Verification email sent to ${profile.email}. Please check your inbox.`);
+          setAuthMode('verify_email');
         } else {
           setCurrentUser(profile);
           console.log(`[AUTH]\nauthenticated: true\nuserId: ${profile.uid}\nsession: active`);
@@ -1299,17 +1321,22 @@ export default function App() {
   };
 
   const togglePauseResume = (e) => {
+    console.log(`[ANDROID-DIAG] togglePauseResume PRESSED. Current runEngine state: ${runEngine.state}`);
     if (e) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
 
     if (runEngine.state === 'paused' || runState.status === 'paused') {
+      console.log('[ANDROID-DIAG] Transitioning to tracking (User Resume)');
       runEngine.transitionTo('tracking', 'User manually resumed');
       addLog("System: Run resumed manually.");
+      setRunState(prev => ({ ...prev, manualPaused: false }));
     } else {
+      console.log('[ANDROID-DIAG] Transitioning to paused (User Pause)');
       runEngine.transitionTo('paused', 'User manually paused');
       addLog("System: Run paused manually.");
+      setRunState(prev => ({ ...prev, manualPaused: true }));
     }
   };
 
@@ -1414,21 +1441,53 @@ export default function App() {
     }
   };
 
-  const startTracking = (e) => {
-    if (e) {
-      if (typeof e.preventDefault === 'function') e.preventDefault();
-      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+  const startTracking = async (e) => {
+    try {
+      console.log(`[ANDROID-DIAG] startTracking PRESSED. Status: ${runState.status}`);
+      if (e) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      }
+      lastRunStartInteractionRef.current = Date.now();
+
+      if (runState.status !== 'idle' && runState.status !== 'finished') {
+        console.log(`[ANDROID-DIAG] startTracking aborted due to state: ${runState.status}`);
+        return;
+      }
+
+      console.log('[ANDROID-DIAG] calling requestGpsPermissions()');
+      
+      let granted = true;
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const perm = await Geolocation.checkPermissions();
+          if (perm.location !== 'granted') {
+            const req = await Geolocation.requestPermissions();
+            granted = req.location === 'granted';
+          }
+        } catch (err) {
+          alert("GPS Permission Error: " + (err.message || String(err)));
+          granted = false;
+        }
+      }
+
+      if (!granted) {
+        alert("RunClash needs location permissions to track your run. Please enable them in settings.");
+        return;
+      }
+
+      console.log('[ANDROID-DIAG] requesting WakeLock');
+      requestWakeLock();
+
+      // Start canonical Run Engine session and register GPS watch
+      console.log('[ANDROID-DIAG] calling runEngine.startSession()');
+      runEngine.startSession();
+      console.log('[ANDROID-DIAG] calling runEngine.registerGpsWatch()');
+      runEngine.registerGpsWatch(capacitorGeoAdapter);
+      addLog("GPS: Run session started. Tracking active.");
+    } catch (criticalErr) {
+      alert("Critical Error starting run: " + (criticalErr.message || String(criticalErr)));
     }
-    lastRunStartInteractionRef.current = Date.now();
-
-    if (runState.status !== 'idle' && runState.status !== 'finished') return;
-
-    requestWakeLock();
-
-    // Start canonical Run Engine session and register GPS watch
-    runEngine.startSession();
-    runEngine.registerGpsWatch(capacitorGeoAdapter);
-    addLog("GPS: Run session started. Tracking active.");
   };
 
   // Helper to check 2D line segment intersection
@@ -2224,6 +2283,53 @@ export default function App() {
     );
   }
 
+  const handleCheckVerification = async () => {
+    console.log('[ANDROID-DIAG] handleCheckVerification PRESSED');
+    try {
+      setIsAuthenticating(true);
+      // Force a network request to get the latest user state instead of cached session
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error) throw error;
+      
+      console.log(`[ANDROID-DIAG] User found: ${!!user}, email_confirmed_at: ${user?.email_confirmed_at}`);
+      if (user && user.email_confirmed_at) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (profile) {
+          console.log('[ANDROID-DIAG] Email confirmed. Setting user and returning to login mode.');
+          setCurrentUser(profile);
+          setAuthMode('login'); // reset mode
+          setAuthSuccessMessage('');
+        }
+      } else {
+        console.log('[ANDROID-DIAG] Email NOT confirmed.');
+        setAuthError("Email not verified yet. Please check your inbox and click the link.");
+      }
+    } catch (e) {
+      console.error('[ANDROID-DIAG] error in check verification:', e);
+      setAuthError(e.message);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleResendEmail = async () => {
+    try {
+      setIsAuthenticating(true);
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: authEmail,
+        options: { emailRedirectTo: 'https://runclash.vercel.app/' }
+      });
+      if (error) throw error;
+      setAuthSuccessMessage("Verification email resent!");
+      setAuthError("");
+    } catch (e) {
+      setAuthError(e.message);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
   // AUTH GATED VIEW
   if (!currentUser) {
     return (
@@ -2251,95 +2357,112 @@ export default function App() {
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
-            {(authMode === 'signup' || authMode === 'phone') && (
-              <>
-                <input
-                  type="text"
-                  value={authName}
-                  onChange={(e) => setAuthName(e.target.value)}
-                  placeholder="Runner Name"
-                  className="cyber-input"
-                  disabled={isAuthenticating}
-                />
-                <select
-                  value={authClan}
-                  onChange={(e) => setAuthClan(e.target.value)}
-                  className="cyber-select"
-                  disabled={isAuthenticating}
-                >
-                  <option value="None">No Clan</option>
-                </select>
-              </>
-            )}
+          {authMode === 'verify_email' ? (
+            <div className="gap-4" style={{ display: 'flex', flexDirection: 'column', textAlign: 'center' }}>
+              <div style={{ background: 'rgba(252, 76, 2, 0.05)', border: '1px solid #FC4C02', color: 'white', borderRadius: '12px', padding: '16px', fontSize: '13px' }}>
+                <p>We sent a verification link to <strong>{authEmail}</strong></p>
+                <p style={{ marginTop: '8px', color: 'var(--clash-text-secondary)' }}>Click the link in the email to activate your account, then click the button below to enter the arena.</p>
+              </div>
+              <button type="button" onClick={handleCheckVerification} disabled={isAuthenticating} className="clash-btn-primary" style={{ marginTop: '12px', opacity: isAuthenticating ? 0.6 : 1 }}>
+                {isAuthenticating ? 'CHECKING...' : "I've Verified My Email"}
+              </button>
+              <button type="button" onClick={handleResendEmail} disabled={isAuthenticating} className="clash-btn-secondary" style={{ marginTop: '8px', opacity: isAuthenticating ? 0.6 : 1, padding: '12px', background: 'rgba(255,255,255,0.05)', color: 'white', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                Resend Verification Email
+              </button>
+            </div>
+          ) : (
+            <>
+              <form onSubmit={handleAuthSubmit} className="gap-4" style={{ display: 'flex', flexDirection: 'column' }}>
+                {(authMode === 'signup' || authMode === 'phone') && (
+                  <>
+                    <input
+                      type="text"
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="Runner Name"
+                      className="cyber-input"
+                      disabled={isAuthenticating}
+                    />
+                    <select
+                      value={authClan}
+                      onChange={(e) => setAuthClan(e.target.value)}
+                      className="cyber-select"
+                      disabled={isAuthenticating}
+                    >
+                      <option value="None">No Clan</option>
+                    </select>
+                  </>
+                )}
 
-            {authMode === 'phone' ? (
-              <input
-                type="tel"
-                value={authPhone}
-                onChange={(e) => setAuthPhone(e.target.value)}
-                placeholder="e.g. +1234567890"
-                className="cyber-input"
-                disabled={isAuthenticating}
-              />
-            ) : authMode === 'otp' ? (
-              <input
-                type="number"
-                value={authOtp}
-                onChange={(e) => setAuthOtp(e.target.value)}
-                placeholder="6-digit OTP code"
-                className="cyber-input"
-                disabled={isAuthenticating}
-              />
-            ) : (
-              <input
-                type={authMode === 'guest' ? 'text' : 'email'}
-                value={authMode === 'guest' ? authName : authEmail}
-                onChange={(e) => authMode === 'guest' ? setAuthName(e.target.value) : setAuthEmail(e.target.value)}
-                placeholder={authMode === 'guest' ? 'e.g. Runner' : 'runner@email.com'}
-                className="cyber-input"
-                disabled={isAuthenticating}
-              />
-            )}
+                {authMode === 'phone' ? (
+                  <input
+                    type="tel"
+                    value={authPhone}
+                    onChange={(e) => setAuthPhone(e.target.value)}
+                    placeholder="e.g. +1234567890"
+                    className="cyber-input"
+                    disabled={isAuthenticating}
+                  />
+                ) : authMode === 'otp' ? (
+                  <input
+                    type="number"
+                    value={authOtp}
+                    onChange={(e) => setAuthOtp(e.target.value)}
+                    placeholder="6-digit OTP code"
+                    className="cyber-input"
+                    disabled={isAuthenticating}
+                  />
+                ) : (
+                  <input
+                    type={authMode === 'guest' ? 'text' : 'email'}
+                    value={authMode === 'guest' ? authName : authEmail}
+                    onChange={(e) => authMode === 'guest' ? setAuthName(e.target.value) : setAuthEmail(e.target.value)}
+                    placeholder={authMode === 'guest' ? 'e.g. Runner' : 'runner@email.com'}
+                    className="cyber-input"
+                    disabled={isAuthenticating}
+                  />
+                )}
 
-            {authMode !== 'phone' && authMode !== 'otp' && (
-              <input
-                type={authMode === 'guest' ? 'text' : 'password'}
-                value={authMode === 'guest' ? authClan : authPassword}
-                onChange={(e) => authMode === 'guest' ? setAuthClan(e.target.value) : setAuthPassword(e.target.value)}
-                placeholder={authMode === 'guest' ? 'e.g. RunnerHQ' : '••••••••'}
-                className="cyber-input"
-                disabled={isAuthenticating}
-              />
-            )}
+                {authMode !== 'phone' && authMode !== 'otp' && (
+                  <input
+                    type={authMode === 'guest' ? 'text' : 'password'}
+                    value={authMode === 'guest' ? authClan : authPassword}
+                    onChange={(e) => authMode === 'guest' ? setAuthClan(e.target.value) : setAuthPassword(e.target.value)}
+                    placeholder={authMode === 'guest' ? 'e.g. RunnerHQ' : '••••••••'}
+                    className="cyber-input"
+                    disabled={isAuthenticating}
+                  />
+                )}
 
-            <button type="submit" disabled={isAuthenticating} className="clash-btn-primary" style={{ marginTop: '12px', opacity: isAuthenticating ? 0.6 : 1 }}>
-              {isAuthenticating ? 'ENTERING ARENA...' : (authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : authMode === 'phone' ? 'Send SMS Code' : authMode === 'otp' ? 'Verify Code' : 'Enter Arena')}
-            </button>
-          </form>
+                <button type="submit" disabled={isAuthenticating} className="clash-btn-primary" style={{ marginTop: '12px', opacity: isAuthenticating ? 0.6 : 1 }}>
+                  {isAuthenticating ? 'ENTERING ARENA...' : (authMode === 'login' ? 'Access Sector' : authMode === 'signup' ? 'Create Account' : authMode === 'phone' ? 'Send SMS Code' : authMode === 'otp' ? 'Verify Code' : 'Enter Arena')}
+                </button>
+              </form>
 
-          {/* Form Switching Toggles */}
-          <div className="gap-2 text-base" style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--clash-border)', paddingTop: '20px', textAlign: 'center' }}>
-            {authMode === 'login' ? (
-              <>
-                <div className="clash-body" style={{ fontSize: '11px' }}>New runner? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Just exploring? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
-              </>
-            ) : authMode === 'signup' ? (
-              <>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
-              </>
-            ) : authMode === 'phone' || authMode === 'otp' ? (
-              <>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Use Email instead? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up with Email</span></div>
-                <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
-              </>
-            ) : (
-              <div className="clash-body" style={{ fontSize: '11px' }}>Want cloud account? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
-            )}
-          </div>
+              {/* Form Switching Toggles */}
+              <div className="gap-2 text-base" style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--clash-border)', paddingTop: '20px', textAlign: 'center' }}>
+                {authMode === 'login' ? (
+                  <>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>New runner? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Just exploring? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('guest')}>Enter as Guest</span></div>
+                  </>
+                ) : authMode === 'signup' ? (
+                  <>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Verify with Phone? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('phone')}>Phone Verification</span></div>
+                  </>
+                ) : authMode === 'phone' || authMode === 'otp' ? (
+                  <>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Use Email instead? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up with Email</span></div>
+                    <div className="clash-body" style={{ fontSize: '11px' }}>Already registered? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('login')}>Sign In</span></div>
+                  </>
+                ) : (
+                  <div className="clash-body" style={{ fontSize: '11px' }}>Want cloud account? <span style={{ cursor: 'pointer', fontWeight: 'bold', textDecoration: 'underline', color: '#FC4C02' }} onClick={() => setAuthMode('signup')}>Sign Up</span></div>
+                )}
+              </div>
+            </>
+          )}
 
         </div>
       </div>

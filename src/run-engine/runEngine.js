@@ -30,6 +30,7 @@ export class RunEngine {
     this.frozenSnapshot = null;
     this.fullGpsTraceBuffer = [];
     this.lastAcceptedFixTime = null;
+    this.consecutiveMovingFixes = 0;
 
     // Allowed transition map
     this.ALLOWED_TRANSITIONS = {
@@ -99,6 +100,7 @@ export class RunEngine {
         this.resumeCandidatesCount = 0;
         this.frozenSnapshot = null;
         this.lastAcceptedFixTime = null;
+        this.consecutiveMovingFixes = 0;
         break;
 
       case 'acquiring':
@@ -127,6 +129,7 @@ export class RunEngine {
           this.stationarySince = null;
           this.stationaryAnchorPoint = null;
           this.lastAcceptedFixTime = timestamp;
+          this.consecutiveMovingFixes = 0;
         } else if (prevState === 'paused') {
           this.metrics.startTrackingSegment(timestamp);
           this.activeMovementWindow = [];
@@ -137,6 +140,7 @@ export class RunEngine {
           this.pauseAnchorPoint = null;
           this.stationaryAnchorPoint = null;
           this.lastAcceptedFixTime = timestamp;
+          this.consecutiveMovingFixes = 0;
         }
         break;
 
@@ -348,6 +352,7 @@ export class RunEngine {
     if (!this.lastPoint) {
       this.lastPoint = newPoint;
       this.lastAcceptedFixTime = fixTime;
+      this.consecutiveMovingFixes = 0;
       this.notifyListeners('FIX_PROCESSED', { decision: 'TRACKING_INITIALIZED', motion: null });
       return;
     }
@@ -429,16 +434,28 @@ export class RunEngine {
     }
 
     if (motion.classification === 'MOVING') {
-      // Distance write protection: MOVING && stepMeters >= TRACKING_MIN_STEP_METERS && accuracy <= GPS_ACCURACY_THRESHOLD
-      if (stepMeters >= RUN_ENGINE_CONFIG.TRACKING_MIN_STEP_METERS && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
-        this.metrics.commitMovingStep(stepMeters, newPoint, segmentSpeedKmh, fixTime);
-        this.lastPoint = newPoint;
-        this.lastAcceptedFixTime = fixTime;
-        this.notifyListeners('FIX_PROCESSED', { decision: 'DISTANCE_ACCEPTED', stepMeters, motion });
+      this.consecutiveMovingFixes = (this.consecutiveMovingFixes || 0) + 1;
+
+      // Distance write protection: Require >= 2 consecutive MOVING classifications to filter out single-spike jitter
+      if (this.consecutiveMovingFixes >= 2) {
+        if (!this.stationaryAnchorPoint) {
+          this.stationarySince = null;
+          this.lastMovementTimestamp = fixTime;
+        }
+        
+        if (stepMeters >= RUN_ENGINE_CONFIG.TRACKING_MIN_STEP_METERS && wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+          this.metrics.commitMovingStep(stepMeters, newPoint, segmentSpeedKmh, fixTime);
+          this.lastPoint = newPoint;
+          this.lastAcceptedFixTime = fixTime;
+          this.notifyListeners('FIX_PROCESSED', { decision: 'DISTANCE_ACCEPTED', stepMeters, motion });
+        } else {
+          this.notifyListeners('FIX_PROCESSED', { decision: 'MOVING_MICRO_STEP_HELD', stepMeters, motion });
+        }
       } else {
-        this.notifyListeners('FIX_PROCESSED', { decision: 'MOVING_MICRO_STEP_HELD', stepMeters, motion });
+        this.notifyListeners('FIX_PROCESSED', { decision: 'MOVING_UNCONFIRMED_HELD', stepMeters, motion });
       }
     } else {
+      this.consecutiveMovingFixes = 0;
       // STATIONARY OR UNCERTAIN: Official distance is 100% frozen
       const stationarySeconds = this.stationarySince ? (fixTime - this.stationarySince) / 1000 : 0;
 

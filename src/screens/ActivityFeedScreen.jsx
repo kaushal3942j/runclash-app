@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
 import { getActivityFeed, subscribeToActivityFeed } from '../services/activityService';
+import { fetchPosts } from '../services/socialService';
 import { ActivityFilters } from '../components/activity/ActivityFilters';
 import { ActivityCard } from '../components/activity/ActivityCard';
 
@@ -12,10 +13,22 @@ export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick }) => {
   const loadFeed = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await getActivityFeed(filter, 20);
-      if (res.success) {
-        setActivities(res.data || []);
+      const actRes = await getActivityFeed(filter, 20);
+      const postRes = await fetchPosts(filter);
+      
+      let allItems = [];
+      if (actRes.success && actRes.data) allItems = [...allItems, ...actRes.data];
+      if (postRes.success && postRes.data) {
+        const mappedPosts = postRes.data.map(p => ({
+          ...p,
+          actor: p.profiles,
+          activity_type: 'social_post'
+        }));
+        allItems = [...allItems, ...mappedPosts];
       }
+      
+      allItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      setActivities(allItems);
     } finally {
       setIsLoading(false);
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Geolocation } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import L from 'leaflet';
 import 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -41,6 +42,9 @@ import { FEATURE_KEYS } from './config/premiumConfig';
 import { DEFAULT_DAILY_MISSIONS } from './utils/missions';
 import { getRankFromXp } from './utils/ranks';
 import { formatDisplayDistance, getDistanceInMeters } from './utils/distance';
+import { uploadMedia, createPost } from './services/socialService';
+import * as ClanService from './services/clanService';
+import { ClanManagement } from './components/clan/ClanManagement';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -400,7 +404,7 @@ export default function App() {
     setClanErrorMsg(null);
     setClanSuccessMsg(null);
 
-    const res = await createClanInCloud(newClanName.trim(), currentUser?.uid);
+    const res = await ClanService.createClan(newClanName.trim(), "New clan ready for battle", newClanPublic, null);
     if (res.success) {
       setCurrentUser(prev => prev ? ({ ...prev, clan: newClanName.trim() }) : prev);
       addLog(`Clan created: ${newClanName.trim()}`);
@@ -412,14 +416,18 @@ export default function App() {
     }
   };
 
-  const handleJoinClanByName = async (clanName) => {
+  const handleJoinClanByName = async (clanName, clanId) => {
     setClanErrorMsg(null);
     setClanSuccessMsg(null);
-    const res = await joinClanInCloud(clanName, currentUser?.uid);
+    const res = await ClanService.joinClan(clanId);
     if (res.success) {
-      setCurrentUser(prev => prev ? ({ ...prev, clan: clanName }) : prev);
-      addLog(`Joined clan: ${clanName}`);
-      setClanSuccessMsg(`Welcome to ${clanName}!`);
+      if (res.status === 'requested') {
+        setClanSuccessMsg(`Join request sent to '${clanName}'. Waiting for approval.`);
+      } else {
+        setCurrentUser(prev => prev ? ({ ...prev, clan: clanName }) : prev);
+        addLog(`Joined clan: ${clanName}`);
+        setClanSuccessMsg(`Welcome to ${clanName}!`);
+      }
       await loadClans();
     } else {
       setClanErrorMsg(res.error || "Failed to join clan.");
@@ -429,10 +437,19 @@ export default function App() {
   const handleJoinClanByCode = async (e) => {
     e.preventDefault();
     if (!joinInviteCode.trim()) {
-      setClanErrorMsg("Please enter an invite code or clan name.");
+      setClanErrorMsg("Please enter an invite code.");
       return;
     }
-    await handleJoinClanByName(joinInviteCode.trim());
+    setClanErrorMsg(null);
+    setClanSuccessMsg(null);
+    const res = await ClanService.joinClanByCode(joinInviteCode.trim());
+    if (res.success) {
+        setCurrentUser(prev => prev ? ({ ...prev, clan: res.clanName }) : prev);
+        setClanSuccessMsg(`Welcome to ${res.clanName}!`);
+        await loadClans();
+    } else {
+        setClanErrorMsg(res.error || "Invalid invite code.");
+    }
     setJoinInviteCode('');
   };
 
@@ -4619,11 +4636,24 @@ export default function App() {
                     </div>
 
                     <button
-                      onClick={() => {
-                        setShowCameraFlash(true);
-                        setTimeout(() => setShowCameraFlash(false), 200);
-                        setToastMessage("Snapshot Saved: Drone Recon Record logged.");
-                                                setCameraSheetOpen(false);
+                      onClick={async () => {
+                        setCameraSheetOpen(false);
+                        try {
+                          const image = await Camera.getPhoto({
+                            quality: 80,
+                            allowEditing: false,
+                            resultType: CameraResultType.Base64,
+                            source: CameraSource.Camera
+                          });
+                          setToastMessage("Uploading Recon Media...");
+                          const mediaUrl = await uploadMedia(image.base64String, 'photo', image.format, currentUser.uid);
+                          setToastMessage("Media uploaded. Creating post...");
+                          const res = await createPost(currentUser.uid, mediaUrl, 'photo', 'Field Recon', 'public', currentRunId, null);
+                          if (res.success) setToastMessage("Recon successfully posted.");
+                          else setToastMessage("Failed to post recon.");
+                        } catch (e) {
+                          console.error("Camera error", e);
+                        }
                       }}
                       className="clash-btn-primary"
                       style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
@@ -4633,10 +4663,33 @@ export default function App() {
 
                     <button
                       onClick={() => {
-                        setShowCameraFlash(true);
-                        setTimeout(() => setShowCameraFlash(false), 200);
-                        setToastMessage("Recon Video Saved: Tactical story created.");
-                                                setCameraSheetOpen(false);
+                        // Video recording fallback using HTML input since Capacitor camera doesn't natively do video capture easily in getPhoto
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = 'video/*';
+                        input.capture = 'environment';
+                        input.onchange = async (e) => {
+                          const file = e.target.files[0];
+                          if (!file) return;
+                          setCameraSheetOpen(false);
+                          setToastMessage("Uploading Recon Video...");
+                          
+                          const reader = new FileReader();
+                          reader.onload = async () => {
+                            try {
+                              const base64 = reader.result.split(',')[1];
+                              const mediaUrl = await uploadMedia(base64, 'video', 'mp4', currentUser.uid);
+                              const res = await createPost(currentUser.uid, mediaUrl, 'video', 'Tactical Video', 'public', currentRunId, null);
+                              if (res.success) setToastMessage("Video recon successfully posted.");
+                              else setToastMessage("Failed to post video recon.");
+                            } catch (err) {
+                              console.error(err);
+                              setToastMessage("Failed to upload video.");
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        };
+                        input.click();
                       }}
                       className="clash-btn-primary"
                       style={{ height: '48px', width: '100%', borderRadius: '24px', fontWeight: '800' }}
@@ -5313,21 +5366,19 @@ export default function App() {
                 </div>
 
                 {/* Current Clan Badge & Leave Clan Action */}
-                {currentUser?.clan && currentUser.clan !== 'None' && (
-                  <div style={{ background: 'rgba(252, 76, 2, 0.08)', border: '1px solid rgba(252, 76, 2, 0.3)', borderRadius: '14px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <span className="clash-label" style={{ fontSize: '8px', color: '#FC4C02' }}>Active Tactical Alignment</span>
-                      <div className="clash-subtitle" style={{ fontSize: '14px', color: 'white', marginTop: '2px' }}>{currentUser.clan}</div>
-                    </div>
-                    <button
-                      onClick={handleLeaveClanSubmit}
-                      style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #EF4444', color: '#EF4444', borderRadius: '10px', padding: '5px 10px', fontSize: '9px', fontWeight: '800', cursor: 'pointer' }}
-                    >
-                      Leave Clan
-                    </button>
-                  </div>
-                )}
-
+                {currentUser?.clan && currentUser.clan !== 'None' ? (
+                  <ClanManagement 
+                    currentUser={currentUser} 
+                    onClanLeft={() => {
+                        handleLeaveClanSubmit();
+                        setShowClanModal(false);
+                    }}
+                    onClanUpdated={(newName) => {
+                        setCurrentUser(prev => prev ? ({ ...prev, clan: newName }) : prev);
+                    }}
+                  />
+                ) : (
+                  <>
                 {/* Sub-Tab Selector (Create / Join) */}
                 <div style={{ display: 'flex', background: 'rgba(255,255,255,0.03)', borderRadius: '14px', padding: '3px', border: '1px solid #2A2A2A' }}>
                   <button
@@ -5428,7 +5479,7 @@ export default function App() {
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleJoinClanByName(c.name)}
+                              onClick={() => handleJoinClanByName(c.name, c.id)}
                               disabled={currentUser?.clan === c.name}
                               style={{
                                 background: currentUser?.clan === c.name ? '#2A2A2A' : '#FC4C02',
@@ -5470,6 +5521,8 @@ export default function App() {
                       </div>
                     </form>
                   </div>
+                )}
+                </>
                 )}
               </div>
             </div>

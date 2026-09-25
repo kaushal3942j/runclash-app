@@ -1,5 +1,5 @@
 import React from 'react';
-import { Flame, Map, Users, Shield, Clock } from 'lucide-react';
+import { Flame, Map, Users, Shield, Clock, Camera } from 'lucide-react';
 
 export const ActivityCard = ({ activity, onActorClick, onTerritoryClick }) => {
   if (!activity) return null;
@@ -60,6 +60,24 @@ export const ActivityCard = ({ activity, onActorClick, onTerritoryClick }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'white', fontSize: '12px', fontWeight: '600' }}>
             <Shield size={14} style={{ color: '#F59E0B' }} />
             Joined alliance <span style={{ color: '#F59E0B' }}>{clanName}</span>!
+          </div>
+        );
+      }
+      case 'social_post': {
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {activity.caption && (
+                <div style={{ fontSize: '12px', color: 'white', fontWeight: '500' }}>{activity.caption}</div>
+            )}
+            {activity.media_url && activity.media_type === 'photo' && (
+                <img src={activity.media_url} style={{ width: '100%', borderRadius: '8px', maxHeight: '300px', objectFit: 'cover' }} alt="Post media" />
+            )}
+            {activity.media_url && activity.media_type === 'video' && (
+                <video src={activity.media_url} controls style={{ width: '100%', borderRadius: '8px', maxHeight: '300px', objectFit: 'cover' }} />
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '4px', fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Camera size={12} /> {activity.is_story ? 'Story' : 'Recon'}</span>
+            </div>
           </div>
         );
       }

@@ -64,6 +64,45 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
     }
   };
 
+  const handleUpdateRole = async (targetUserId, newRole) => {
+    if (clan.myRole !== 'owner') return;
+    if (window.confirm(`Are you sure you want to make this user an ${newRole}?`)) {
+      const res = await ClanService.updateMemberRole(clan.id, targetUserId, newRole);
+      if (res.success) loadClan();
+      else alert(res.error || 'Failed to update role');
+    }
+  };
+
+  const handleRemoveMember = async (targetUserId) => {
+    if (clan.myRole !== 'owner' && clan.myRole !== 'officer') return;
+    if (window.confirm("Are you sure you want to remove this member?")) {
+      const res = await ClanService.removeMember(clan.id, targetUserId);
+      if (res.success) loadClan();
+      else alert(res.error || 'Failed to remove member');
+    }
+  };
+
+  const handleTransferOwnership = async (targetUserId) => {
+    if (clan.myRole !== 'owner') return;
+    if (window.confirm("Are you sure you want to transfer clan ownership? You will become an officer.")) {
+      const res = await ClanService.transferOwnership(clan.id, targetUserId);
+      if (res.success) loadClan();
+      else alert(res.error || 'Failed to transfer ownership');
+    }
+  };
+
+  const handleRegenerateCode = async () => {
+    if (clan.myRole !== 'owner' && clan.myRole !== 'officer') return;
+    if (window.confirm("Are you sure? Old invite codes will immediately stop working.")) {
+      const res = await ClanService.regenerateInviteCode(clan.id);
+      if (res.success) {
+        setClan({ ...clan, invite_code: res.newCode });
+      } else {
+        alert(res.error || 'Failed to regenerate code');
+      }
+    }
+  };
+
   if (loading) return <div style={{ color: 'white', padding: '20px' }}>Loading...</div>;
   if (!clan) return <div style={{ color: 'white', padding: '20px' }}>You are not in a clan.</div>;
 
@@ -120,10 +159,13 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
       {!clan.is_public && clan.myRole !== 'member' && (
         <div style={{ background: 'rgba(255,255,255,0.05)', padding: '16px', borderRadius: '12px' }}>
           <h4 style={{ margin: '0 0 8px 0' }}>Invite Code</h4>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <code style={{ background: '#111', padding: '8px', flex: 1, textAlign: 'center', borderRadius: '6px', fontSize: '14px', letterSpacing: '2px' }}>
               {clan.invite_code}
             </code>
+            <button onClick={handleRegenerateCode} style={{ background: '#333', color: 'white', border: 'none', padding: '8px', borderRadius: '6px', cursor: 'pointer' }}>
+              ↻
+            </button>
           </div>
         </div>
       )}
@@ -140,7 +182,23 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
                 </div>
                 <span style={{ fontSize: '12px' }}>{m.profiles?.display_name || 'Runner'}</span>
               </div>
-              <span style={{ fontSize: '10px', color: '#FC4C02' }}>{m.role.toUpperCase()}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '10px', color: '#FC4C02', width: '50px', textAlign: 'right' }}>{m.role.toUpperCase()}</span>
+                {clan.myRole === 'owner' && m.user_id !== currentUser.uid && (
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {m.role !== 'officer' && (
+                      <button onClick={() => handleUpdateRole(m.user_id, 'officer')} style={{ background: '#333', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>↑ Officer</button>
+                    )}
+                    {m.role === 'officer' && (
+                      <button onClick={() => handleUpdateRole(m.user_id, 'member')} style={{ background: '#333', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>↓ Demote</button>
+                    )}
+                    <button onClick={() => handleTransferOwnership(m.user_id)} style={{ background: '#F59E0B', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>👑 Make Owner</button>
+                  </div>
+                )}
+                {(clan.myRole === 'owner' || (clan.myRole === 'officer' && m.role !== 'owner' && m.role !== 'officer')) && m.user_id !== currentUser.uid && (
+                   <button onClick={() => handleRemoveMember(m.user_id)} style={{ background: '#EF4444', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>X</button>
+                )}
+              </div>
             </div>
           ))}
         </div>

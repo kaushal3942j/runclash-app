@@ -1,5 +1,81 @@
-import React from 'react';
-import { Flame, Map, Users, Shield, Clock, Camera } from 'lucide-react';
+import React, { useState } from 'react';
+import { Flame, Map, Users, Shield, Clock, Camera, Heart, MessageSquare } from 'lucide-react';
+import { toggleLikePost, getComments, addComment } from '../../services/socialService';
+
+const SocialPostContent = ({ activity }) => {
+  const [likes, setLikes] = useState(activity.social_likes?.[0]?.count || 0);
+  const [commentsCount, setCommentsCount] = useState(activity.social_comments?.[0]?.count || 0);
+  const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState('');
+
+  const handleLike = async () => {
+    const res = await toggleLikePost(activity.id);
+    if (res.success) {
+      setLikes(prev => res.action === 'liked' ? prev + 1 : prev - 1);
+    }
+  };
+
+  const handleShowComments = async () => {
+    if (!showComments) {
+      const res = await getComments(activity.id);
+      if (res.success) setComments(res.data || []);
+    }
+    setShowComments(!showComments);
+  };
+
+  const handleAddComment = async (e) => {
+    e.preventDefault();
+    if (!newComment.trim()) return;
+    const res = await addComment(activity.id, newComment);
+    if (res.success) {
+      setComments([...comments, res.data]);
+      setNewComment('');
+      setCommentsCount(prev => prev + 1);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {activity.caption && (
+          <div style={{ fontSize: '13px', color: 'white', fontWeight: '500' }}>{activity.caption}</div>
+      )}
+      {activity.media_url && activity.media_type === 'photo' && (
+          <img src={activity.media_url} style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'cover' }} alt="Post media" />
+      )}
+      {activity.media_url && activity.media_type === 'video' && (
+          <video src={activity.media_url} controls style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'cover' }} />
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '4px', fontSize: '12px', color: 'var(--clash-text-secondary)' }}>
+          <span onClick={handleLike} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: likes > 0 ? '#FC4C02' : 'inherit' }}>
+            <Heart size={14} /> {likes}
+          </span>
+          <span onClick={handleShowComments} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+            <MessageSquare size={14} /> {commentsCount}
+          </span>
+      </div>
+
+      {showComments && (
+        <div style={{ marginTop: '8px', borderTop: '1px solid #333', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {comments.map(c => (
+            <div key={c.id} style={{ display: 'flex', gap: '8px', fontSize: '11px' }}>
+              <div style={{ fontWeight: 'bold', color: 'white' }}>{c.profiles?.display_name || 'Runner'}:</div>
+              <div style={{ color: '#DDD' }}>{c.text}</div>
+            </div>
+          ))}
+          <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+            <input 
+              value={newComment} onChange={e => setNewComment(e.target.value)} 
+              placeholder="Add a comment..." 
+              style={{ flex: 1, background: '#111', color: 'white', border: '1px solid #333', padding: '6px', borderRadius: '4px', fontSize: '11px' }}
+            />
+            <button type="submit" style={{ background: '#FC4C02', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Post</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const ActivityCard = ({ activity, onActorClick, onTerritoryClick }) => {
   if (!activity) return null;
@@ -64,22 +140,7 @@ export const ActivityCard = ({ activity, onActorClick, onTerritoryClick }) => {
         );
       }
       case 'social_post': {
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {activity.caption && (
-                <div style={{ fontSize: '12px', color: 'white', fontWeight: '500' }}>{activity.caption}</div>
-            )}
-            {activity.media_url && activity.media_type === 'photo' && (
-                <img src={activity.media_url} style={{ width: '100%', borderRadius: '8px', maxHeight: '300px', objectFit: 'cover' }} alt="Post media" />
-            )}
-            {activity.media_url && activity.media_type === 'video' && (
-                <video src={activity.media_url} controls style={{ width: '100%', borderRadius: '8px', maxHeight: '300px', objectFit: 'cover' }} />
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '4px', fontSize: '11px', color: 'var(--clash-text-secondary)' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Camera size={12} /> {activity.is_story ? 'Story' : 'Recon'}</span>
-            </div>
-          </div>
-        );
+        return <SocialPostContent activity={activity} />;
       }
       default:
         return <div style={{ fontSize: '12px', color: 'white' }}>Updated profile activities.</div>;

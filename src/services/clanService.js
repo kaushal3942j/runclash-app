@@ -10,12 +10,16 @@ export const createClan = async (name, description, isPublic, logoUrl) => {
   const { data: existing } = await supabase.from('clans').select('id').ilike('name', name.trim()).limit(1);
   if (existing && existing.length > 0) return { success: false, error: 'Clan name already taken' };
 
+  // Generate invite code
+  const inviteCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+
   // Insert clan
   const { data: clan, error: clanError } = await supabase.from('clans').insert({
     name: name.trim(),
     description,
     is_public: isPublic,
     logo_url: logoUrl,
+    invite_code: inviteCode,
     owner_id: user.id
   }).select().single();
 
@@ -70,10 +74,14 @@ export const joinClan = async (clanId, inviteCode = null) => {
     await supabase.from('profiles').update({ clan_name: clan.name }).eq('id', user.id);
     return { success: true, status: 'joined' };
   } else {
-    // Send request
+    // Check if already requested
+    const { data: existingReq } = await supabase.from('clan_join_requests').select('id').eq('clan_id', clan.id).eq('user_id', user.id).eq('status', 'pending').single();
+    if (existingReq) return { success: true, status: 'requested' };
+
     const { error: requestError } = await supabase.from('clan_join_requests').insert({
       clan_id: clan.id,
-      user_id: user.id
+      user_id: user.id,
+      status: 'pending'
     });
     if (requestError) return { success: false, error: requestError.message };
     return { success: true, status: 'requested' };
@@ -109,6 +117,10 @@ export const joinClanByCode = async (inviteCode) => {
 
   const { data: clan, error: clanError } = await supabase.from('clans').select('*').eq('invite_code', inviteCode).single();
   if (clanError || !clan) return { success: false, error: 'Invalid invite code' };
+
+  // Check if already in clan
+  const { data: existingMember } = await supabase.from('clan_members').select('role').eq('user_id', user.id).single();
+  if (existingMember) return { success: false, error: 'You are already in a clan' };
 
   const { error: memberError } = await supabase.from('clan_members').insert({
     clan_id: clan.id,
@@ -163,7 +175,63 @@ export const handleJoinRequest = async (requestId, action) => {
 
 export const leaveClan = async (userId, clanId) => {
     if (!useSupabase) return { success: false };
+
+    // Check if owner and alone
+    const { data: member } = await supabase.from('clan_members').select('role').eq('clan_id', clanId).eq('user_id', userId).single();
+    if (member && member.role === 'owner') {
+        const { count } = await supabase.from('clan_members').select('*', { count: 'exact', head: true }).eq('clan_id', clanId);
+        if (count > 1) {
+            return { success: false, error: 'You must transfer ownership to another member before leaving, or remove all members to disband.' };
+        } else {
+            // Disband clan if owner is the last one
+            await supabase.from('clans').delete().eq('id', clanId);
+            await supabase.from('profiles').update({ clan_name: 'None' }).eq('id', userId);
+            return { success: true, disbanded: true };
+        }
+    }
+
     await supabase.from('clan_members').delete().match({ clan_id: clanId, user_id: userId });
     await supabase.from('profiles').update({ clan_name: 'None' }).eq('id', userId);
     return { success: true };
+};
+
+export const updateMemberRole = async (clanId, userId, newRole) => {
+    if (!useSupabase) return { success: false };
+    const { error } = await supabase.from('clan_members').update({ role: newRole }).match({ clan_id: clanId, user_id: userId });
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+};
+
+export const removeMember = async (clanId, userId) => {
+    if (!useSupabase) return { success: false };
+    const { error } = await supabase.from('clan_members').delete().match({ clan_id: clanId, user_id: userId });
+    if (error) return { success: false, error: error.message };
+    await supabase.from('profiles').update({ clan_name: 'None' }).eq('id', userId);
+    return { success: true };
+};
+
+export const transferOwnership = async (clanId, newOwnerId) => {
+    if (!useSupabase) return { success: false };
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Not authenticated' };
+
+    // 1. Promote new owner
+    const { error: err1 } = await supabase.from('clan_members').update({ role: 'owner' }).match({ clan_id: clanId, user_id: newOwnerId });
+    if (err1) return { success: false, error: err1.message };
+
+    // 2. Demote self
+    await supabase.from('clan_members').update({ role: 'officer' }).match({ clan_id: clanId, user_id: user.id });
+
+    // 3. Update clan record
+    await supabase.from('clans').update({ owner_id: newOwnerId }).eq('id', clanId);
+
+    return { success: true };
+};
+
+export const regenerateInviteCode = async (clanId) => {
+    if (!useSupabase) return { success: false };
+    const newCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const { error } = await supabase.from('clans').update({ invite_code: newCode }).eq('id', clanId);
+    if (error) return { success: false, error: error.message };
+    return { success: true, newCode };
 };

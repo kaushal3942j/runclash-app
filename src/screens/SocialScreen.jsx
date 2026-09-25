@@ -212,6 +212,9 @@ export const SocialScreen = ({
             <p className="clash-body" style={{ margin: 0, fontSize: '12px', color: '#A0A0A0' }}>
               Current Clan Membership: <strong style={{ color: '#FC4C02' }}>{currentUser?.clan || currentUser?.clan_name || 'None'}</strong>
             </p>
+            <p className="clash-body" style={{ margin: 0, fontSize: '11px', color: '#A0A0A0', marginTop: '12px' }}>
+              To view, manage, or create a clan, go to your <strong>Profile</strong> screen and tap your clan name.
+            </p>
           </div>
         </div>
       </div>

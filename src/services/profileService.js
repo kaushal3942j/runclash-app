@@ -7,31 +7,26 @@ export const isDefaultName = (name) => {
   return lower === '' || lower === 'runner' || lower === 'guest runner' || lower === 'guest' || lower === 'offline runner';
 };
 
-// Validate clan referential integrity against real public.clans table
-export const validateClanIntegrity = async (userUuid, rawClanName) => {
-  if (!rawClanName || rawClanName === 'None' || rawClanName === 'null') {
-    return 'None';
-  }
-
+// Validate clan referential integrity against real public.clan_members table
+export const validateClanIntegrity = async (userUuid) => {
   if (!useSupabase || !userUuid) return 'None';
 
   try {
-    const { data: matchingClan, error } = await supabase
-      .from('clans')
-      .select('id, name')
-      .eq('name', rawClanName)
+    const { data: memberData, error } = await supabase
+      .from('clan_members')
+      .select('clans(name)')
+      .eq('user_id', userUuid)
       .maybeSingle();
 
-    if (error || !matchingClan) {
+    if (error || !memberData || !memberData.clans) {
       await supabase
         .from('profiles')
         .update({ clan_name: 'None', updated_at: new Date().toISOString() })
         .eq('id', userUuid);
-
       return 'None';
     }
 
-    return matchingClan.name;
+    return memberData.clans.name;
   } catch (err) {
     console.error('[CLAN INTEGRITY] Error validating clan integrity:', err);
     return 'None';
@@ -165,7 +160,7 @@ export const updateProfile = async (patch) => {
     if (patch.showActivity !== undefined) mapped.show_activity = patch.showActivity;
     if (patch.allowFriendRequests !== undefined) mapped.allow_friend_requests = patch.allowFriendRequests;
     if (patch.clan !== undefined) {
-      mapped.clan_name = await validateClanIntegrity(userId, patch.clan);
+      mapped.clan_name = await validateClanIntegrity(userId);
     }
 
     const { data, error } = await supabase
@@ -312,7 +307,7 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
       .maybeSingle();
 
     if (existing) {
-      const validClan = await validateClanIntegrity(user.id, existing.clan_name);
+      const validClan = await validateClanIntegrity(user.id);
       existing.clan_name = validClan;
 
       if (customPreferred && isDefaultName(existing.display_name)) {
@@ -332,8 +327,7 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
       return { success: true, data: existing, created: false, error: null };
     }
 
-    const legacyClanCandidate = legacyData?.clan || legacyData?.clan_name || 'None';
-    const validClan = await validateClanIntegrity(user.id, legacyClanCandidate);
+    const validClan = await validateClanIntegrity(user.id);
 
     const profilePayload = {
       id: user.id,

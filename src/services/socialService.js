@@ -74,7 +74,9 @@ export const fetchPosts = async (feedType = 'global') => {
     .from('social_posts')
     .select(`
       *,
-      profiles:user_id (id, display_name, avatar_url, clan_name)
+      profiles:user_id (id, display_name, avatar_url, clan_name),
+      social_likes(count),
+      social_comments(count)
     `)
     .order('created_at', { ascending: false });
     
@@ -96,4 +98,46 @@ export const fetchPosts = async (feedType = 'global') => {
   }
   
   return { success: true, data };
+};
+
+export const toggleLikePost = async (postId) => {
+  if (!useSupabase) return { success: false };
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  // Check if liked
+  const { data: existing } = await supabase.from('social_likes').select('id').eq('post_id', postId).eq('user_id', user.id).maybeSingle();
+  
+  if (existing) {
+    // unlike
+    const { error } = await supabase.from('social_likes').delete().eq('id', existing.id);
+    return { success: !error, action: 'unliked', error: error?.message };
+  } else {
+    // like
+    const { error } = await supabase.from('social_likes').insert({ post_id: postId, user_id: user.id });
+    return { success: !error, action: 'liked', error: error?.message };
+  }
+};
+
+export const addComment = async (postId, text) => {
+  if (!useSupabase) return { success: false };
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: 'Not authenticated' };
+
+  const { data, error } = await supabase.from('social_comments').insert({
+    post_id: postId,
+    user_id: user.id,
+    text: text
+  }).select('*, profiles:user_id(display_name, avatar_url)').single();
+
+  return { success: !error, data, error: error?.message };
+};
+
+export const getComments = async (postId) => {
+  if (!useSupabase) return { success: false };
+  const { data, error } = await supabase.from('social_comments')
+    .select('*, profiles:user_id(display_name, avatar_url)')
+    .eq('post_id', postId)
+    .order('created_at', { ascending: true });
+  return { success: !error, data, error: error?.message };
 };

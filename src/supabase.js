@@ -245,6 +245,18 @@ export const registerUser = async (email, password, name, clan) => {
     const { data: sessionData } = await supabase.auth.getSession();
     const currentSession = sessionData?.session;
 
+    // Determine the environment-aware redirect URL
+    const getRedirectUrl = () => {
+      // Vercel Vite sets import.meta.env.PROD in production builds
+      if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.PROD) {
+        return 'https://runclash.vercel.app/';
+      }
+      // Fallback for local development
+      return 'http://localhost:3000/';
+    };
+
+    const redirectUrl = getRedirectUrl();
+
     if (currentSession?.user?.is_anonymous) {
       isUpgrade = true;
       const { data: updateData, error: updateError } = await supabase.auth.updateUser({
@@ -255,7 +267,7 @@ export const registerUser = async (email, password, name, clan) => {
           clan_name: clan || 'None'
         }
       }, {
-        emailRedirectTo: 'https://runclash.vercel.app/'
+        emailRedirectTo: redirectUrl
       });
       if (updateError) throw updateError;
       user = updateData.user;
@@ -265,7 +277,7 @@ export const registerUser = async (email, password, name, clan) => {
         email,
         password,
         options: {
-          emailRedirectTo: 'https://runclash.vercel.app/',
+          emailRedirectTo: redirectUrl,
           data: {
             display_name: name,
             clan_name: clan || 'None'

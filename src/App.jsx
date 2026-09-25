@@ -2309,10 +2309,15 @@ export default function App() {
   const handleResendEmail = async () => {
     try {
       setIsAuthenticating(true);
+      // Vercel Vite sets import.meta.env.PROD in production builds
+      const redirectUrl = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.PROD) 
+        ? 'https://runclash.vercel.app/' 
+        : 'http://localhost:3000/';
+
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email: authEmail,
-        options: { emailRedirectTo: 'https://runclash.vercel.app/' }
+        options: { emailRedirectTo: redirectUrl }
       });
       if (error) throw error;
       setAuthSuccessMessage("Verification email resent!");

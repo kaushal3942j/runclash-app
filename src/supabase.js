@@ -213,7 +213,7 @@ export const subscribeToAuth = (callback) => {
             xp: profile.xp,
             coins: profile.coins,
             premium: profile.premium,
-            is_verified: !!session.user.email_confirmed_at || !!session.user.phone_confirmed_at || profile.is_verified || false
+            is_verified: !!session.user.email_confirmed_at || !!session.user.phone_confirmed_at
           });
         } else {
           callback({ uid: session.user.id, email: session.user.email, guest: true, is_verified: !!session.user.email_confirmed_at || !!session.user.phone_confirmed_at });
@@ -300,8 +300,7 @@ export const registerUser = async (email, password, name, clan) => {
       level: existingProfile ? existingProfile.level : 1,
       xp: existingProfile ? existingProfile.xp : 0,
       coins: existingProfile ? existingProfile.coins : 100,
-      premium: existingProfile ? existingProfile.premium : false,
-      is_verified: existingProfile ? existingProfile.is_verified : false
+      premium: existingProfile ? existingProfile.premium : false
     };
 
     try {
@@ -330,7 +329,7 @@ export const registerUser = async (email, password, name, clan) => {
       xp: profile.xp,
       coins: profile.coins,
       premium: profile.premium,
-      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at || profile.is_verified
+      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at
     };
   } else {
     const profile = {
@@ -380,7 +379,7 @@ export const loginUser = async (email, password) => {
       xp: profile.xp,
       coins: profile.coins,
       premium: profile.premium,
-      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at || profile.is_verified || false
+      is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at
     };
   } else {
     const profile = {
@@ -542,7 +541,7 @@ export const verifyPhoneOtp = async (phone, token, name, clan) => {
     // If they were already registered
     const { error: updateError } = await supabase
       .from('profiles')
-      .update({ is_verified: true, phone_number: phone })
+      .update({ phone_number: phone })
       .eq('id', user.id);
       
     return {
@@ -566,7 +565,6 @@ export const verifyPhoneOtp = async (phone, token, name, clan) => {
       xp: 0,
       coins: 100,
       premium: false,
-      is_verified: true,
       phone_number: phone
     };
     

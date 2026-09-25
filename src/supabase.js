@@ -278,57 +278,56 @@ export const registerUser = async (email, password, name, clan) => {
       session = authData.session;
     }
 
-    // If session is null (which happens on signUp when email confirmation is required)
-    // or if it's an upgrade and they have a pending new_email
     const requiresVerification = !session || (isUpgrade && user?.new_email);
 
-    // Fetch existing profile to avoid overwriting stats during an upgrade
-    let existingProfile = null;
-    try {
-      const { data: fetchedProfile } = await supabase
+    if (isUpgrade) {
+      // For anonymous upgrades, the profile already exists from their guest session.
+      const { error: profileError } = await supabase
         .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-      existingProfile = fetchedProfile;
-    } catch(e) {}
+        .update({
+          display_name: name,
+          clan_name: clan || 'None'
+        })
+        .eq('id', user.id);
 
-    const profile = {
-      id: user.id,
-      display_name: name,
-      clan_name: clan || 'None',
-      level: existingProfile ? existingProfile.level : 1,
-      xp: existingProfile ? existingProfile.xp : 0,
-      coins: existingProfile ? existingProfile.coins : 100,
-      premium: existingProfile ? existingProfile.premium : false
-    };
-
-    try {
-      profile.device_id = await getDeviceId();
-    } catch(e) {}
-
-    // We still write/update the profile so they have it when they verify
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .upsert(profile);
-
-    console.log(`[SUPABASE]\noperation: UPSERT\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
-
-    if (profileError) throw profileError;
+      console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
+    }
+    // For new user signups, we DO NOT write to the profiles table from the frontend.
+    // The 'handle_new_user' database trigger automatically creates the profile row 
+    // safely inside the database using the raw_user_meta_data we just passed.
+    // This avoids fake-UUID foreign key errors caused by email enumeration protection.
 
     if (requiresVerification) {
       return { requiresEmailVerification: true, email: email };
     }
+
+    // Fetch the actual profile that was just created by the trigger,
+    // or the existing profile if it was an upgrade, to return the correct stats.
+    let level = 1, xp = 0, coins = 100, premium = false;
+    try {
+      const { data: fetchedProfile } = await supabase
+        .from('profiles')
+        .select('level, xp, coins, premium')
+        .eq('id', user.id)
+        .single();
+        
+      if (fetchedProfile) {
+        level = fetchedProfile.level;
+        xp = fetchedProfile.xp;
+        coins = fetchedProfile.coins;
+        premium = fetchedProfile.premium;
+      }
+    } catch (err) {}
 
     return {
       uid: user.id,
       email: user.email,
       displayName: name,
       clan: clan || 'None',
-      level: profile.level,
-      xp: profile.xp,
-      coins: profile.coins,
-      premium: profile.premium,
+      level: level,
+      xp: xp,
+      coins: coins,
+      premium: premium,
       is_verified: !!user.email_confirmed_at || !!user.phone_confirmed_at
     };
   } else {

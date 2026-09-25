@@ -41,7 +41,6 @@ import { FEATURE_KEYS } from './config/premiumConfig';
 import { DEFAULT_DAILY_MISSIONS } from './utils/missions';
 import { getRankFromXp } from './utils/ranks';
 import { formatDisplayDistance, getDistanceInMeters } from './utils/distance';
-import PhoneVerificationModal from './components/PhoneVerificationModal';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -243,7 +242,6 @@ export default function App() {
   const [isFinalizingRun, setIsFinalizingRun] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [isPhoneVerificationOpen, setIsPhoneVerificationOpen] = useState(false);
 
   // Global App States
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'social', 'conquests', 'profile'
@@ -394,10 +392,6 @@ export default function App() {
 
   const handleCreateClanSubmit = async (e) => {
     e.preventDefault();
-    if (!currentProfile?.is_phone_verified) {
-      setIsPhoneVerificationOpen(true);
-      return;
-    }
     
     if (!newClanName.trim()) {
       setClanErrorMsg("Clan Name cannot be empty.");
@@ -3278,25 +3272,6 @@ export default function App() {
                         Exit HQ
                       </button>
                     </div>
-
-                    {/* PHONE VERIFICATION BANNER */}
-                    {!currentProfile?.is_phone_verified && (
-                      <div className="runner-hq-card card-entrance" style={{ backgroundColor: 'rgba(252, 76, 2, 0.1)', borderColor: 'rgba(252, 76, 2, 0.3)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div>
-                            <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 'bold', color: '#FC4C02' }}>Action Required</h4>
-                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--clash-text-secondary)' }}>Verify phone to claim territories & create clans.</p>
-                          </div>
-                          <button 
-                            onClick={() => setIsPhoneVerificationOpen(true)}
-                            className="clash-btn-primary btn-sm" 
-                            style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}>
-                            Verify Now
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
                     {/* 1. HERO PROFILE CARD */}
                     <div className="runner-hq-card runner-hq-hero-bg card-entrance" style={{
                       display: 'flex',
@@ -5774,16 +5749,6 @@ export default function App() {
               onClose={() => setViewingPublicProfileId(null)}
             />
           )}
-
-          <PhoneVerificationModal 
-            isOpen={isPhoneVerificationOpen}
-            onClose={() => setIsPhoneVerificationOpen(false)}
-            onVerified={() => {
-              console.log('Phone verified successfully.');
-            }}
-            isDark={prefAppearance?.darkMode ?? true}
-          />
-
         </div>
       </div>
 

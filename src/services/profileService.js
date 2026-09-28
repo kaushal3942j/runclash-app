@@ -14,11 +14,11 @@ export const validateClanIntegrity = async (userUuid) => {
   try {
     const { data: memberData, error } = await supabase
       .from('clan_members')
-      .select('clans(name)')
+      .select('clan_id')
       .eq('user_id', userUuid)
       .maybeSingle();
 
-    if (error || !memberData || !memberData.clans) {
+    if (error || !memberData || !memberData.clan_id) {
       await supabase
         .from('profiles')
         .update({ clan_name: 'None', updated_at: new Date().toISOString() })
@@ -26,7 +26,17 @@ export const validateClanIntegrity = async (userUuid) => {
       return 'None';
     }
 
-    return memberData.clans.name;
+    const { data: clanData, error: clanError } = await supabase
+      .from('clans')
+      .select('name')
+      .eq('id', memberData.clan_id)
+      .maybeSingle();
+
+    if (clanError || !clanData || !clanData.name) {
+       return 'None';
+    }
+
+    return clanData.name;
   } catch (err) {
     console.error('[CLAN INTEGRITY] Error validating clan integrity:', err);
     return 'None';

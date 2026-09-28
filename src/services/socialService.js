@@ -74,9 +74,8 @@ export const fetchPosts = async (feedType = 'global') => {
     .from('social_posts')
     .select(`
       *,
-      profiles:user_id (id, display_name, avatar_url, clan_name),
-      social_likes(count),
-      social_comments(count)
+      post_likes(count),
+      post_comments(count)
     `)
     .order('created_at', { ascending: false });
     
@@ -97,6 +96,18 @@ export const fetchPosts = async (feedType = 'global') => {
     return { success: false, error: error.message };
   }
   
+  if (data && data.length > 0) {
+    const userIds = [...new Set(data.map(p => p.user_id))];
+    const { data: profiles } = await supabase.from('profiles').select('id, display_name, avatar_url, clan_name').in('id', userIds);
+    if (profiles) {
+      const profileMap = {};
+      profiles.forEach(p => profileMap[p.id] = p);
+      data.forEach(p => {
+        p.profiles = profileMap[p.user_id] || { display_name: 'Runner', avatar_url: null };
+      });
+    }
+  }
+  
   return { success: true, data };
 };
 
@@ -106,15 +117,15 @@ export const toggleLikePost = async (postId) => {
   if (!user) return { success: false, error: 'Not authenticated' };
 
   // Check if liked
-  const { data: existing } = await supabase.from('social_likes').select('id').eq('post_id', postId).eq('user_id', user.id).maybeSingle();
+  const { data: existing } = await supabase.from('post_likes').select('id').eq('post_id', postId).eq('user_id', user.id).maybeSingle();
   
   if (existing) {
     // unlike
-    const { error } = await supabase.from('social_likes').delete().eq('id', existing.id);
+    const { error } = await supabase.from('post_likes').delete().eq('id', existing.id);
     return { success: !error, action: 'unliked', error: error?.message };
   } else {
     // like
-    const { error } = await supabase.from('social_likes').insert({ post_id: postId, user_id: user.id });
+    const { error } = await supabase.from('post_likes').insert({ post_id: postId, user_id: user.id });
     return { success: !error, action: 'liked', error: error?.message };
   }
 };
@@ -124,20 +135,38 @@ export const addComment = async (postId, text) => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Not authenticated' };
 
-  const { data, error } = await supabase.from('social_comments').insert({
+  const { data, error } = await supabase.from('post_comments').insert({
     post_id: postId,
     user_id: user.id,
     text: text
-  }).select('*, profiles:user_id(display_name, avatar_url)').single();
+  }).select('*').single();
+
+  if (data) {
+    const { data: profile } = await supabase.from('profiles').select('display_name, avatar_url').eq('id', user.id).single();
+    if (profile) data.profiles = profile;
+  }
 
   return { success: !error, data, error: error?.message };
 };
 
 export const getComments = async (postId) => {
   if (!useSupabase) return { success: false };
-  const { data, error } = await supabase.from('social_comments')
-    .select('*, profiles:user_id(display_name, avatar_url)')
+  const { data, error } = await supabase.from('post_comments')
+    .select('*')
     .eq('post_id', postId)
     .order('created_at', { ascending: true });
+    
+  if (data && data.length > 0) {
+    const userIds = [...new Set(data.map(c => c.user_id))];
+    const { data: profiles } = await supabase.from('profiles').select('id, display_name, avatar_url').in('id', userIds);
+    if (profiles) {
+      const profileMap = {};
+      profiles.forEach(p => profileMap[p.id] = p);
+      data.forEach(c => {
+        c.profiles = profileMap[c.user_id] || { display_name: 'Runner', avatar_url: null };
+      });
+    }
+  }
+  
   return { success: !error, data, error: error?.message };
 };

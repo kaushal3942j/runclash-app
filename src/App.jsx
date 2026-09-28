@@ -1518,7 +1518,8 @@ export default function App() {
 
   const validateLoopRouteWrapper = (path, distanceKm) => {
     // Wrap the new engine to include the legacy run duration check
-    const activeSec = (Date.now() - (startTimeRef.current ? startTimeRef.current.getTime() : Date.now())) / 1000;
+    // Use the actual RunEngine duration metric rather than an uninitialized ref
+    const activeSec = runState.duration || 0;
     const minDurationSec = TERRITORY_ENGINE_CONFIG.MIN_LOOP_DURATION_SEC || 25;
 
     if (activeSec < minDurationSec) {
@@ -4648,7 +4649,7 @@ export default function App() {
                           setToastMessage("Uploading Recon Media...");
                           const mediaUrl = await uploadMedia(image.base64String, 'photo', image.format, currentUser.uid);
                           setToastMessage("Media uploaded. Creating post...");
-                          const res = await createPost(currentUser.uid, mediaUrl, 'photo', 'Field Recon', 'public', currentRunId, null);
+                          const res = await createPost(currentUser.uid, mediaUrl, 'photo', 'Field Recon', 'public', runState?.runId || null, null);
                           if (res.success) setToastMessage("Recon successfully posted.");
                           else setToastMessage("Failed to post recon.");
                         } catch (e) {
@@ -4679,7 +4680,7 @@ export default function App() {
                             try {
                               const base64 = reader.result.split(',')[1];
                               const mediaUrl = await uploadMedia(base64, 'video', 'mp4', currentUser.uid);
-                              const res = await createPost(currentUser.uid, mediaUrl, 'video', 'Tactical Video', 'public', currentRunId, null);
+                              const res = await createPost(currentUser.uid, mediaUrl, 'video', 'Tactical Video', 'public', runState?.runId || null, null);
                               if (res.success) setToastMessage("Video recon successfully posted.");
                               else setToastMessage("Failed to post video recon.");
                             } catch (err) {
@@ -4835,7 +4836,7 @@ export default function App() {
                     const currentAcc = gpsAccuracyRef.current || 15;
                     const startAcc = startAccuracyRef.current || 15;
                     const closureRadius = Math.min(Math.max(12, startAcc, currentAcc), 22);
-                    const activeSec = (Date.now() - (startTimeRef.current ? startTimeRef.current.getTime() : Date.now())) / 1000;
+                    const activeSec = runState.duration || 0;
 
                     const closedCoords = path.length >= 3 ? [...path, path[0]] : [];
                     const areaSqM = closedCoords.length >= 4 ? calculatePolygonArea(closedCoords) : 0;

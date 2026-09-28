@@ -3,8 +3,8 @@ import { Flame, Map, Users, Shield, Clock, Camera, Heart, MessageSquare } from '
 import { toggleLikePost, getComments, addComment } from '../../services/socialService';
 
 const SocialPostContent = ({ activity }) => {
-  const [likes, setLikes] = useState(activity.social_likes?.[0]?.count || 0);
-  const [commentsCount, setCommentsCount] = useState(activity.social_comments?.[0]?.count || 0);
+  const [likes, setLikes] = useState(activity.post_likes?.[0]?.count || 0);
+  const [commentsCount, setCommentsCount] = useState(activity.post_comments?.[0]?.count || 0);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');

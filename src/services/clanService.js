@@ -83,24 +83,50 @@ export const joinClan = async (clanId, inviteCode = null) => {
 
 export const getClanDetails = async (clanId) => {
     if (!useSupabase) return { success: false };
-    const { data, error } = await supabase
+    const { data: clanData, error } = await supabase
         .from('clans')
         .select(`
             *,
-            clan_members(user_id, role, joined_at, profiles(display_name, avatar_url)),
-            clan_join_requests(id, user_id, status, created_at, profiles(display_name, avatar_url))
+            clan_members(user_id, role, joined_at),
+            clan_join_requests(id, user_id, status, created_at)
         `)
         .eq('id', clanId)
         .single();
         
-    if (error) return { success: false, error: error.message };
+    if (error || !clanData) return { success: false, error: error?.message || 'Not found' };
     
     // Filter out non-pending requests
-    if (data && data.clan_join_requests) {
-      data.clan_join_requests = data.clan_join_requests.filter(r => r.status === 'pending');
+    if (clanData.clan_join_requests) {
+      clanData.clan_join_requests = clanData.clan_join_requests.filter(r => r.status === 'pending');
+    }
+
+    // Collect all user IDs to fetch profiles manually
+    const userIds = [
+      ...(clanData.clan_members?.map(m => m.user_id) || []),
+      ...(clanData.clan_join_requests?.map(r => r.user_id) || [])
+    ];
+    
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, display_name, avatar_url')
+        .in('id', userIds);
+        
+      if (profiles) {
+        const profileMap = {};
+        profiles.forEach(p => { profileMap[p.id] = p; });
+        
+        clanData.clan_members?.forEach(m => {
+          m.profiles = profileMap[m.user_id] || { display_name: 'Unknown', avatar_url: null };
+        });
+        
+        clanData.clan_join_requests?.forEach(r => {
+          r.profiles = profileMap[r.user_id] || { display_name: 'Unknown', avatar_url: null };
+        });
+      }
     }
     
-    return { success: true, data };
+    return { success: true, data: clanData };
 };
 
 export const joinClanByCode = async (inviteCode) => {
@@ -136,12 +162,16 @@ export const getUserClan = async (userId) => {
     if (!useSupabase) return { success: false, data: null };
     const { data: members, error } = await supabase
         .from('clan_members')
-        .select('clan_id, role, clans(*)')
+        .select('clan_id, role')
         .eq('user_id', userId)
         .limit(1);
         
     if (error || !members || members.length === 0) return { success: false, data: null };
-    return { success: true, data: { ...members[0].clans, role: members[0].role } };
+    
+    const { data: clanData } = await supabase.from('clans').select('*').eq('id', members[0].clan_id).single();
+    if (!clanData) return { success: false, data: null };
+    
+    return { success: true, data: { ...clanData, role: members[0].role } };
 };
 
 export const handleJoinRequest = async (requestId, action) => {
@@ -208,15 +238,9 @@ export const transferOwnership = async (clanId, newOwnerId) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { success: false, error: 'Not authenticated' };
 
-    // 1. Promote new owner
-    const { error: err1 } = await supabase.from('clan_members').update({ role: 'owner' }).match({ clan_id: clanId, user_id: newOwnerId });
-    if (err1) return { success: false, error: err1.message };
-
-    // 2. Demote self
-    await supabase.from('clan_members').update({ role: 'officer' }).match({ clan_id: clanId, user_id: user.id });
-
-    // 3. Update clan record
-    await supabase.from('clans').update({ owner_id: newOwnerId }).eq('id', clanId);
+    // 1. Update clan record (Database trigger will handle roles)
+    const { error } = await supabase.from('clans').update({ owner_id: newOwnerId }).eq('id', clanId);
+    if (error) return { success: false, error: error.message };
 
     return { success: true };
 };

@@ -25,14 +25,7 @@ export const createClan = async (name, description, isPublic, logoUrl) => {
 
   if (clanError) return { success: false, error: clanError.message };
 
-  // Add owner to members
-  const { error: memberError } = await supabase.from('clan_members').insert({
-    clan_id: clan.id,
-    user_id: user.id,
-    role: 'owner'
-  });
-
-  if (memberError) return { success: false, error: memberError.message };
+  // Owner is now automatically added to clan_members via database trigger
   
   // Also update profiles for legacy compatibility
   await supabase.from('profiles').update({ clan_name: clan.name }).eq('id', user.id);

@@ -719,8 +719,8 @@ export const subscribeToTerritories = (onUpdate) => {
 
       onUpdate(list);
     };
-    
     activeLoadTerritories = loadTerritories;
+    listeners.add(onUpdate);
     loadTerritories();
 
     // 2. Setup realtime subscription channel
@@ -732,6 +732,7 @@ export const subscribeToTerritories = (onUpdate) => {
 
     return () => {
       activeLoadTerritories = null;
+      listeners.delete(onUpdate);
       supabase.removeChannel(channel);
     };
   } else {
@@ -1007,7 +1008,7 @@ export const saveNewTerritory = async (territory) => {
 
   const finalTerr = {
     ...territory,
-    id: insertData ? insertData.id : (territory.id || `t_local_${Date.now()}`),
+    id: (insertData && insertData.id) ? insertData.id : (territory.id || `t_local_${Date.now()}`),
     claimId: claimId,
     ownerId: validOwnerId,
     coords: closedCoords,

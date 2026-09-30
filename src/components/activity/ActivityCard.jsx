@@ -1,76 +1,131 @@
 import React, { useState } from 'react';
-import { Flame, Map, Users, Shield, Clock, Camera, Heart, MessageSquare } from 'lucide-react';
-import { toggleLikePost, getComments, addComment } from '../../services/socialService';
+import { Flame, Map, Users, Shield, Share2, Heart, MessageSquare, Clock } from 'lucide-react';
+import { toggleLikePost } from '../../services/socialService';
+import { CommentsModal } from '../social/CommentsModal';
 
 const SocialPostContent = ({ activity }) => {
   const [likes, setLikes] = useState(activity.post_likes?.[0]?.count || 0);
   const [commentsCount, setCommentsCount] = useState(activity.post_comments?.[0]?.count || 0);
   const [showComments, setShowComments] = useState(false);
-  const [comments, setComments] = useState([]);
-  const [newComment, setNewComment] = useState('');
+  const [isLiked, setIsLiked] = useState(activity.post_likes?.[0]?.count > 0);
+  const [showDetail, setShowDetail] = useState(false);
 
-  const handleLike = async () => {
+  const handleLike = async (e) => {
+    if (e) e.stopPropagation();
+    const wasLiked = isLiked;
+    setIsLiked(!wasLiked);
+    setLikes(prev => wasLiked ? prev - 1 : prev + 1);
+
     const res = await toggleLikePost(activity.id);
-    if (res.success) {
-      setLikes(prev => res.action === 'liked' ? prev + 1 : prev - 1);
+    if (!res.success) {
+      setIsLiked(wasLiked);
+      setLikes(prev => wasLiked ? prev + 1 : prev - 1);
     }
   };
 
-  const handleShowComments = async () => {
-    if (!showComments) {
-      const res = await getComments(activity.id);
-      if (res.success) setComments(res.data || []);
-    }
-    setShowComments(!showComments);
-  };
-
-  const handleAddComment = async (e) => {
-    e.preventDefault();
-    if (!newComment.trim()) return;
-    const res = await addComment(activity.id, newComment);
-    if (res.success) {
-      setComments([...comments, res.data]);
-      setNewComment('');
-      setCommentsCount(prev => prev + 1);
+  const handleShare = async (e) => {
+    if (e) e.stopPropagation();
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'RunClash Post',
+          text: activity.caption || 'Check out this run on RunClash!',
+          url: activity.media_url || window.location.href,
+        });
+      } catch (err) {
+        console.error('Error sharing:', err);
+      }
+    } else {
+      console.log('Web Share API not supported');
     }
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      {activity.caption && (
-          <div style={{ fontSize: '13px', color: 'white', fontWeight: '500' }}>{activity.caption}</div>
-      )}
+  const PostMedia = ({ isDetail = false }) => (
+    <div 
+      onClick={() => !isDetail && setShowDetail(true)}
+      style={{ cursor: !isDetail ? 'pointer' : 'default', width: '100%', position: 'relative' }}
+    >
       {activity.media_url && activity.media_type === 'photo' && (
-          <img src={activity.media_url} style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'cover' }} alt="Post media" />
+        <img src={activity.media_url} style={{ width: '100%', borderRadius: isDetail ? '0' : '12px', maxHeight: isDetail ? '60vh' : '450px', objectFit: 'contain', border: isDetail ? 'none' : '1px solid #2A2A2A', background: isDetail ? '#000' : 'transparent' }} alt="Post media" />
       )}
       {activity.media_url && activity.media_type === 'video' && (
-          <video src={activity.media_url} controls style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'cover' }} />
+        <video src={activity.media_url} controls style={{ width: '100%', borderRadius: isDetail ? '0' : '12px', maxHeight: isDetail ? '60vh' : '450px', objectFit: 'contain', border: isDetail ? 'none' : '1px solid #2A2A2A', background: isDetail ? '#000' : 'transparent' }} />
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '4px', fontSize: '12px', color: 'var(--clash-text-secondary)' }}>
-          <span onClick={handleLike} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: likes > 0 ? '#FC4C02' : 'inherit' }}>
-            <Heart size={14} /> {likes}
-          </span>
-          <span onClick={handleShowComments} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-            <MessageSquare size={14} /> {commentsCount}
-          </span>
+      {!isDetail && activity.media_url && (
+        <div style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '12px', fontSize: '10px', color: 'white', fontWeight: 'bold' }}>
+          TAP TO EXPAND
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {activity.caption && (
+          <div style={{ fontSize: '14px', color: 'white', fontWeight: '500', lineHeight: '1.4' }}>{activity.caption}</div>
+      )}
+      
+      <PostMedia />
+      
+      {/* Bottom Action Bar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', paddingTop: '12px', borderTop: '1px solid #1A1A1A' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={handleLike} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: isLiked ? '#FC4C02' : 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', fontWeight: '600', fontSize: '13px', borderRadius: '8px' }}>
+              <Heart size={18} fill={isLiked ? '#FC4C02' : 'transparent'} /> {likes > 0 ? likes : ''}
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); setShowComments(true); }} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', fontWeight: '600', fontSize: '13px', borderRadius: '8px' }}>
+              <MessageSquare size={18} /> {commentsCount > 0 ? commentsCount : ''}
+            </button>
+          </div>
+          <button onClick={handleShare} style={{ color: 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', cursor: 'pointer', borderRadius: '8px' }}>
+            <Share2 size={18} />
+          </button>
       </div>
 
       {showComments && (
-        <div style={{ marginTop: '8px', borderTop: '1px solid #333', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {comments.map(c => (
-            <div key={c.id} style={{ display: 'flex', gap: '8px', fontSize: '11px' }}>
-              <div style={{ fontWeight: 'bold', color: 'white' }}>{c.profiles?.display_name || 'Runner'}:</div>
-              <div style={{ color: '#DDD' }}>{c.text}</div>
+        <CommentsModal 
+          activity={activity} 
+          commentsCount={commentsCount} 
+          setCommentsCount={setCommentsCount} 
+          onClose={() => setShowComments(false)} 
+        />
+      )}
+      {showDetail && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: '#0B0B0D', zIndex: 100000,
+          display: 'flex', flexDirection: 'column', overflowY: 'auto'
+        }}>
+          {/* Header */}
+          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1A1A1A' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <img src={activity.profiles?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(activity.profiles?.display_name || 'R')}&background=333&color=fff`} style={{ width: '32px', height: '32px', borderRadius: '50%' }} alt="avatar" />
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>{activity.profiles?.display_name || 'Runner'}</span>
+                <span style={{ color: 'var(--clash-text-secondary)', fontSize: '10px' }}>{new Date(activity.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+              </div>
             </div>
-          ))}
-          <form onSubmit={handleAddComment} style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-            <input 
-              value={newComment} onChange={e => setNewComment(e.target.value)} 
-              placeholder="Add a comment..." 
-              style={{ flex: 1, background: '#111', color: 'white', border: '1px solid #333', padding: '6px', borderRadius: '4px', fontSize: '11px' }}
-            />
-            <button type="submit" style={{ background: '#FC4C02', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Post</button>
-          </form>
+            <button onClick={() => setShowDetail(false)} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
+              <span style={{ fontSize: '24px', lineHeight: '1' }}>&times;</span>
+            </button>
+          </div>
+          
+          <PostMedia isDetail={true} />
+          
+          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {activity.caption && (
+                <div style={{ fontSize: '15px', color: 'white', fontWeight: '500', lineHeight: '1.5' }}>{activity.caption}</div>
+            )}
+            
+            <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid #1A1A1A', paddingBottom: '16px' }}>
+              <button onClick={handleLike} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: isLiked ? '#FC4C02' : 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', fontWeight: '600', fontSize: '14px', borderRadius: '8px' }}>
+                <Heart size={20} fill={isLiked ? '#FC4C02' : 'transparent'} /> {likes > 0 ? likes : ''} Like
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setShowComments(true); }} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', fontWeight: '600', fontSize: '14px', borderRadius: '8px' }}>
+                <MessageSquare size={20} /> {commentsCount > 0 ? commentsCount : ''} Comment
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

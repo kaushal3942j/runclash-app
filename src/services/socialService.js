@@ -138,7 +138,7 @@ export const addComment = async (postId, text) => {
   const { data, error } = await supabase.from('post_comments').insert({
     post_id: postId,
     user_id: user.id,
-    text: text
+    content: text
   }).select('*').single();
 
   if (data) {

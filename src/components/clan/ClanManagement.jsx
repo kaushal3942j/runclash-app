@@ -18,19 +18,22 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
 
   const loadClan = async () => {
     setLoading(true);
-    const res = await ClanService.getUserClan(currentUser.uid);
-    if (res.success && res.data) {
-      const details = await ClanService.getClanDetails(res.data.id);
-      if (details.success) {
-        setClan({ ...details.data, myRole: res.data.role });
-        setEditName(details.data.name || '');
-        setEditDesc(details.data.description || '');
-        setEditPublic(details.data.is_public);
+    try {
+      const res = await ClanService.getUserClan(currentUser.uid);
+      if (res.success && res.data) {
+        const details = await ClanService.getClanDetails(res.data.id);
+        if (details.success) {
+          setClan({ ...details.data, myRole: res.data.role });
+          setEditName(details.data.name || '');
+          setEditDesc(details.data.description || '');
+          setEditPublic(details.data.is_public);
+        }
+      } else {
+        setClan(null);
       }
-    } else {
-      setClan(null);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleUpdate = async (e) => {
@@ -175,28 +178,32 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
         <h4 style={{ margin: '0 0 12px 0' }}>Members ({clan.clan_members?.length || 0})</h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {clan.clan_members?.map(m => (
-            <div key={m.user_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', padding: '8px', borderRadius: '6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#333', overflow: 'hidden' }}>
-                  {m.profiles?.avatar_url ? <img src={m.profiles.avatar_url} width="100%" height="100%" alt="avatar" /> : null}
+            <div key={m.user_id} style={{ display: 'flex', flexDirection: 'column', background: '#111', padding: '12px', borderRadius: '8px', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#333', overflow: 'hidden' }}>
+                    {m.profiles?.avatar_url ? <img src={m.profiles.avatar_url} width="100%" height="100%" alt="avatar" style={{ objectFit: 'cover' }} /> : null}
+                  </div>
+                  <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{m.profiles?.display_name || 'Runner'}</span>
                 </div>
-                <span style={{ fontSize: '12px' }}>{m.profiles?.display_name || 'Runner'}</span>
+                <span style={{ fontSize: '11px', color: '#FC4C02', fontWeight: 'bold', padding: '4px 8px', background: 'rgba(252, 76, 2, 0.1)', borderRadius: '4px' }}>
+                  {m.role.toUpperCase()}
+                </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '10px', color: '#FC4C02', width: '50px', textAlign: 'right' }}>{m.role.toUpperCase()}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 {clan.myRole === 'owner' && m.user_id !== currentUser.uid && (
-                  <div style={{ display: 'flex', gap: '4px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', flex: 1 }}>
                     {m.role !== 'officer' && (
-                      <button onClick={() => handleUpdateRole(m.user_id, 'officer')} style={{ background: '#333', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>↑ Officer</button>
+                      <button onClick={() => handleUpdateRole(m.user_id, 'officer')} style={{ background: '#333', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>↑ Officer</button>
                     )}
                     {m.role === 'officer' && (
-                      <button onClick={() => handleUpdateRole(m.user_id, 'member')} style={{ background: '#333', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>↓ Demote</button>
+                      <button onClick={() => handleUpdateRole(m.user_id, 'member')} style={{ background: '#333', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>↓ Demote</button>
                     )}
-                    <button onClick={() => handleTransferOwnership(m.user_id)} style={{ background: '#F59E0B', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>👑 Make Owner</button>
+                    <button onClick={() => handleTransferOwnership(m.user_id)} style={{ background: '#F59E0B', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>👑 Make Owner</button>
                   </div>
                 )}
                 {(clan.myRole === 'owner' || (clan.myRole === 'officer' && m.role !== 'owner' && m.role !== 'officer')) && m.user_id !== currentUser.uid && (
-                   <button onClick={() => handleRemoveMember(m.user_id)} style={{ background: '#EF4444', color: 'white', border: 'none', padding: '4px', borderRadius: '4px', cursor: 'pointer', fontSize: '9px' }}>X</button>
+                   <button onClick={() => handleRemoveMember(m.user_id)} style={{ background: '#EF4444', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>Kick</button>
                 )}
               </div>
             </div>
@@ -210,16 +217,16 @@ export const ClanManagement = ({ currentUser, onClanLeft, onClanUpdated }) => {
           <h4 style={{ margin: '0 0 12px 0', color: '#FC4C02' }}>Join Requests ({clan.clan_join_requests.length})</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {clan.clan_join_requests.map(r => (
-              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', padding: '8px', borderRadius: '6px' }}>
+              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#111', padding: '12px', borderRadius: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#333', overflow: 'hidden' }}>
-                    {r.profiles?.avatar_url ? <img src={r.profiles.avatar_url} width="100%" height="100%" alt="avatar" /> : null}
+                  <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#333', overflow: 'hidden' }}>
+                    {r.profiles?.avatar_url ? <img src={r.profiles.avatar_url} width="100%" height="100%" alt="avatar" style={{ objectFit: 'cover' }} /> : null}
                   </div>
-                  <span style={{ fontSize: '12px' }}>{r.profiles?.display_name || 'Runner'}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{r.profiles?.display_name || 'Runner'}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  <button onClick={() => handleRequest(r.id, 'accepted')} style={{ background: '#10B981', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>Accept</button>
-                  <button onClick={() => handleRequest(r.id, 'rejected')} style={{ background: '#EF4444', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>Reject</button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => handleRequest(r.id, 'accepted')} style={{ background: '#10B981', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>Accept</button>
+                  <button onClick={() => handleRequest(r.id, 'rejected')} style={{ background: '#EF4444', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '600' }}>Reject</button>
                 </div>
               </div>
             ))}

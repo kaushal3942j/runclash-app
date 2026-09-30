@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, RefreshCw } from 'lucide-react';
+import { Activity, RefreshCw, Camera, Plus } from 'lucide-react';
 import { getActivityFeed, subscribeToActivityFeed } from '../services/activityService';
 import { fetchPosts } from '../services/socialService';
 import { ActivityFilters } from '../components/activity/ActivityFilters';
 import { ActivityCard } from '../components/activity/ActivityCard';
 
-export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick }) => {
+export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick, onCreatePost }) => {
   const [filter, setFilter] = useState('friends'); // 'friends' | 'global' | 'mine'
   const [activities, setActivities] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,10 +67,42 @@ export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick }) => {
           <RefreshCw size={20} className="spin" />
         </div>
       ) : activities.length === 0 ? (
-        <div className="clash-card" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--clash-text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-          <Activity size={28} style={{ color: '#444' }} />
-          <span style={{ fontSize: '13px', fontWeight: '700', color: 'white' }}>No activities in stream</span>
-          <span style={{ fontSize: '11px' }}>Completed runs and claimed sectors will appear here in real-time.</span>
+        <div className="clash-card" style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--clash-text-secondary)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          <Activity size={32} style={{ color: '#444' }} />
+          {filter === 'mine' && (
+            <>
+              <span style={{ fontSize: '15px', fontWeight: '800', color: 'white' }}>No posts yet</span>
+              <span style={{ fontSize: '12px' }}>Capture a moment from your run and share it with your crew.</span>
+              <button 
+                onClick={onCreatePost} 
+                className="clash-btn-primary" 
+                style={{ marginTop: '16px', padding: '12px 24px', borderRadius: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Camera size={16} /> Create Post
+              </button>
+            </>
+          )}
+          {filter === 'friends' && (
+            <>
+              <span style={{ fontSize: '15px', fontWeight: '800', color: 'white' }}>No friend posts yet</span>
+              <button 
+                onClick={onCreatePost} 
+                className="clash-btn-primary" 
+                style={{ marginTop: '16px', padding: '12px 24px', borderRadius: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Camera size={16} /> Create Post
+              </button>
+            </>
+          )}
+          {filter === 'global' && (
+            <>
+              <span style={{ fontSize: '15px', fontWeight: '800', color: 'white' }}>No public posts yet</span>
+              <button 
+                onClick={onCreatePost} 
+                className="clash-btn-primary" 
+                style={{ marginTop: '16px', padding: '12px 24px', borderRadius: '24px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Camera size={16} /> Create Post
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -84,6 +116,30 @@ export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick }) => {
           ))}
         </div>
       )}
+
+      {/* Floating Action Button */}
+      <button 
+        onClick={onCreatePost}
+        style={{
+          position: 'fixed',
+          bottom: '80px',
+          right: '24px',
+          width: '56px',
+          height: '56px',
+          borderRadius: '50%',
+          backgroundColor: '#FC4C02',
+          color: 'white',
+          border: 'none',
+          boxShadow: '0 4px 12px rgba(252, 76, 2, 0.4)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          cursor: 'pointer',
+          zIndex: 100
+        }}
+      >
+        <Plus size={24} />
+      </button>
     </div>
   );
 };

@@ -45,6 +45,7 @@ import { formatDisplayDistance, getDistanceInMeters } from './utils/distance';
 import { uploadMedia, createPost } from './services/socialService';
 import * as ClanService from './services/clanService';
 import { ClanManagement } from './components/clan/ClanManagement';
+import { SocialComposerModal } from './components/social/SocialComposerModal';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -248,6 +249,7 @@ export default function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // Global App States
+  const [socialComposer, setSocialComposer] = useState(null); // { mediaUrl, mediaType, base64, format, type: 'photo' | 'video' }
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'social', 'conquests', 'profile'
   const [viewingPublicProfileId, setViewingPublicProfileId] = useState(null);
   const [territories, setTerritories] = useState([]);
@@ -379,13 +381,16 @@ export default function App() {
 
   const loadClans = async () => {
     setIsLoadingClans(true);
-    const res = await fetchClans();
-    if (res.success && res.data) {
-      setClansList(res.data);
-    } else {
-      setClansList([]);
+    try {
+      const res = await fetchClans();
+      if (res.success && res.data) {
+        setClansList(res.data);
+      } else {
+        setClansList([]);
+      }
+    } finally {
+      setIsLoadingClans(false);
     }
-    setIsLoadingClans(false);
   };
 
   useEffect(() => {
@@ -646,7 +651,6 @@ export default function App() {
   const [socialSubTab, setSocialSubTab] = useState('crew'); // 'crew' (clans) or 'network' (friends)
   const [friendsSearchQuery, setFriendsSearchQuery] = useState('');
   const [discoverSearchQuery, setDiscoverSearchQuery] = useState('');
-  const [selectedProfileUser, setSelectedProfileUser] = useState(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editBio, setEditBio] = useState('');
@@ -944,9 +948,44 @@ export default function App() {
     }));
 
     if (snap.lastPoint && mapInstanceRef.current) {
-      if (runnerMarkerRef.current) runnerMarkerRef.current.setLatLng(snap.lastPoint);
-      if (polylineRef.current) polylineRef.current.setLatLngs(snap.path);
-      if (mapAutoFollowRef.current) mapInstanceRef.current.panTo(snap.lastPoint);
+      if (runnerMarkerRef.current) {
+        runnerMarkerRef.current.setLatLng(snap.lastPoint);
+      } else {
+        const runnerIcon = L.divIcon({
+          className: 'custom-runner-icon',
+          html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+          iconSize: [16, 16]
+        });
+        runnerMarkerRef.current = L.marker(snap.lastPoint, { icon: runnerIcon }).addTo(mapInstanceRef.current);
+      }
+
+      if (snap.path && snap.path.length > 0) {
+        if (polylineRef.current) {
+          polylineRef.current.setLatLngs(snap.path);
+        } else {
+          polylineRef.current = L.polyline(snap.path, {
+            color: '#FC4C02',
+            weight: 5,
+            opacity: 0.9,
+            lineJoin: 'round',
+            lineCap: 'round'
+          }).addTo(mapInstanceRef.current);
+        }
+
+        const startCoord = snap.path[0];
+        if (!startMarkerRef.current) {
+          const startIcon = L.divIcon({
+            className: 'custom-start-icon',
+            html: `<div style="background-color: #10B981; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);"></div>`,
+            iconSize: [16, 16]
+          });
+          startMarkerRef.current = L.marker(startCoord, { icon: startIcon }).addTo(mapInstanceRef.current);
+        }
+      }
+      
+      if (mapAutoFollowRef.current) {
+        mapInstanceRef.current.panTo(snap.lastPoint);
+      }
     }
   };
 
@@ -1197,11 +1236,59 @@ export default function App() {
     };
   }, [isLoadingIdentity, currentUser]);
 
-  // Resize map when tab changes back to map
+  // Resize map when tab changes back to map and re-sync latest location
   useEffect(() => {
     if (currentUser && activeTab === 'map' && mapInstanceRef.current) {
       setTimeout(() => {
-        mapInstanceRef.current.invalidateSize();
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize();
+          
+          // Re-sync marker position if GPS data is already available but map was unmounted/hidden
+          const loc = runEngineStateRef.current?.lastPoint || (runStateRef.current?.path && runStateRef.current.path.length > 0 ? runStateRef.current.path[runStateRef.current.path.length - 1] : null) || (initialGpsLockCoords ? {lat: initialGpsLockCoords[0], lng: initialGpsLockCoords[1]} : null);
+          if (loc && loc.lat && loc.lng) {
+            if (runnerMarkerRef.current) {
+              runnerMarkerRef.current.setLatLng([loc.lat, loc.lng]);
+            } else {
+              const runnerIcon = L.divIcon({
+                className: 'custom-runner-icon',
+                html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+                iconSize: [16, 16]
+              });
+              runnerMarkerRef.current = L.marker([loc.lat, loc.lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+            }
+            if (mapAutoFollowRef.current) {
+              mapInstanceRef.current.panTo([loc.lat, loc.lng]);
+            }
+          }
+
+          // Re-sync polyline if it was unmounted
+          const currentPath = runStateRef.current?.path || [];
+          if (currentPath.length > 0) {
+            if (!polylineRef.current) {
+              polylineRef.current = L.polyline(currentPath, {
+                color: '#FC4C02',
+                weight: 5,
+                opacity: 0.9,
+                lineJoin: 'round',
+                lineCap: 'round'
+              }).addTo(mapInstanceRef.current);
+            } else {
+              polylineRef.current.setLatLngs(currentPath);
+            }
+
+            const startCoord = currentPath[0];
+            if (!startMarkerRef.current) {
+              const startIcon = L.divIcon({
+                className: 'custom-start-icon',
+                html: `<div style="background-color: #10B981; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);"></div>`,
+                iconSize: [16, 16]
+              });
+              startMarkerRef.current = L.marker(startCoord, { icon: startIcon }).addTo(mapInstanceRef.current);
+            } else {
+              startMarkerRef.current.setLatLng(startCoord);
+            }
+          }
+        }
       }, 100);
     }
   }, [activeTab, currentUser]);
@@ -1423,12 +1510,29 @@ export default function App() {
 
   // Real-Time Leaflet Map & Runner Marker DOM Renderer Sync
   const updateMapDisplay = (newPoint) => {
-    if (polylineRef.current) {
+    if (!polylineRef.current && mapInstanceRef.current && gpsPathRef.current.length > 0) {
+      polylineRef.current = L.polyline(gpsPathRef.current, {
+        color: '#FC4C02',
+        weight: 5,
+        opacity: 0.9,
+        lineJoin: 'round',
+        lineCap: 'round'
+      }).addTo(mapInstanceRef.current);
+    } else if (polylineRef.current) {
       polylineRef.current.setLatLngs(gpsPathRef.current);
     }
-    if (runnerMarkerRef.current) {
+
+    if (!runnerMarkerRef.current && mapInstanceRef.current) {
+      const runnerIcon = L.divIcon({
+        className: 'custom-runner-icon',
+        html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+        iconSize: [16, 16]
+      });
+      runnerMarkerRef.current = L.marker(newPoint, { icon: runnerIcon }).addTo(mapInstanceRef.current);
+    } else if (runnerMarkerRef.current) {
       runnerMarkerRef.current.setLatLng(newPoint);
     }
+
     if (mapInstanceRef.current && mapAutoFollowRef.current) {
       mapInstanceRef.current.panTo(newPoint);
     }
@@ -1827,9 +1931,6 @@ export default function App() {
     // CHECKPOINT 5: Territory cloud saved / queued / failed
     let territoryRes = null;
     try {
-      if (!currentUser.is_verified && !currentUser.isAnonymous) {
-        throw new Error("Phone verification required to claim cloud territories.");
-      }
       territoryRes = await saveNewTerritory(newTerritory);
       if (territoryRes?.cloud === true) {
         createTerritoryActivity(newTerritory, 'territory', newTerritory.claimId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
@@ -3660,54 +3761,31 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* 8. SOCIAL OVERVIEW */}
+                    {/* 8. SOCIAL */}
                     <div className="runner-hq-card card-entrance" style={{ animationDelay: '460ms', gap: '12px' }}>
-                      <span className="clash-label" style={{ fontSize: '9px' }}>SOCIAL MATRIX</span>
+                      <span className="clash-label" style={{ fontSize: '9px' }}>SOCIAL</span>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr 1fr 1fr', gap: '4px', background: 'rgba(0,0,0,0.15)', padding: '8px 10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', background: 'rgba(0,0,0,0.15)', padding: '12px 10px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.02)', textAlign: 'center' }}>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Friends</span>
-                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{friendsList.length}</span>
-                        </div>
-                        <div>
-                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Followers</span>
-                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{followersList.length}</span>
-                        </div>
-                        <div>
-                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Following</span>
-                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{friendRequestsSent.length}</span>
+                          <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>{friendsList.length}</span>
                         </div>
                         <div>
                           <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Posts</span>
-                          <span style={{ fontSize: '11px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>0</span>
-                        </div>
-                        <div>
-                          <span style={{ fontSize: '7px', color: 'var(--clash-text-secondary)', display: 'block', textTransform: 'uppercase' }}>Stories</span>
-                          <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', display: 'block', marginTop: '2px' }}>0</span>
+                          <span style={{ fontSize: '14px', fontWeight: '800', color: 'white', display: 'block', marginTop: '2px' }}>—</span>
                         </div>
                       </div>
 
                       <div style={{ display: 'flex', gap: '8px', marginTop: '2px' }}>
                         <button
                           className="clash-btn-secondary btn-sm"
-                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
-                          onClick={() => setShowPhotoGalleryModal(true)}
+                          style={{ height: '36px', flex: 1, borderRadius: '18px', fontSize: '11px', fontWeight: 'bold', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer', color: 'white' }}
+                          onClick={() => {
+                            setShowSettingsDrawer(false);
+                            setActiveTab('social');
+                          }}
                         >
-                          My Photos
-                        </button>
-                        <button
-                          className="clash-btn-secondary btn-sm"
-                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
-                          onClick={() => setShowSavedPostsModal(true)}
-                        >
-                          Saved Posts
-                        </button>
-                        <button
-                          className="clash-btn-secondary btn-sm"
-                          style={{ height: '32px', flex: 1, borderRadius: '16px', fontSize: '10px', border: '1px solid #2A2A2A', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}
-                          onClick={() => setShowDraftStoriesModal(true)}
-                        >
-                          Draft Stories
+                          My Posts
                         </button>
                       </div>
                     </div>
@@ -4646,12 +4724,12 @@ export default function App() {
                             resultType: CameraResultType.Base64,
                             source: CameraSource.Camera
                           });
-                          setToastMessage("Uploading Recon Media...");
-                          const mediaUrl = await uploadMedia(image.base64String, 'photo', image.format, currentUser.uid);
-                          setToastMessage("Media uploaded. Creating post...");
-                          const res = await createPost(currentUser.uid, mediaUrl, 'photo', 'Field Recon', 'public', runState?.runId || null, null);
-                          if (res.success) setToastMessage("Recon successfully posted.");
-                          else setToastMessage("Failed to post recon.");
+                          setSocialComposer({
+                            base64: image.base64String,
+                            format: image.format,
+                            mediaType: 'photo',
+                            type: 'photo'
+                          });
                         } catch (e) {
                           console.error("Camera error", e);
                         }
@@ -4673,20 +4751,15 @@ export default function App() {
                           const file = e.target.files[0];
                           if (!file) return;
                           setCameraSheetOpen(false);
-                          setToastMessage("Uploading Recon Video...");
-                          
                           const reader = new FileReader();
                           reader.onload = async () => {
-                            try {
-                              const base64 = reader.result.split(',')[1];
-                              const mediaUrl = await uploadMedia(base64, 'video', 'mp4', currentUser.uid);
-                              const res = await createPost(currentUser.uid, mediaUrl, 'video', 'Tactical Video', 'public', runState?.runId || null, null);
-                              if (res.success) setToastMessage("Video recon successfully posted.");
-                              else setToastMessage("Failed to post video recon.");
-                            } catch (err) {
-                              console.error(err);
-                              setToastMessage("Failed to upload video.");
-                            }
+                            const base64 = reader.result.split(',')[1];
+                            setSocialComposer({
+                              base64,
+                              format: 'mp4',
+                              mediaType: 'video',
+                              type: 'video'
+                            });
                           };
                           reader.readAsDataURL(file);
                         };
@@ -4721,6 +4794,20 @@ export default function App() {
                   zIndex: 99999,
                   opacity: 1
                 }} />
+              )}
+
+              {/* Social Composer Modal */}
+              {socialComposer && (
+                <SocialComposerModal
+                  composerData={socialComposer}
+                  currentUser={currentUser}
+                  runState={runState}
+                  onClose={() => setSocialComposer(null)}
+                  onPostSuccess={() => {
+                    setSocialComposer(null);
+                    setToastMessage("Recon successfully posted.");
+                  }}
+                />
               )}
 
               {/* TOAST NOTIFICATION */}
@@ -5047,6 +5134,7 @@ export default function App() {
                 onTabChange={setSocialSubTab}
                 onSelectPlayer={(userId) => setViewingPublicProfileId(userId)}
                 onTerritoryClick={() => setActiveTab('conquests')}
+                onCreatePost={() => setCameraSheetOpen(true)}
               />
             </div>
 
@@ -5565,232 +5653,6 @@ export default function App() {
                   <Flame size={28} style={{ color: 'var(--clash-text-secondary)', opacity: 0.5 }} />
                   <span style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>No Draft Stories</span>
                   <span style={{ fontSize: '10px', color: 'var(--clash-text-secondary)' }}>Telemetry snapshots and loop clips captured during active runs can be saved as story drafts here.</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Public Profile Modal */}
-          {selectedProfileUser && (
-
-            <div
-              style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                background: 'rgba(11, 11, 13, 0.85)',
-                backdropFilter: 'blur(8px)',
-                zIndex: 9999,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '20px'
-              }}
-              onClick={() => setSelectedProfileUser(null)}
-            >
-              <div
-                style={{
-                  background: '#151515',
-                  border: '1px solid #2A2A2A',
-                  borderRadius: '28px',
-                  width: '100%',
-                  maxWidth: '360px',
-                  padding: '24px 20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '16px',
-                  position: 'relative',
-                  boxShadow: '0 16px 48px rgba(0, 0, 0, 0.5)'
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {/* Header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{
-                    width: '56px',
-                    height: '56px',
-                    borderRadius: '50%',
-                    background: '#FC4C02',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '22px',
-                    fontWeight: '800',
-                    color: 'white',
-                    border: '2px solid rgba(255, 255, 255, 0.15)'
-                  }}>
-                    {selectedProfileUser.displayName[0].toUpperCase()}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: 'white' }}>
-                        {selectedProfileUser.displayName}
-                      </h3>
-                      {selectedProfileUser.online && (
-                        <span
-                          style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            background: '#10B981',
-                            display: 'inline-block'
-                          }}
-                          className="intel-badge-pulse"
-                          title="Online"
-                        ></span>
-                      )}
-                    </div>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {selectedProfileUser.clan}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Bio */}
-                <div style={{ background: '#0B0B0D', padding: '12px 14px', borderRadius: '16px', border: '1px solid #2A2A2A' }}>
-                  <span className="clash-label" style={{ fontSize: '8px', marginBottom: '4px', display: 'block' }}>BIO</span>
-                  <p style={{ margin: 0, fontSize: '11px', color: 'white', fontStyle: 'italic', lineHeight: '1.4' }}>
-                    "{selectedProfileUser.bio || 'Operative has not set a bio yet.'}"
-                  </p>
-                </div>
-
-                {/* Two-Column Stats Grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', background: '#0B0B0D', padding: '14px', borderRadius: '20px', border: '1px solid #2A2A2A' }}>
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Level</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
-                      LVL {selectedProfileUser.level}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Distance</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
-                      {selectedProfileUser.distance || '0.0 km'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Sectors Owned</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
-                      {selectedProfileUser.territories || 0}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Experience Points</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: '#FC4C02', fontWeight: '800' }}>
-                      {selectedProfileUser.xp ? selectedProfileUser.xp.toLocaleString() : '0'} XP
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Friends Network</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
-                      {selectedProfileUser.friendsCount || 0}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="clash-label" style={{ fontSize: '7.5px' }}>Conquest Posts</span>
-                    <span className="clash-subtitle" style={{ fontSize: '12px', color: 'white', fontWeight: '800' }}>
-                      {selectedProfileUser.postsCount || 0}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Connection Action Buttons */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {(() => {
-                    const isFriend = friendsList.includes(selectedProfileUser.id);
-                    const isSent = friendRequestsSent.includes(selectedProfileUser.id);
-                    const isReceived = friendRequestsReceived.includes(selectedProfileUser.id);
-
-                    if (isFriend) {
-                      return (
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button
-                            onClick={() => {
-                              removeFriend(selectedProfileUser.id);
-                              setSelectedProfileUser(null);
-                            }}
-                            className="clash-btn-secondary clash-btn-press"
-                            style={{ height: '42px', flex: 1, borderRadius: '21px', fontSize: '11px', background: '#151515', border: '1px solid #2A2A2A', color: '#EF4444', fontWeight: '800' }}
-                          >
-                            REMOVE FRIEND
-                          </button>
-                          <button
-                            onClick={() => {
-                              setToastMessage("🚧 Tactical chat channel coming soon!");
-                                                            setSelectedProfileUser(null);
-                            }}
-                            className="clash-btn-primary clash-btn-press"
-                            style={{ height: '42px', flex: 1.2, borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
-                          >
-                            MESSAGE
-                          </button>
-                        </div>
-                      );
-                    }
-
-                    if (isSent) {
-                      return (
-                        <button
-                          disabled
-                          style={{ height: '42px', width: '100%', borderRadius: '21px', fontSize: '11px', background: '#0B0B0D', border: '1px solid #2A2A2A', color: 'var(--clash-text-secondary)', fontWeight: '800' }}
-                        >
-                          FRIEND REQUEST SENT
-                        </button>
-                      );
-                    }
-
-                    if (isReceived) {
-                      return (
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button
-                            onClick={() => {
-                              rejectFriendRequest(selectedProfileUser.id);
-                              setSelectedProfileUser(null);
-                            }}
-                            className="clash-btn-secondary clash-btn-press"
-                            style={{ height: '42px', flex: 1, borderRadius: '21px', fontSize: '11px', color: 'white', background: '#151515', border: '1px solid #2A2A2A', fontWeight: '800' }}
-                          >
-                            REJECT
-                          </button>
-                          <button
-                            onClick={() => {
-                              acceptFriendRequest(selectedProfileUser.id);
-                              setSelectedProfileUser(null);
-                            }}
-                            className="clash-btn-primary clash-btn-press"
-                            style={{ height: '42px', flex: 1.2, borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
-                          >
-                            ACCEPT REQUEST
-                          </button>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <button
-                        onClick={() => {
-                          sendFriendRequest(selectedProfileUser.id);
-                          setSelectedProfileUser(null);
-                        }}
-                        className="clash-btn-primary clash-btn-press"
-                        style={{ height: '42px', width: '100%', borderRadius: '21px', fontSize: '11px', background: '#FC4C02', color: 'white', border: 'none', fontWeight: '800' }}
-                      >
-                        ADD TO SQUAD
-                      </button>
-                    );
-                  })()}
-
-                  <button
-                    onClick={() => setSelectedProfileUser(null)}
-                    className="clash-btn-secondary clash-btn-press"
-                    style={{ height: '40px', width: '100%', borderRadius: '20px', fontSize: '11px', color: 'var(--clash-text-secondary)', border: 'none', background: 'transparent', fontWeight: '800' }}
-                  >
-                    CLOSE PROFILE
-                  </button>
                 </div>
               </div>
             </div>

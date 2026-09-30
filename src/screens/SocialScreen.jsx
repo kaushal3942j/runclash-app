@@ -18,7 +18,8 @@ export const SocialScreen = ({
   userClan = null,
   joinClan,
   leaveClan,
-  createClan
+  createClan,
+  onCreatePost
 }) => {
   const [socialTab, setSocialTab] = useState(selectedTab || 'feed'); // 'feed' | 'friends' | 'leaderboard' | 'notifications' | 'clan'
   const [unreadNotifsCount, setUnreadNotifsCount] = useState(0);
@@ -173,6 +174,7 @@ export const SocialScreen = ({
         <ActivityFeedScreen
           onActorClick={onSelectPlayer}
           onTerritoryClick={onTerritoryClick}
+          onCreatePost={onCreatePost}
         />
       </div>
 

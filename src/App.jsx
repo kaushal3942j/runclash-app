@@ -2822,53 +2822,59 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto', marginBottom: '20px' }}>
                   <button
                     onClick={async () => {
-                      addLog("System: Saving run record to database...");
-                      const res = await saveCompletedRun(completedRunData);
-                      if (res.success) {
-                        addLog("System: Run successfully synced and saved.");
-                      } else {
-                        addLog("GPS Warning: Run saved locally (sync deferred).");
+                      setIsSavingRun(true);
+                      try {
+                        addLog("System: Saving run record to database...");
+                        const res = await saveCompletedRun(completedRunData);
+                        if (res.success) {
+                          addLog("System: Run successfully synced and saved.");
+                        } else {
+                          addLog("GPS Warning: Run saved locally (sync deferred).");
+                        }
+
+                        // Reward coins and XP
+                        const coinReward = Math.ceil(completedRunData.distance * 20) + 10;
+                        const xpReward = Math.ceil(completedRunData.distance * 100) + 50;
+                        setCurrentUser(prev => {
+                          const newXp = prev.xp + xpReward;
+                          const leveledUp = newXp >= prev.nextLevelXp;
+                          return {
+                            ...prev,
+                            coins: prev.coins + coinReward,
+                            xp: leveledUp ? newXp - prev.nextLevelXp : newXp,
+                            level: leveledUp ? prev.level + 1 : prev.level,
+                            nextLevelXp: leveledUp ? prev.nextLevelXp + 500 : prev.nextLevelXp
+                          };
+                        });
+
+                        // Clear maps layer
+                        if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
+                        if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
+
+                        setRunState({
+                          status: 'idle',
+                          path: [],
+                          distance: 0,
+                          duration: 0,
+                          pace: '--:--',
+                          gpsAccuracy: null,
+                          speed: 0,
+                          avgSpeed: 0,
+                          avgPace: '--:--',
+                          calories: 0,
+                          isAutoPaused: false
+                        });
+
+                        setShowSummaryModal(false);
+                      } finally {
+                        setIsSavingRun(false);
                       }
-
-                      // Reward coins and XP
-                      const coinReward = Math.ceil(completedRunData.distance * 20) + 10;
-                      const xpReward = Math.ceil(completedRunData.distance * 100) + 50;
-                      setCurrentUser(prev => {
-                        const newXp = prev.xp + xpReward;
-                        const leveledUp = newXp >= prev.nextLevelXp;
-                        return {
-                          ...prev,
-                          coins: prev.coins + coinReward,
-                          xp: leveledUp ? newXp - prev.nextLevelXp : newXp,
-                          level: leveledUp ? prev.level + 1 : prev.level,
-                          nextLevelXp: leveledUp ? prev.nextLevelXp + 500 : prev.nextLevelXp
-                        };
-                      });
-
-                      // Clear maps layer
-                      if (polylineRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(polylineRef.current);
-                      if (runnerMarkerRef.current && mapInstanceRef.current) mapInstanceRef.current.removeLayer(runnerMarkerRef.current);
-
-                      setRunState({
-                        status: 'idle',
-                        path: [],
-                        distance: 0,
-                        duration: 0,
-                        pace: '--:--',
-                        gpsAccuracy: null,
-                        speed: 0,
-                        avgSpeed: 0,
-                        avgPace: '--:--',
-                        calories: 0,
-                        isAutoPaused: false
-                      });
-
-                      setShowSummaryModal(false);
                     }}
+                    disabled={isSavingRun}
                     className="clash-btn-primary"
-                    style={{ height: '48px', width: '100%', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: '800' }}
+                    style={{ height: '48px', width: '100%', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: '800', opacity: isSavingRun ? 0.6 : 1 }}
                   >
-                    CONTINUE
+                    {isSavingRun ? 'SAVING...' : 'CONTINUE'}
                   </button>
 
                   <button

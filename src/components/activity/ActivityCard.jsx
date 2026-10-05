@@ -23,20 +23,39 @@ const SocialPostContent = ({ activity }) => {
     }
   };
 
+  const [shareText, setShareText] = useState('');
+
   const handleShare = async (e) => {
     if (e) e.stopPropagation();
+    
+    const shareData = {
+      title: 'RunClash Post',
+      text: activity.caption || 'Check out this run on RunClash!',
+      url: activity.media_url || window.location.href,
+    };
+
     if (navigator.share) {
       try {
-        await navigator.share({
-          title: 'RunClash Post',
-          text: activity.caption || 'Check out this run on RunClash!',
-          url: activity.media_url || window.location.href,
-        });
+        await navigator.share(shareData);
       } catch (err) {
-        console.error('Error sharing:', err);
+        if (err.name !== 'AbortError') {
+          console.error('Error sharing:', err);
+          fallbackShare(shareData.url);
+        }
       }
     } else {
-      console.log('Web Share API not supported');
+      fallbackShare(shareData.url);
+    }
+  };
+
+  const fallbackShare = (url) => {
+    try {
+      navigator.clipboard.writeText(url);
+      setShareText('Copied Link!');
+      setTimeout(() => setShareText(''), 2000);
+    } catch (err) {
+      setShareText('Failed to copy');
+      setTimeout(() => setShareText(''), 2000);
     }
   };
 
@@ -46,7 +65,7 @@ const SocialPostContent = ({ activity }) => {
       style={{ cursor: !isDetail ? 'pointer' : 'default', width: '100%', position: 'relative' }}
     >
       {activity.media_url && activity.media_type === 'photo' && (
-        <img src={activity.media_url} style={{ width: '100%', borderRadius: isDetail ? '0' : '12px', maxHeight: isDetail ? '60vh' : '450px', objectFit: 'contain', border: isDetail ? 'none' : '1px solid #2A2A2A', background: isDetail ? '#000' : 'transparent' }} alt="Post media" />
+        <img loading="lazy" src={activity.media_url} style={{ width: '100%', borderRadius: isDetail ? '0' : '12px', maxHeight: isDetail ? '60vh' : '450px', objectFit: 'contain', border: isDetail ? 'none' : '1px solid #2A2A2A', background: isDetail ? '#000' : 'transparent' }} alt="Post media" />
       )}
       {activity.media_url && activity.media_type === 'video' && (
         <video src={activity.media_url} controls style={{ width: '100%', borderRadius: isDetail ? '0' : '12px', maxHeight: isDetail ? '60vh' : '450px', objectFit: 'contain', border: isDetail ? 'none' : '1px solid #2A2A2A', background: isDetail ? '#000' : 'transparent' }} />
@@ -77,9 +96,12 @@ const SocialPostContent = ({ activity }) => {
               <MessageSquare size={18} /> {commentsCount > 0 ? commentsCount : ''}
             </button>
           </div>
-          <button onClick={handleShare} style={{ color: 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', cursor: 'pointer', borderRadius: '8px' }}>
-            <Share2 size={18} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {shareText && <span style={{ fontSize: '10px', color: '#10B981', fontWeight: 'bold' }}>{shareText}</span>}
+            <button onClick={handleShare} style={{ color: 'var(--clash-text-secondary)', background: 'transparent', border: 'none', padding: '8px 12px', cursor: 'pointer', borderRadius: '8px' }}>
+              <Share2 size={18} />
+            </button>
+          </div>
       </div>
 
       {showComments && (
@@ -99,7 +121,7 @@ const SocialPostContent = ({ activity }) => {
           {/* Header */}
           <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1A1A1A' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <img src={activity.profiles?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(activity.profiles?.display_name || 'R')}&background=333&color=fff`} style={{ width: '32px', height: '32px', borderRadius: '50%' }} alt="avatar" />
+              <img loading="lazy" src={activity.profiles?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(activity.profiles?.display_name || 'R')}&background=333&color=fff`} style={{ width: '32px', height: '32px', borderRadius: '50%' }} alt="avatar" />
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>{activity.profiles?.display_name || 'Runner'}</span>
                 <span style={{ color: 'var(--clash-text-secondary)', fontSize: '10px' }}>{new Date(activity.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
@@ -223,7 +245,7 @@ export const ActivityCard = ({ activity, onActorClick, onTerritoryClick }) => {
             flexShrink: 0
           }}>
             {avatarUrl ? (
-              <img src={avatarUrl} alt={displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <img loading="lazy" src={avatarUrl} alt={displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             ) : (
               <span style={{ fontSize: '14px', fontWeight: '800', color: 'white' }}>
                 {displayName[0]?.toUpperCase() || 'R'}

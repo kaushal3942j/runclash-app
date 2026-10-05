@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Send, X } from 'lucide-react';
 import { getComments, addComment } from '../../services/socialService';
 
@@ -49,7 +50,7 @@ export const CommentsModal = ({ activity, commentsCount, setCommentsCount, onClo
     setIsSubmitting(false);
   };
 
-  return (
+  const modalContent = (
     <div style={{
       position: 'fixed',
       top: 0,
@@ -83,7 +84,7 @@ export const CommentsModal = ({ activity, commentsCount, setCommentsCount, onClo
         {/* Post Preview */}
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #1A1A1A', display: 'flex', gap: '12px', alignItems: 'center' }}>
           {activity.media_url && activity.media_type === 'photo' && (
-            <img src={activity.media_url} style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover' }} alt="Post thumbnail" />
+            <img loading="lazy" src={activity.media_url} style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover' }} alt="Post thumbnail" />
           )}
           <div style={{ flex: 1, fontSize: '13px', color: 'white' }}>
             <span style={{ fontWeight: 'bold' }}>{activity.profiles?.display_name || 'Runner'}</span>
@@ -110,7 +111,7 @@ export const CommentsModal = ({ activity, commentsCount, setCommentsCount, onClo
               const timeString = new Date(c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               return (
                 <div key={c.id} style={{ display: 'flex', gap: '12px' }}>
-                  <img 
+                  <img loading="lazy"
                     src={c.profiles?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(c.profiles?.display_name || 'R')}&background=333&color=fff`} 
                     style={{ width: '32px', height: '32px', borderRadius: '50%' }}
                     alt="avatar"
@@ -145,4 +146,6 @@ export const CommentsModal = ({ activity, commentsCount, setCommentsCount, onClo
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 };

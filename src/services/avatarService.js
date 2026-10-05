@@ -47,7 +47,11 @@ export const uploadAvatar = async (file) => {
       });
 
     if (uploadErr) {
-      return { success: false, url: null, error: uploadErr.message };
+      let msg = uploadErr.message;
+      if (msg === 'Failed to fetch') {
+        msg = 'Failed to fetch (Check if "avatars" bucket exists in Supabase Storage and RLS is enabled)';
+      }
+      return { success: false, url: null, error: msg };
     }
 
     const { data: publicUrlData } = supabase.storage

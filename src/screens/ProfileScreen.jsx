@@ -1,35 +1,44 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ProfileHeader } from '../components/profile/ProfileHeader';
 import { ProfileStatsGrid } from '../components/profile/ProfileStatsGrid';
 import { EditProfileModal } from '../components/profile/EditProfileModal';
 import { loadProfileStats } from '../services/profileService';
 import { LogOut, RefreshCw } from 'lucide-react';
+import { PullToRefresh } from '../components/PullToRefresh';
 
-export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut }) => {
+export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut, onRefresh }) => {
   const [stats, setStats] = useState(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
 
-  useEffect(() => {
-    let active = true;
+  const fetchStats = useCallback(async () => {
     if (currentProfile?.uid) {
       setIsLoadingStats(true);
-      loadProfileStats(currentProfile.uid).then(res => {
-        if (active && res.success) {
-          setStats(res.data);
+      if (onRefresh) {
+        try {
+          await onRefresh();
+        } catch (e) {
+          console.error(e);
         }
-      }).finally(() => {
-        if (active) setIsLoadingStats(false);
-      });
+      }
+      const res = await loadProfileStats(currentProfile.uid);
+      if (res.success) {
+        setStats(res.data);
+      }
+      setIsLoadingStats(false);
     }
-    return () => { active = false; };
-  }, [currentProfile]);
+  }, [currentProfile, onRefresh]);
+
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
 
   if (!currentProfile) return null;
 
   return (
-    <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '80px' }}>
-      {/* Profile Header Card */}
+    <PullToRefresh onRefresh={fetchStats}>
+      <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '80px' }}>
+        {/* Profile Header Card */}
       <ProfileHeader
         profile={currentProfile}
         isOwnProfile={true}
@@ -75,6 +84,7 @@ export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut }) =>
           }}
         />
       )}
-    </div>
+      </div>
+    </PullToRefresh>
   );
 };

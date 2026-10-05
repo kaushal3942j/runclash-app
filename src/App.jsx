@@ -59,6 +59,7 @@ const getClanColor = (clanName) => {
 };
 
 import { SkeletonCard } from './components/common/SkeletonCard';
+import { PullToRefresh } from './components/PullToRefresh';
 
 // ----------------------------------------------------
 // NATIVE GPS ADAPTER
@@ -245,6 +246,7 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [authSuccessMessage, setAuthSuccessMessage] = useState('');
   const [isFinalizingRun, setIsFinalizingRun] = useState(false);
+  const isFinalizingRunRef = useRef(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
@@ -282,6 +284,7 @@ export default function App() {
 
   const [completedRunData, setCompletedRunData] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [isSavingRun, setIsSavingRun] = useState(false);
   const [showSignOutModal, setShowSignOutModal] = useState(false);
   const [mapMode, setMapMode] = useState('solo'); // 'solo' | 'clan'
 
@@ -378,6 +381,14 @@ export default function App() {
   const [clanErrorMsg, setClanErrorMsg] = useState(null);
   const [clansList, setClansList] = useState([]);
   const [isLoadingClans, setIsLoadingClans] = useState(false);
+
+  const triggerGlobalRefresh = async () => {
+    try {
+      await loadClans();
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const loadClans = async () => {
     setIsLoadingClans(true);
@@ -1297,40 +1308,40 @@ export default function App() {
   useEffect(() => {
     if (!mapInstanceRef.current || !currentUser) return;
 
-    // Clear old layers
-    Object.values(territoryPolygonsRef.current).forEach(layer => {
-      mapInstanceRef.current.removeLayer(layer);
-    });
-    territoryPolygonsRef.current = {};
-
     // Redraw list based on active mapMode (solo vs clan)
     territories.forEach(terr => {
       // 1. Render Official Landmark (Always Visible)
       if (terr.isLandmark) {
-        const starIcon = L.divIcon({
-          className: 'custom-landmark-icon',
-          html: `<div style="background-color: rgba(250,204,21,0.15); border: 2px solid #FACC15; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(250,204,21,0.4);" class="intel-badge-pulse">
-            <span style="font-size: 14px;">🏆</span>
-          </div>`,
-          iconSize: [28, 28]
-        });
-        const marker = L.marker(terr.coords[0], { icon: starIcon }).addTo(mapInstanceRef.current);
-        marker.bindTooltip(terr.name, { permanent: false, direction: 'top', className: 'clash-tooltip' });
-
-        marker.on('click', (e) => {
-          if (e.originalEvent) e.originalEvent.stopPropagation();
-          setSelectedTerritoryId(terr.id);
-          setIsBottomSheetExpanded(true);
-        });
-
-        territoryPolygonsRef.current[terr.id] = marker;
+        if (!territoryPolygonsRef.current[terr.id]) {
+          const starIcon = L.divIcon({
+            className: 'custom-landmark-icon',
+            html: `<div style="background-color: rgba(250,204,21,0.15); border: 2px solid #FACC15; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(250,204,21,0.4);" class="intel-badge-pulse">
+              <span style="font-size: 14px;">🏆</span>
+            </div>`,
+            iconSize: [28, 28]
+          });
+          const marker = L.marker(terr.coords[0], { icon: starIcon }).addTo(mapInstanceRef.current);
+          marker.bindTooltip(terr.name, { permanent: false, direction: 'top', className: 'clash-tooltip' });
+  
+          marker.on('click', (e) => {
+            if (e.originalEvent) e.originalEvent.stopPropagation();
+            setSelectedTerritoryId(terr.id);
+            setIsBottomSheetExpanded(true);
+          });
+  
+          territoryPolygonsRef.current[terr.id] = marker;
+        } else {
+          const marker = territoryPolygonsRef.current[terr.id];
+          marker.setLatLng(terr.coords[0]);
+          marker.setTooltipContent(terr.name);
+        }
         return;
       }
 
       // 2. Render Player-Created Territories per mapMode
-      const isOwner = terr.ownerId === currentUser.uid;
-      const isUserClan = currentUser.clan && currentUser.clan !== 'None' && terr.clan === currentUser.clan;
-      const isEnemyClan = terr.clan && terr.clan !== 'None' && (!currentUser.clan || terr.clan !== currentUser.clan);
+      const isOwner = currentUser && terr.ownerId === currentUser.uid;
+      const isUserClan = currentUser?.clan && currentUser.clan !== 'None' && terr.clan === currentUser.clan;
+      const isEnemyClan = terr.clan && terr.clan !== 'None' && (!currentUser?.clan || terr.clan !== currentUser.clan);
       const isUnclaimed = !terr.clan || terr.clan === 'None' || terr.ownerName === 'Unclaimed';
 
       let polyColor = '#888888';
@@ -1367,29 +1378,42 @@ export default function App() {
         }
       }
 
-      const poly = L.polygon(terr.coords, {
-        color: polyColor,
-        fillColor: polyColor,
-        fillOpacity: fillOp,
-        weight: lineWeight,
-        dashArray: dashStyle
-      }).addTo(mapInstanceRef.current);
-
       const tooltipText = mapMode === 'clan'
         ? `${terr.name} [${terr.clan || 'Neutral'}]`
         : `${terr.name} (${terr.ownerName || 'Unclaimed'})`;
 
-      poly.bindTooltip(tooltipText, { permanent: false, direction: 'center', className: 'clash-tooltip' });
+      if (!territoryPolygonsRef.current[terr.id]) {
+        const poly = L.polygon(terr.coords, {
+          color: polyColor,
+          fillColor: polyColor,
+          fillOpacity: fillOp,
+          weight: lineWeight,
+          dashArray: dashStyle
+        }).addTo(mapInstanceRef.current);
 
-      poly.on('click', (e) => {
-        if (e.originalEvent) e.originalEvent.stopPropagation();
-        setSelectedTerritoryId(terr.id);
-        setIsBottomSheetExpanded(true);
-      });
+        poly.bindTooltip(tooltipText, { permanent: false, direction: 'center', className: 'clash-tooltip' });
 
-      territoryPolygonsRef.current[terr.id] = poly;
+        poly.on('click', (e) => {
+          if (e.originalEvent) e.originalEvent.stopPropagation();
+          setSelectedTerritoryId(terr.id);
+          setIsBottomSheetExpanded(true);
+        });
+
+        territoryPolygonsRef.current[terr.id] = poly;
+      } else {
+        const poly = territoryPolygonsRef.current[terr.id];
+        poly.setLatLngs(terr.coords);
+        poly.setStyle({
+          color: polyColor,
+          fillColor: polyColor,
+          fillOpacity: fillOp,
+          weight: lineWeight,
+          dashArray: dashStyle
+        });
+        poly.setTooltipContent(tooltipText);
+      }
     });
-  }, [territories, currentUser, mapMode]);
+  }, [territories, currentUser?.uid, currentUser?.clan, mapMode]);
 
   // ----------------------------------------------------
   // GEOLOCATION & TRACKING ENGINE (REAL GPS & SIMULATOR)
@@ -1661,10 +1685,11 @@ export default function App() {
     }
     console.log('[STOP CLAIM] 1 handler started');
 
-    if (isFinalizingRun) {
+    if (isFinalizingRun || isFinalizingRunRef.current) {
       console.log('[STOP CLAIM] Guard: Finalization already in progress, ignoring duplicate tap.');
       return;
     }
+    isFinalizingRunRef.current = true;
     setIsFinalizingRun(true);
 
     try {
@@ -1696,8 +1721,9 @@ export default function App() {
       const errMsg = `Claim Exception: ${err.message || 'Unknown Error'}`;
       addLog(errMsg);
       setToastMessage(errMsg);
-          } finally {
+    } finally {
       setIsFinalizingRun(false);
+      isFinalizingRunRef.current = false;
     }
   };
 
@@ -1945,14 +1971,13 @@ export default function App() {
       territoryRes = { success: true, queued: true, cloud: false, error: terrErr.message };
     }
 
-    if (territoryRes?.queued) {
-      addLog(`System: Territory '${sectorName}' saved locally and queued for sync.`);
-      setToastMessage("Territory saved locally and queued for sync");
-          } else if (territoryRes?.error) {
-      addLog(`System: Territory Notice: ${territoryRes.error}`);
-    } else {
-      addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
+    if (!territoryRes?.success) {
+      addLog(`System Error: Territory save failed: ${territoryRes?.error || 'Unknown error'}`);
+      setToastMessage("Failed to claim territory. Please try again.");
+      throw new Error(territoryRes?.error || "Failed to save territory to cloud.");
     }
+
+    addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
 
     // CHECKPOINT 6: Reward Stats & UI Finalized
     const coinReward = Math.ceil(areaSqM / 100) + 20;
@@ -5114,28 +5139,34 @@ export default function App() {
             </div>
 
             {/* TAB: CONQUESTS */}
-            <ConquestsScreen
-              currentUser={currentUser}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              territories={territories}
-              getClanColor={getClanColor}
-              useShield={useShield}
-              buyItem={buyItem}
-              shopCosts={shopCosts}
-              inventory={inventory}
-            />
+            <div style={{ display: activeTab === 'conquests' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+              <PullToRefresh onRefresh={triggerGlobalRefresh}>
+                <ConquestsScreen
+                  currentUser={currentUser}
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                  territories={territories}
+                  getClanColor={getClanColor}
+                  useShield={useShield}
+                  buyItem={buyItem}
+                  shopCosts={shopCosts}
+                  inventory={inventory}
+                />
+              </PullToRefresh>
+            </div>
 
             {/* TAB: SOCIAL */}
             <div style={{ display: (activeTab === 'social' || activeTab === 'clans') ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
-              <SocialScreen
-                currentUser={currentUser}
-                selectedTab={socialSubTab || 'feed'}
-                onTabChange={setSocialSubTab}
-                onSelectPlayer={(userId) => setViewingPublicProfileId(userId)}
-                onTerritoryClick={() => setActiveTab('conquests')}
-                onCreatePost={() => setCameraSheetOpen(true)}
-              />
+              <PullToRefresh onRefresh={triggerGlobalRefresh}>
+                <SocialScreen
+                  currentUser={currentUser}
+                  selectedTab={socialSubTab || 'feed'}
+                  onTabChange={setSocialSubTab}
+                  onSelectPlayer={(userId) => setViewingPublicProfileId(userId)}
+                  onTerritoryClick={() => setActiveTab('conquests')}
+                  onCreatePost={() => setCameraSheetOpen(true)}
+                />
+              </PullToRefresh>
             </div>
 
             {/* TAB: PROFILE */}
@@ -5154,6 +5185,7 @@ export default function App() {
                   }));
                 }}
                 onSignOut={() => setShowSignOutModal(true)}
+                onRefresh={triggerGlobalRefresh}
               />
             </div>
 

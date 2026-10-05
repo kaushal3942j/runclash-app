@@ -17,7 +17,7 @@ export const ConquestsScreen = ({
   const expiredUserTerritories = territories.filter(t => t.ownerId === currentUser.uid && t.is_active === false);
 
   return (
-    <div style={{ display: activeTab === 'conquests' ? 'flex' : 'none', flexDirection: 'column', gap: '22px', padding: '16px' }} className="fade-in">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '22px', padding: '16px' }} className="fade-in">
       
       {/* Controlled Sectors */}
       <div>

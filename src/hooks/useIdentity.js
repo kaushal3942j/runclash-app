@@ -158,13 +158,25 @@ export const useIdentity = () => {
         const normalizedProfile = {
           uid: profile.id,
           displayName: finalDisplayName,
+          display_name: finalDisplayName,
           level: profile.level,
           xp: profile.xp,
           coins: profile.coins,
           clan: profile.clan_name || 'None',
+          clan_name: profile.clan_name || 'None',
           premium: profile.premium || false,
           is_phone_verified: profile.is_phone_verified || false,
-          phone: profile.phone || null
+          phone: profile.phone || null,
+          username: profile.username || null,
+          bio: profile.bio || null,
+          avatarUrl: profile.avatar_url || null,
+          avatar_url: profile.avatar_url || null,
+          country: profile.country || null,
+          state: profile.state || null,
+          city: profile.city || null,
+          is_profile_public: profile.is_profile_public !== false,
+          show_activity: profile.show_activity !== false,
+          allow_friend_requests: profile.allow_friend_requests !== false,
         };
 
         setCurrentProfile(normalizedProfile);

@@ -793,6 +793,10 @@ export const syncOfflineTerritoryClaims = async () => {
     const remainingPending = [];
 
     for (const item of pendingList) {
+      if (!item || !item.territory) {
+        console.warn('[QUEUE SYNC] Skipping malformed pending item (missing .territory)', item);
+        continue;
+      }
       const terr = item.territory;
       const claimId = item.claimId || `claim_${Date.now()}`;
       const areaVal = typeof terr.area === 'number'
@@ -950,21 +954,15 @@ export const saveNewTerritory = async (territory) => {
   const validationErr = validateTerritoryPayload(dbTerr);
   if (validationErr) {
     console.warn('[STOP CLAIM] 5 territory validation failed:', validationErr);
-    syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
-
-    const updated = [...list.filter(t => (t.claimId || t.id) !== (localTerr.claimId || localTerr.id)), localTerr];
-    localStorage.setItem('clash_territories', JSON.stringify(updated));
-    triggerListeners(updated);
-    if (activeLoadTerritories) activeLoadTerritories();
-
     return {
-      success: true,
+      success: false,
       cloud: false,
-      queued: true,
+      queued: false,
       error: validationErr,
       data: localTerr
     };
   }
+
 
   // 8-SECOND TIMEOUT GUARD FOR CLOUD INSERT
   let insertData = null;
@@ -997,18 +995,16 @@ export const saveNewTerritory = async (territory) => {
       insertError = error;
       cloudSuccess = false;
       console.warn(`[STOP CLAIM] 5 territory cloud error (${error.code || 'unknown'}):`, error.message);
-      syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
     }
   } catch (err) {
     insertError = err;
     cloudSuccess = false;
     console.warn('[STOP CLAIM] 5 territory cloud insert exception/timeout:', err.message);
-    syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId });
   }
 
   const finalTerr = {
     ...territory,
-    id: (insertData && insertData.id) ? insertData.id : (territory.id || `t_local_${Date.now()}`),
+    id: (insertData && insertData.id) ? insertData.id : claimId,
     claimId: claimId,
     ownerId: validOwnerId,
     coords: closedCoords,
@@ -1016,15 +1012,20 @@ export const saveNewTerritory = async (territory) => {
     synced: cloudSuccess
   };
 
-  const updated = [...list.filter(t => (t.claimId || t.id) !== (finalTerr.claimId || finalTerr.id)), finalTerr];
-  localStorage.setItem('clash_territories', JSON.stringify(updated));
-  triggerListeners(updated);
-  if (activeLoadTerritories) activeLoadTerritories();
+  if (cloudSuccess) {
+    const updated = [...list.filter(t => (t.claimId || t.id) !== (finalTerr.claimId || finalTerr.id)), finalTerr];
+    localStorage.setItem('clash_territories', JSON.stringify(updated));
+    triggerListeners(updated);
+    if (activeLoadTerritories) activeLoadTerritories();
+  } else {
+    // DO NOT mark as saved if Supabase fails (strict production rule)
+    console.warn('[STOP CLAIM] Territory cloud save failed. Not caching locally.');
+  }
 
   return {
-    success: true,
+    success: cloudSuccess,
     cloud: cloudSuccess,
-    queued: !cloudSuccess,
+    queued: false, // We no longer queue failed territories to prevent silent UI failures
     error: insertError ? (insertError.message || JSON.stringify(insertError)) : null,
     data: finalTerr
   };

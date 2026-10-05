@@ -207,3 +207,38 @@ create policy "Users can view their own runs" on public.runs for select using (a
 
 drop policy if exists "Users can insert their own runs" on public.runs;
 create policy "Users can insert their own runs" on public.runs for insert with check (auth.uid() = user_id);
+
+
+-- 10. STORAGE SPECIFICATION FOR AVATARS BUCKET
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('avatars', 'avatars', true, 3145728, ARRAY['image/jpeg', 'image/png', 'image/webp'])
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = 3145728,
+  allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
+
+-- Storage RLS Policies
+DROP POLICY IF EXISTS "Public Read Avatars" ON storage.objects;
+CREATE POLICY "Public Read Avatars"
+ON storage.objects FOR SELECT
+TO public
+USING (bucket_id = 'avatars');
+
+DROP POLICY IF EXISTS "Users Upload Own Avatar" ON storage.objects;
+CREATE POLICY "Users Upload Own Avatar"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "Users Update Own Avatar" ON storage.objects;
+CREATE POLICY "Users Update Own Avatar"
+ON storage.objects FOR UPDATE
+TO authenticated
+USING (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "Users Delete Own Avatar" ON storage.objects;
+CREATE POLICY "Users Delete Own Avatar"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text);
+

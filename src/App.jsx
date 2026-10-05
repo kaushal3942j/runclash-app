@@ -3831,7 +3831,7 @@ export default function App() {
                         "You're running 12% farther than last week. Consider a recovery run tomorrow to maintain pace."
                       </p>
                       <button
-                        onClick={() => { setShowSettingsDrawer(false); setActiveTab('coach'); }}
+                        onClick={() => { setShowSettingsDrawer(false); showToast('Yet to be released'); }}
                         className="clash-btn-primary btn-sm"
                         style={{ height: '32px', borderRadius: '16px', fontSize: '10px', border: 'none', background: '#FC4C02', color: 'white', marginTop: '4px', cursor: 'pointer' }}
                       >

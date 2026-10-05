@@ -16,7 +16,6 @@ export const FEATURE_KEYS = {
   BASIC_PROFILE: 'BASIC_PROFILE',
   
   // Premium Features
-  AI_COACH: 'AI_COACH',
   ADVANCED_ANALYTICS: 'ADVANCED_ANALYTICS',
   UNLIMITED_HISTORY: 'UNLIMITED_HISTORY',
   SMART_ROUTE_GENERATOR: 'SMART_ROUTE_GENERATOR',
@@ -36,7 +35,6 @@ export const FEATURE_REGISTRY = {
   [FEATURE_KEYS.DAILY_MISSIONS]: { isPremium: false, name: 'Daily Missions' },
   [FEATURE_KEYS.LOCAL_LEADERBOARD]: { isPremium: false, name: 'Leaderboard' },
 
-  [FEATURE_KEYS.AI_COACH]: { isPremium: true, name: 'Tactical AI Coach', description: 'Rule-based strategic recommendations and pace analysis.' },
   [FEATURE_KEYS.ADVANCED_ANALYTICS]: { isPremium: true, name: 'Advanced Run Analytics', description: 'Deep breakdown of pace, active duration, and territory area.' },
   [FEATURE_KEYS.UNLIMITED_HISTORY]: { isPremium: true, name: 'Unlimited Run History', description: 'Complete lifetime activity cloud history.' },
   [FEATURE_KEYS.SMART_ROUTE_GENERATOR]: { isPremium: true, name: 'Smart Route Generator', description: 'Generate optimal loop routes for maximum area capture.' },

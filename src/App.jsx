@@ -24,7 +24,6 @@ import { HomeScreen } from './screens/HomeScreen';
 import { GlobalHeader } from './components/ui/GlobalHeader';
 import { ConquestsScreen } from './screens/ConquestsScreen';
 import { SocialScreen } from './screens/SocialScreen';
-import { CoachScreen } from './screens/CoachScreen';
 import { PremiumScreen } from './screens/PremiumScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { PublicProfileScreen } from './screens/PublicProfileScreen';
@@ -850,15 +849,7 @@ export default function App() {
   const [consoleLogs, setConsoleLogs] = useState([
     `System: RunClash MVP started. DB: ${isFirebaseActive() ? 'Supabase Cloud' : 'LocalStorage Fallback'}`
   ]);
-  const [coachInput, setCoachInput] = useState('');
-  const [coachMessages, setCoachMessages] = useState([
-    {
-      id: 1,
-      sender: 'coach',
-      text: "Yo! Ready to touch grass and secure some real territory? Switch to 'Real GPS' mode and do a loop around your local block! 🏃🔥",
-      time: '12:00 PM'
-    }
-  ]);
+
   const [clanInput, setClanInput] = useState('');
   const [clanMessages, setClanMessages] = useState([]);
 
@@ -2037,16 +2028,7 @@ export default function App() {
     });
     console.log('[STOP CLAIM] 6 UI finalized');
 
-    // Notify Coach Chat
-    setCoachMessages(prev => [
-      ...prev,
-      {
-        id: Date.now(),
-        sender: 'coach',
-        text: `Insane run! 👑 You closed a path of ${formattedArea} and pocketed ${coinReward} coins. Go fortify it!`,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
-    ]);
+
   };
 
 
@@ -2329,44 +2311,6 @@ export default function App() {
     addLog(`System: Recharged '${terr.name}' to full health with Shield.`);
   };
 
-  // ----------------------------------------------------
-  // AI Coach Chat
-  // ----------------------------------------------------
-  const handleCoachSendMessage = (e, textOverride = '') => {
-    if (e) e.preventDefault();
-    const textToSend = textOverride || coachInput;
-    if (!textToSend.trim()) return;
-
-    const userMsg = {
-      id: Date.now(),
-      sender: 'user',
-      text: textToSend,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setCoachMessages(prev => [...prev, userMsg]);
-    const input = textToSend.toLowerCase();
-    if (!textOverride) {
-      setCoachInput('');
-    }
-
-    setTimeout(() => {
-      let reply = "I am processing your pace index. Ask 'routes' for nearby targets.";
-      if (input.includes('hi') || input.includes('hello') || input.includes('hey')) {
-        reply = "What's good? 🫡 Stride calibrated. You ready to lock in some loops or defend your crew?";
-      } else if (input.includes('route') || input.includes('target') || input.includes('where')) {
-        reply = "I suggest doing a run in your local neighborhood. Ensure your loop is at least 200 square meters so the database validates the capture. Let's get it! 🏰";
-      } else if (input.includes('gps') || input.includes('real')) {
-        reply = "Switch to 'Real GPS' tracking in the sidebar, step outside, and start a run. When you cross your own path, the app auto-closes the loop and captures the sector! 🛰️";
-      } else if (input.includes('pace') || input.includes('speed')) {
-        reply = "Your target pace is 5:30 min/km. Maintain consistency to unlock the 'Speed Runner' dynamic trail.";
-      }
-      setCoachMessages(prev => [
-        ...prev,
-        { id: Date.now() + 1, sender: 'coach', text: reply, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-      ]);
-    }, 1000);
-  };
 
   // ----------------------------------------------------
   // Clan Chat
@@ -3821,24 +3765,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* 9. AI COACH INSIGHT */}
-                    <div className="runner-hq-card card-entrance" style={{ animationDelay: '500ms', gap: '10px', borderLeft: '3px solid #FC4C02' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span className="clash-label" style={{ fontSize: '9px', color: '#FC4C02' }}>AI COACH ANALYTICS</span>
-                        <Sparkles size={14} style={{ color: '#FC4C02' }} />
-                      </div>
-                      <p style={{ margin: 0, fontSize: '11px', color: 'white', lineHeight: '1.4' }}>
-                        "You're running 12% farther than last week. Consider a recovery run tomorrow to maintain pace."
-                      </p>
-                      <button
-                        onClick={() => { setShowSettingsDrawer(false); showToast('Yet to be released'); }}
-                        className="clash-btn-primary btn-sm"
-                        style={{ height: '32px', borderRadius: '16px', fontSize: '10px', border: 'none', background: '#FC4C02', color: 'white', marginTop: '4px', cursor: 'pointer' }}
-                      >
-                        Open AI Coach
-                      </button>
-                    </div>
-
                     {/* 10. RUNNER SETTINGS (GLASS CARDS STACK) */}
                     <div className="runner-hq-card card-entrance" style={{ animationDelay: '550ms', gap: '10px' }}>
                       <span className="clash-label" style={{ fontSize: '9px' }}>COMMAND PREFERENCES</span>
@@ -5195,10 +5121,6 @@ export default function App() {
               />
             </div>
 
-            {/* TAB: AI COACH */}
-            <div style={{ display: activeTab === 'coach' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
-              <CoachScreen currentUser={currentUser} onUpgradeClick={() => setActiveTab('premium')} />
-            </div>
 
             {/* TAB: PREMIUM */}
             <div style={{ display: activeTab === 'premium' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">

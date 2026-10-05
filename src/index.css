@@ -551,30 +551,7 @@ body {
   min-height: 300px;
 }
 
-/* Chat bubble styling */
-.chat-bubble {
-  max-width: 85%;
-  padding: 10px 14px;
-  border-radius: 14px;
-  font-size: 12px;
-  line-height: 1.45;
-  transition: all 0.2s ease;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.15);
-}
 
-.chat-bubble-coach {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-left: 3px solid var(--neon-purple) !important;
-  align-self: flex-start;
-}
-
-.chat-bubble-user {
-  background: rgba(252, 76, 2, 0.08) !important;
-  border: 1px solid rgba(252, 76, 2, 0.2) !important;
-  border-right: 3px solid var(--neon-blue) !important;
-  align-self: flex-end;
-}
 
 /* Custom transitions and states */
 .tab-btn {

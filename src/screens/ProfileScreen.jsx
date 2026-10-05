@@ -14,20 +14,24 @@ export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut, onRe
   const fetchStats = useCallback(async () => {
     if (currentProfile?.uid) {
       setIsLoadingStats(true);
-      if (onRefresh) {
-        try {
-          await onRefresh();
-        } catch (e) {
-          console.error(e);
-        }
-      }
       const res = await loadProfileStats(currentProfile.uid);
       if (res.success) {
         setStats(res.data);
       }
       setIsLoadingStats(false);
     }
-  }, [currentProfile, onRefresh]);
+  }, [currentProfile?.uid]);
+
+  const handleRefresh = async () => {
+    if (onRefresh) {
+      try {
+        await onRefresh();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    await fetchStats();
+  };
 
   useEffect(() => {
     fetchStats();
@@ -36,7 +40,7 @@ export const ProfileScreen = ({ currentProfile, onUpdateProfile, onSignOut, onRe
   if (!currentProfile) return null;
 
   return (
-    <PullToRefresh onRefresh={fetchStats}>
+    <PullToRefresh onRefresh={handleRefresh}>
       <div className="fade-in p-4" style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '80px' }}>
         {/* Profile Header Card */}
       <ProfileHeader

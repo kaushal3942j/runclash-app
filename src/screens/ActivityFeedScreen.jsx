@@ -116,30 +116,6 @@ export const ActivityFeedScreen = ({ onActorClick, onTerritoryClick, onCreatePos
           ))}
         </div>
       )}
-
-      {/* Floating Action Button */}
-      <button 
-        onClick={onCreatePost}
-        style={{
-          position: 'fixed',
-          bottom: '80px',
-          right: '24px',
-          width: '56px',
-          height: '56px',
-          borderRadius: '50%',
-          backgroundColor: '#FC4C02',
-          color: 'white',
-          border: 'none',
-          boxShadow: '0 4px 12px rgba(252, 76, 2, 0.4)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          cursor: 'pointer',
-          zIndex: 100
-        }}
-      >
-        <Plus size={24} />
-      </button>
     </div>
   );
 };

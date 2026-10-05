@@ -86,6 +86,7 @@ body {
   background-color: var(--bg-dark);
   color: var(--text-primary);
   min-height: 100vh;
+  overscroll-behavior-y: none;
 }
 
 /* Custom Scrollbar */

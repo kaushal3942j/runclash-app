@@ -255,7 +255,7 @@ export const loadProfileStats = async (targetUserId) => {
   try {
     const { data: runs, error: runsError } = await supabase
       .from('runs')
-      .select('distance_km, duration_seconds, pace_seconds_per_km')
+      .select('distance, duration, pace')
       .eq('user_id', targetUserId);
 
     if (runsError) console.warn('[PROFILE STATS] runs fetch error:', runsError.message);
@@ -271,10 +271,16 @@ export const loadProfileStats = async (targetUserId) => {
     const terrList = territories || [];
 
     const totalRuns = runList.length;
-    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance_km) || 0), 0);
-    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance_km) || 0), 0);
+    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance) || 0), 0);
+    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance) || 0), 0);
 
-    const validPaces = runList.map(r => Number(r.pace_seconds_per_km)).filter(p => p > 0);
+    const validPaces = runList.map(r => {
+      if (typeof r.pace === 'string' && r.pace.includes(':')) {
+        const [m, s] = r.pace.split(':').map(Number);
+        if (!isNaN(m) && !isNaN(s)) return (m * 60) + s;
+      }
+      return 0;
+    }).filter(p => p > 0);
     const fastestPaceSec = validPaces.length ? Math.min(...validPaces) : 0;
     const avgPaceSec = validPaces.length ? Math.round(validPaces.reduce((a, b) => a + b, 0) / validPaces.length) : 0;
 

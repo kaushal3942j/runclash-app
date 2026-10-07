@@ -1195,12 +1195,11 @@ export const saveCompletedRun = async (runData) => {
       let speedVal = parseFloat(runData.speed) || parseFloat(runData.averageSpeedKmh) || null;
 
       const dbRun = {
-        operation_id: operationId,
         user_id: authenticatedSessionUser.id,
-        distance_km: distanceKm,
-        duration_seconds: durationSeconds,
-        pace_seconds_per_km: paceVal,
-        average_speed_kmh: speedVal,
+        distance: distanceKm,
+        duration: durationSeconds,
+        pace: runData.pace || (paceVal ? `${Math.floor(paceVal / 60)}:${String(Math.round(paceVal % 60)).padStart(2, '0')}` : "--:--"),
+        speed: speedVal || 0,
         calories: caloriesVal,
         gps_path: runData.path || runData.gps_path || [],
         start_time: runData.startTime || new Date().toISOString(),

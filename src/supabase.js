@@ -83,7 +83,7 @@ const migrateLocalStorage = () => {
       }
       localStorage.removeItem('runclash_territories');
     }
-    
+
     // Clean up other old developer/test keys
     localStorage.removeItem('clash_debug');
   } catch (e) {
@@ -151,7 +151,7 @@ const getMockTerritories = () => {
   try {
     const parsed = JSON.parse(data);
     let migrated = false;
-    
+
     // Filter out any legacy pre-generated unclaimed sectors (t1, t2, t3, t4)
     // Keep only landmarks and player-created territories
     const updated = parsed.filter(t => {
@@ -305,7 +305,7 @@ export const registerUser = async (email, password, name, clan) => {
       console.log(`[SUPABASE]\noperation: UPDATE\ntable: profiles\nuser: ${user.id}\nstatus: ${profileError ? `error: ${profileError.message}` : 'success'}`);
     }
     // For new user signups, we DO NOT write to the profiles table from the frontend.
-    // The 'handle_new_user' database trigger automatically creates the profile row 
+    // The 'handle_new_user' database trigger automatically creates the profile row
     // safely inside the database using the raw_user_meta_data we just passed.
     // This avoids fake-UUID foreign key errors caused by email enumeration protection.
 
@@ -322,7 +322,7 @@ export const registerUser = async (email, password, name, clan) => {
         .select('level, xp, coins, premium')
         .eq('id', user.id)
         .single();
-        
+
       if (fetchedProfile) {
         level = fetchedProfile.level;
         xp = fetchedProfile.xp;
@@ -554,7 +554,7 @@ export const verifyPhoneOtp = async (phone, token, name, clan) => {
       .from('profiles')
       .update({ phone_number: phone })
       .eq('id', user.id);
-      
+
     return {
       uid: user.id,
       phone: phone,
@@ -578,7 +578,7 @@ export const verifyPhoneOtp = async (phone, token, name, clan) => {
       premium: false,
       phone_number: phone
     };
-    
+
     try {
       newProfile.device_id = await getDeviceId();
     } catch(e) {}
@@ -869,20 +869,38 @@ export const validateTerritoryPayload = (dbTerr) => {
 
 export const ensureClosedPolygon = (coords) => {
   if (!Array.isArray(coords) || coords.length < 3) return coords;
-  const first = coords[0];
-  const last = coords[coords.length - 1];
-  if (!first || !last) return coords;
-  if (first[0] !== last[0] || first[1] !== last[1]) {
-    return [...coords, [first[0], first[1]]];
+
+  // 1. Remove consecutive duplicates to prevent PostGIS topology exceptions
+  const cleaned = [coords[0]];
+  for (let i = 1; i < coords.length; i++) {
+    const prev = cleaned[cleaned.length - 1];
+    const curr = coords[i];
+    if (prev[0] !== curr[0] || prev[1] !== curr[1]) {
+      cleaned.push(curr);
+    }
   }
-  return coords;
+
+  // 2. Ensure enough unique points (a polygon needs at least 3 distinct points, which is 4 coords when closed)
+  if (cleaned.length < 3) return cleaned;
+
+  // 3. Ensure closed ring
+  const first = cleaned[0];
+  const last = cleaned[cleaned.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    cleaned.push([first[0], first[1]]);
+  } else if (cleaned.length < 4) {
+    // If it's closed but only has 3 points total, it's a line, not a polygon
+    return cleaned;
+  }
+
+  return cleaned;
 };
 
 export const saveNewTerritory = async (territory) => {
   const rawArea = typeof territory.area === 'number'
     ? territory.area
     : parseFloat(String(territory.area).replace(/[^\d.]/g, '')) || 0;
-  
+
   const areaVal = Number.isFinite(rawArea) && rawArea > 0 ? rawArea : 100;
 
   const expiresAt = new Date();
@@ -903,6 +921,18 @@ export const saveNewTerritory = async (territory) => {
     area: areaVal + ' m²',
     synced: false
   };
+
+  // If geometry is invalid locally, prevent claim from even attempting
+  if (!closedCoords || closedCoords.length < 4) {
+    console.warn('[STOP CLAIM] Invalid territory geometry after cleanup.');
+    return {
+      success: false,
+      cloud: false,
+      queued: false,
+      error: 'Invalid run geometry. Not enough unique points for a territory.',
+      data: localTerr
+    };
+  }
 
   // STRICT AUTHENTICATION GUARD
   let authenticatedSessionUser = null;
@@ -1076,9 +1106,9 @@ export const getLeaderboard = async () => {
         .limit(10);
 
       console.log(`[SUPABASE]\noperation: SELECT\ntable: profiles\nuser: public\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
-      
+
       if (error) throw error;
-      
+
       return data.map(p => ({
         id: p.id,
         uid: p.id,
@@ -1178,11 +1208,18 @@ export const saveCompletedRun = async (runData) => {
         summary_statistics: runData.summaryStatistics || {}
       };
 
-      const { data, error } = await supabase
+      const cloudInsertPromise = supabase
         .from('runs')
         .insert(dbRun)
         .select()
         .single();
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
+      });
+
+      const res = await Promise.race([cloudInsertPromise, timeoutPromise]);
+      const { data, error } = res || {};
 
       if (!error || error.code === '23505') {
         console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + userId + '\nstatus: ' + (error ? 'already synced (23505)' : 'success'));

@@ -119,6 +119,11 @@ begin
   end if;
 
   new.polygon_geom := ST_GeomFromText('POLYGON((' || points_str || '))', 4326);
+
+  if not ST_IsValid(new.polygon_geom) then
+    new.polygon_geom := ST_MakeValid(new.polygon_geom);
+  end if;
+
   return new;
 exception
   when others then
@@ -147,27 +152,35 @@ begin
   end if;
 
   -- Soft-delete overlapping territories (> 50% overlap of the old territory)
-  for old_terr in 
-    select id, owner_id, area_sqm, polygon_geom 
-    from public.territories 
-    where id <> new.id and is_active = true and polygon_geom is not null and ST_Intersects(new.polygon_geom, polygon_geom)
+  for old_terr in
+    select id, owner_id, area_sqm, polygon_geom
+    from public.territories
+    where id <> new.id and is_active = true and polygon_geom is not null and ST_IsValid(polygon_geom)
   loop
-    overlap_area := ST_Area(ST_Intersection(new.polygon_geom::geography, old_terr.polygon_geom::geography));
-    old_area := ST_Area(old_terr.polygon_geom::geography);
+    begin
+      if ST_Intersects(new.polygon_geom, old_terr.polygon_geom) then
+        overlap_area := ST_Area(ST_Intersection(new.polygon_geom::geography, old_terr.polygon_geom::geography));
+        old_area := ST_Area(old_terr.polygon_geom::geography);
 
-    if old_area > 0 then
-      ratio := overlap_area / old_area;
-      if ratio > 0.5 then
-        update public.territories 
-        set is_active = false, status = 'conquered', conquered_by_id = new.owner_id 
-        where id = old_terr.id;
+        if old_area > 0 then
+          ratio := overlap_area / old_area;
+          if ratio > 0.5 then
+            update public.territories
+            set is_active = false, status = 'conquered', conquered_by_id = new.owner_id
+            where id = old_terr.id;
+          end if;
+        end if;
       end if;
-    end if;
+    exception
+      when others then
+        raise warning 'Skipping topology exception for territory %: %', old_terr.id, SQLERRM;
+    end;
   end loop;
 
+
   -- Soft-delete expired territories on new captures
-  update public.territories 
-  set is_active = false, status = 'expired' 
+  update public.territories
+  set is_active = false, status = 'expired'
   where expires_at <= now() and is_active = true;
 
   -- Prune old logs as part of the database maintenance

@@ -1457,6 +1457,11 @@ export const joinClanInCloud = async (clanName, userUid) => {
 export const leaveClanInCloud = async (userUid) => {
   if (useSupabase && userUid && !userUid.startsWith('local_')) {
     try {
+      await supabase
+        .from('clan_members')
+        .delete()
+        .eq('user_id', userUid);
+
       const { error } = await supabase
         .from('profiles')
         .update({ clan_name: 'None' })

@@ -96,24 +96,28 @@ export const getPublicProfile = async (targetUserId) => {
   }
 };
 
-export const checkUsernameAvailability = async (username) => {
+export const checkUsernameAvailability = async (username, excludeUserId = null) => {
   if (!username || typeof username !== 'string') {
-    return { available: false, error: 'Username must be a valid string' };
+    return { available: false, normalized: '', error: 'Username must be a valid string' };
   }
 
   const normalized = username.trim().toLowerCase();
   const usernameRegex = /^[a-z0-9_]{3,20}$/;
   if (!usernameRegex.test(normalized)) {
-    return { available: false, error: '3–20 characters, lowercase letters, numbers & underscores only.' };
+    return { available: false, normalized, error: '3–20 characters, lowercase letters, numbers & underscores only.' };
   }
 
   if (!useSupabase) {
-    return { available: true, error: null };
+    return { available: true, normalized, error: null };
   }
 
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const currentUserId = session?.user?.id;
+    let currentUserId = excludeUserId;
+    if (!currentUserId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { user } } = await supabase.auth.getUser();
+      currentUserId = user?.id || session?.user?.id;
+    }
 
     const { data, error } = await supabase
       .from('profiles')
@@ -122,16 +126,16 @@ export const checkUsernameAvailability = async (username) => {
       .maybeSingle();
 
     if (error) {
-      return { available: false, error: error.message };
+      return { available: false, normalized, error: error.message };
     }
 
     if (data && data.id !== currentUserId) {
-      return { available: false, error: 'Username is already taken.' };
+      return { available: false, normalized, error: 'Username is already taken.' };
     }
 
     return { available: true, normalized, error: null };
   } catch (err) {
-    return { available: false, error: err.message };
+    return { available: false, normalized, error: err.message };
   }
 };
 
@@ -142,21 +146,24 @@ export const updateProfile = async (patch) => {
 
   try {
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session || !session.user) {
+    const { data: { user } } = await supabase.auth.getUser();
+    const currentUser = user || session?.user;
+    if (!currentUser) {
       return { success: false, data: null, error: 'Not authenticated.' };
     }
-    const userId = session.user.id;
+    const userId = currentUser.id;
 
     const mapped = { updated_at: new Date().toISOString() };
 
     if (patch.displayName !== undefined) mapped.display_name = patch.displayName;
     if (patch.username !== undefined) {
       if (patch.username && patch.username.trim()) {
-        const availCheck = await checkUsernameAvailability(patch.username);
+        const normalized = patch.username.trim().toLowerCase();
+        const availCheck = await checkUsernameAvailability(normalized, userId);
         if (!availCheck.available) {
           return { success: false, data: null, error: availCheck.error };
         }
-        mapped.username = availCheck.normalized;
+        mapped.username = normalized;
       } else {
         mapped.username = null;
       }
@@ -181,7 +188,35 @@ export const updateProfile = async (patch) => {
       .single();
 
     if (error) {
+      if (error.code === '23505' || error.message?.includes('profiles_username')) {
+        return { success: false, data: null, error: 'Username is already taken.' };
+      }
       return { success: false, data: null, error: error.message };
+    }
+
+    // Keep localStorage cache in sync so refresh retains all edited values
+    try {
+      const cached = JSON.parse(localStorage.getItem('clash_user'));
+      if (cached && (cached.id === userId || cached.uid === userId)) {
+        const merged = {
+          ...cached,
+          displayName: data.display_name || cached.displayName,
+          display_name: data.display_name || cached.display_name,
+          username: data.username,
+          bio: data.bio,
+          country: data.country,
+          state: data.state,
+          city: data.city,
+          avatarUrl: data.avatar_url,
+          avatar_url: data.avatar_url,
+          is_profile_public: data.is_profile_public,
+          show_activity: data.show_activity,
+          allow_friend_requests: data.allow_friend_requests
+        };
+        localStorage.setItem('clash_user', JSON.stringify(merged));
+      }
+    } catch (cacheErr) {
+      console.warn('[ProfileService] Cache update notice:', cacheErr);
     }
 
     return { success: true, data, error: null };

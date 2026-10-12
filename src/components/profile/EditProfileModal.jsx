@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, Save, AlertCircle } from 'lucide-react';
 import { AvatarUploader } from './AvatarUploader';
 import { PrivacySettings } from './PrivacySettings';
@@ -28,18 +28,31 @@ export const EditProfileModal = ({ profile, onClose, onSaveSuccess }) => {
     setErrorMsg('');
 
     try {
-      if (username && username.trim()) {
-        const avail = await checkUsernameAvailability(username.trim());
-        if (!avail.available && avail.normalized !== profile?.username) {
-          setErrorMsg(avail.error || 'Username unavailable.');
+      const trimmedUsername = username ? username.trim().toLowerCase() : '';
+      const currentUsername = (profile?.username || '').trim().toLowerCase();
+
+      // Only check availability if user entered a username AND it differs from their current username
+      if (trimmedUsername) {
+        const usernameRegex = /^[a-z0-9_]{3,20}$/;
+        if (!usernameRegex.test(trimmedUsername)) {
+          setErrorMsg('Username must be 3–20 characters, lowercase letters, numbers & underscores only.');
           setIsSaving(false);
           return;
+        }
+
+        if (trimmedUsername !== currentUsername) {
+          const avail = await checkUsernameAvailability(trimmedUsername, profile?.id || profile?.uid);
+          if (!avail.available) {
+            setErrorMsg(avail.error || 'Username is already taken.');
+            setIsSaving(false);
+            return;
+          }
         }
       }
 
       const res = await updateProfile({
         displayName: displayName.trim() || 'Runner',
-        username: username.trim() || null,
+        username: trimmedUsername || null,
         bio: bio.trim(),
         avatarUrl,
         country: country.trim(),

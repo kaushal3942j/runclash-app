@@ -439,9 +439,12 @@ export default function App() {
     const res = await ClanService.joinClan(clanId);
     if (res.success) {
       if (res.status === 'requested') {
-        setClanSuccessMsg(`Join request sent to '${clanName}'. Waiting for approval.`);
+        setClanSuccessMsg(res.message || `Join request sent to '${clanName}'. Waiting for approval.`);
+      } else if (res.status === 'already_member') {
+        setCurrentUser(prev => prev ? ({ ...prev, clan: clanName, clan_name: clanName }) : prev);
+        setClanSuccessMsg(res.message || `You are already a member of ${clanName}!`);
       } else {
-        setCurrentUser(prev => prev ? ({ ...prev, clan: clanName }) : prev);
+        setCurrentUser(prev => prev ? ({ ...prev, clan: clanName, clan_name: clanName }) : prev);
         addLog(`Joined clan: ${clanName}`);
         setClanSuccessMsg(`Welcome to ${clanName}!`);
       }
@@ -461,11 +464,11 @@ export default function App() {
     setClanSuccessMsg(null);
     const res = await ClanService.joinClanByCode(joinInviteCode.trim());
     if (res.success) {
-        setCurrentUser(prev => prev ? ({ ...prev, clan: res.clanName }) : prev);
-        setClanSuccessMsg(`Welcome to ${res.clanName}!`);
-        await loadClans();
+      setCurrentUser(prev => prev ? ({ ...prev, clan: res.clanName, clan_name: res.clanName }) : prev);
+      setClanSuccessMsg(res.message || `Welcome to ${res.clanName}!`);
+      await loadClans();
     } else {
-        setClanErrorMsg(res.error || "Invalid invite code.");
+      setClanErrorMsg(res.error || "Invalid invite code.");
     }
     setJoinInviteCode('');
   };
@@ -475,7 +478,7 @@ export default function App() {
     setClanSuccessMsg(null);
     const res = await leaveClanInCloud(currentUser?.uid);
     if (res.success) {
-      setCurrentUser(prev => prev ? ({ ...prev, clan: 'None' }) : prev);
+      setCurrentUser(prev => prev ? ({ ...prev, clan: 'None', clan_name: 'None' }) : prev);
       addLog("Left current clan.");
       setClanSuccessMsg("You have left your clan.");
       await loadClans();
@@ -5129,15 +5132,24 @@ export default function App() {
               <ProfileScreen
                 currentProfile={currentUser}
                 onUpdateProfile={(updated) => {
-                  setCurrentUser(prev => ({
-                    ...prev,
-                    displayName: updated.display_name || prev.displayName,
-                    display_name: updated.display_name || prev.display_name,
-                    username: updated.username,
-                    bio: updated.bio,
-                    avatar_url: updated.avatar_url,
-                    avatarUrl: updated.avatar_url
-                  }));
+                  const updatedProfile = {
+                    ...currentUser,
+                    ...updated,
+                    displayName: updated.display_name || updated.displayName || currentUser?.displayName,
+                    display_name: updated.display_name || updated.displayName || currentUser?.display_name,
+                    username: updated.username !== undefined ? updated.username : currentUser?.username,
+                    bio: updated.bio !== undefined ? updated.bio : currentUser?.bio,
+                    country: updated.country !== undefined ? updated.country : currentUser?.country,
+                    state: updated.state !== undefined ? updated.state : currentUser?.state,
+                    city: updated.city !== undefined ? updated.city : currentUser?.city,
+                    avatar_url: updated.avatar_url !== undefined ? updated.avatar_url : currentUser?.avatar_url,
+                    avatarUrl: updated.avatar_url !== undefined ? updated.avatar_url : currentUser?.avatarUrl,
+                    is_profile_public: updated.is_profile_public !== undefined ? updated.is_profile_public : currentUser?.is_profile_public,
+                    show_activity: updated.show_activity !== undefined ? updated.show_activity : currentUser?.show_activity,
+                    allow_friend_requests: updated.allow_friend_requests !== undefined ? updated.allow_friend_requests : currentUser?.allow_friend_requests,
+                  };
+                  setCurrentUser(updatedProfile);
+                  localStorage.setItem('clash_user', JSON.stringify(updatedProfile));
                 }}
                 onSignOut={() => setShowSignOutModal(true)}
                 onRefresh={triggerGlobalRefresh}

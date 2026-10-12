@@ -1,21 +1,24 @@
-import React from 'react';
-import { Trophy, Shield } from 'lucide-react';
+import { Shield } from 'lucide-react';
 
 export const LeaderboardRow = ({ player, isCurrentUser = false, metric = 'xp', onSelect }) => {
   if (!player) return null;
 
-  const rank = player.rank || 1;
+  const rank = player.rank !== undefined && player.rank !== null ? player.rank : 1;
   const displayName = player.display_name || player.displayName || 'Runner';
   const username = player.username ? `@${player.username}` : null;
   const avatarUrl = player.avatar_url || player.avatarUrl;
   const clan = player.clan_name || player.clan || 'None';
   const level = player.level || 1;
 
-  let metricDisplay = `${player.xp || 0} XP`;
+  const xpVal = Number(player.xp || 0);
+  const distanceVal = Number(player.total_distance || 0).toFixed(1);
+  const territoriesVal = Number(player.territories_owned || 0);
+
+  let primaryMetricDisplay = `${xpVal} XP`;
   if (metric === 'distance') {
-    metricDisplay = `${Number(player.total_distance || 0).toFixed(1)} km`;
+    primaryMetricDisplay = `${distanceVal} km`;
   } else if (metric === 'territories') {
-    metricDisplay = `${player.territories_owned || 0} Territories`;
+    primaryMetricDisplay = `${territoriesVal} Terr`;
   }
 
   const getRankBadge = (r) => {
@@ -106,9 +109,14 @@ export const LeaderboardRow = ({ player, isCurrentUser = false, metric = 'xp', o
       </div>
 
       {/* Metric Display */}
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: '14px', fontWeight: '900', color: '#FC4C02' }}>
-          {metricDisplay}
+      <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', flexShrink: 0 }}>
+        <div style={{ fontSize: '14px', fontWeight: '900', color: '#FC4C02', lineHeight: '1.2' }}>
+          {primaryMetricDisplay}
+        </div>
+        <div style={{ fontSize: '10px', color: 'var(--clash-text-secondary)', fontWeight: '600', lineHeight: '1.2' }}>
+          {metric === 'xp' && `${distanceVal} km • ${territoriesVal} terr`}
+          {metric === 'distance' && `${xpVal} XP • ${territoriesVal} terr`}
+          {metric === 'territories' && `${xpVal} XP • ${distanceVal} km`}
         </div>
       </div>
     </div>

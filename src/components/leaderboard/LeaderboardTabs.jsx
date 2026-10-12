@@ -1,4 +1,3 @@
-import React from 'react';
 import { Globe, Flag, MapPin, Users } from 'lucide-react';
 
 export const LeaderboardTabs = ({ scope, onScopeChange, metric, onMetricChange, period, onPeriodChange }) => {

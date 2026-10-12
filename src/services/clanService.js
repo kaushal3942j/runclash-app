@@ -56,6 +56,24 @@ export const joinClan = async (clanId, inviteCode = null) => {
   const { data: clan, error: clanError } = await supabase.from('clans').select('*').eq('id', clanId).single();
   if (clanError || !clan) return { success: false, error: 'Clan not found' };
 
+  // Creating a clan automatically adds its owner to clan_members.
+  // Treat repeat joins as success instead of surfacing the primary-key error.
+  const { data: existingMember, error: membershipCheckError } = await supabase
+    .from('clan_members')
+    .select('role')
+    .eq('clan_id', clan.id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (membershipCheckError) {
+    return { success: false, error: membershipCheckError.message };
+  }
+
+  if (existingMember) {
+    await supabase.from('profiles').update({ clan_name: clan.name }).eq('id', user.id);
+    return { success: true, status: 'already_member', role: existingMember.role };
+  }
+
   if (clan.is_public || (inviteCode && clan.invite_code === inviteCode)) {
     // Join immediately
     const { error: memberError } = await supabase.from('clan_members').insert({

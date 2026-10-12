@@ -680,7 +680,9 @@ export const subscribeToTerritories = (onUpdate) => {
 
       let list = [];
       if (data) {
-        list = data.map(t => {
+        list = data
+          .filter(t => t.is_active !== false)
+          .map(t => {
           // Calculate remaining decay hours dynamically based on expires_at
           const expires = t.expires_at ? new Date(t.expires_at) : new Date(new Date(t.created_at).getTime() + 72 * 3600000);
           const now = new Date();
@@ -708,7 +710,7 @@ export const subscribeToTerritories = (onUpdate) => {
         if (localData) {
           const locals = JSON.parse(localData);
           locals.forEach(loc => {
-            if (!list.some(t => t.id === loc.id)) {
+            if (loc && loc.is_active !== false && !list.some(t => t.id === loc.id)) {
               list.push(loc);
             }
           });
@@ -742,6 +744,12 @@ export const subscribeToTerritories = (onUpdate) => {
     return () => {
       listeners.delete(onUpdate);
     };
+  }
+};
+
+export const refreshTerritories = () => {
+  if (activeLoadTerritories) {
+    activeLoadTerritories();
   }
 };
 
@@ -934,34 +942,37 @@ export const saveNewTerritory = async (territory) => {
     };
   }
 
-  // STRICT AUTHENTICATION GUARD
+  // STRICT AUTHENTICATION GUARD WITH TIMEOUT (4s)
   let authenticatedSessionUser = null;
   if (useSupabase && validOwnerId) {
+    let authTimerId = null;
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionPromise = supabase.auth.getSession();
+      const sessionTimeout = new Promise((_, reject) => {
+        authTimerId = setTimeout(() => reject(new Error('Auth check timeout (4s)')), 4000);
+      });
+      const { data: sessionData } = await Promise.race([sessionPromise, sessionTimeout]);
       const sUser = sessionData?.session?.user;
       if (sUser && isValidUUID(sUser.id) && sUser.id === validOwnerId) {
         authenticatedSessionUser = sUser;
       }
     } catch (e) {
       console.warn('[AUTH GUARD] Error checking session for territory insert:', e);
+    } finally {
+      if (authTimerId) clearTimeout(authTimerId);
     }
   }
 
-  // If unauthenticated or no Supabase, queue offline and return success locally
+  // If unauthenticated or no Supabase, queue offline and do NOT falsely report success
   if (!useSupabase || !validOwnerId || !authenticatedSessionUser) {
-    console.log('[STOP CLAIM] 5 territory saved locally / queued (unauthenticated or offline)');
+    console.warn('[STOP CLAIM] Cannot persist territory to cloud (unauthenticated or offline)');
     syncQueueService.enqueueTerritory({ ...territory, claimId, coords: closedCoords, ownerId: validOwnerId || rawOwnerId });
 
-    const updated = [...list.filter(t => (t.claimId || t.id) !== (localTerr.claimId || localTerr.id)), localTerr];
-    localStorage.setItem('clash_territories', JSON.stringify(updated));
-    triggerListeners(updated);
-    if (activeLoadTerritories) activeLoadTerritories();
-
     return {
-      success: true,
+      success: false,
       cloud: false,
       queued: true,
+      error: !authenticatedSessionUser ? 'User authentication session not found. Please log in.' : 'Cloud database unavailable.',
       data: localTerr
     };
   }
@@ -998,6 +1009,7 @@ export const saveNewTerritory = async (territory) => {
   let insertData = null;
   let insertError = null;
   let cloudSuccess = false;
+  let insertTimerId = null;
 
   try {
     const cloudInsertPromise = supabase
@@ -1007,19 +1019,41 @@ export const saveNewTerritory = async (territory) => {
       .single();
 
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
+      insertTimerId = setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
     });
 
     const res = await Promise.race([cloudInsertPromise, timeoutPromise]);
     const { data, error } = res || {};
 
-    if (!error || error?.code === '23505') {
-      insertData = data || dbTerr;
-      cloudSuccess = true;
-      if (error?.code === '23505') {
-        console.log(`[STOP CLAIM] 5 territory already synced (23505 unique violation) for claim ${claimId}`);
+    if (!error) {
+      // STRICT GEOMETRY CHECK: Verify that polygon_geom is not null
+      if (data && data.polygon_geom === null) {
+        insertData = null;
+        insertError = new Error('Database accepted record but failed to generate valid geometry (polygon_geom is null).');
+        cloudSuccess = false;
+        console.warn(`[STOP CLAIM] 5 territory rejected because polygon_geom is null (Claim ID: ${claimId})`);
       } else {
+        insertData = data || dbTerr;
+        cloudSuccess = true;
         console.log(`[STOP CLAIM] 5 territory cloud saved successfully (Claim ID: ${claimId})`);
+      }
+    } else if (error?.code === '23505') {
+      // Idempotent retry recovery: retrieve existing record to verify it belongs to user and has valid geometry
+      const { data: existingTerr, error: fetchErr } = await supabase
+        .from('territories')
+        .select('*')
+        .eq('owner_id', authenticatedSessionUser.id)
+        .eq('claim_id', claimId)
+        .maybeSingle();
+
+      if (!fetchErr && existingTerr && existingTerr.polygon_geom !== null) {
+        insertData = existingTerr;
+        cloudSuccess = true;
+        console.log(`[STOP CLAIM] 5 territory already synced (23505 unique violation verified) for claim ${claimId}`);
+      } else {
+        insertData = null;
+        insertError = fetchErr || new Error('Unique constraint violation: existing territory could not be verified or has null geometry.');
+        cloudSuccess = false;
       }
     } else {
       insertError = error;
@@ -1030,6 +1064,8 @@ export const saveNewTerritory = async (territory) => {
     insertError = err;
     cloudSuccess = false;
     console.warn('[STOP CLAIM] 5 territory cloud insert exception/timeout:', err.message);
+  } finally {
+    if (insertTimerId) clearTimeout(insertTimerId);
   }
 
   const finalTerr = {
@@ -1165,20 +1201,29 @@ export const saveCompletedRun = async (runData) => {
   const userId = runData.userId;
   const isValidUser = isValidUUID(userId);
 
-  // STRICT AUTHENTICATION GUARD
+  // STRICT AUTHENTICATION GUARD WITH TIMEOUT (4s)
   let authenticatedSessionUser = null;
   if (useSupabase && isValidUser) {
+    let authTimerId = null;
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const sessionPromise = supabase.auth.getSession();
+      const sessionTimeout = new Promise((_, reject) => {
+        authTimerId = setTimeout(() => reject(new Error('Auth check timeout (4s)')), 4000);
+      });
+      const { data: sessionData } = await Promise.race([sessionPromise, sessionTimeout]);
+      const session = sessionData?.session;
       if (session && session.user && isValidUUID(session.user.id) && session.user.id === userId) {
         authenticatedSessionUser = session.user;
       }
     } catch (e) {
       console.warn('[AUTH GUARD] Error checking session for run insert:', e);
+    } finally {
+      if (authTimerId) clearTimeout(authTimerId);
     }
   }
 
   if (useSupabase && isValidUser && authenticatedSessionUser) {
+    let insertTimerId = null;
     try {
       const distanceKm = parseFloat(runData.distance) || parseFloat(runData.distanceKm) || 0;
       const durationSeconds = parseInt(runData.duration) || parseInt(runData.durationSeconds) || 0;
@@ -1195,11 +1240,12 @@ export const saveCompletedRun = async (runData) => {
       let speedVal = parseFloat(runData.speed) || parseFloat(runData.averageSpeedKmh) || null;
 
       const dbRun = {
+        operation_id: operationId,
         user_id: authenticatedSessionUser.id,
-        distance: distanceKm,
-        duration: durationSeconds,
-        pace: runData.pace || (paceVal ? `${Math.floor(paceVal / 60)}:${String(Math.round(paceVal % 60)).padStart(2, '0')}` : "--:--"),
-        speed: speedVal || 0,
+        distance_km: distanceKm,
+        duration_seconds: durationSeconds,
+        pace_seconds_per_km: paceVal,
+        average_speed_kmh: speedVal,
         calories: caloriesVal,
         gps_path: runData.path || runData.gps_path || [],
         start_time: runData.startTime || new Date().toISOString(),
@@ -1214,15 +1260,32 @@ export const saveCompletedRun = async (runData) => {
         .single();
 
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
+        insertTimerId = setTimeout(() => reject(new Error('Cloud insertion timeout (8s limit exceeded)')), 8000);
       });
 
       const res = await Promise.race([cloudInsertPromise, timeoutPromise]);
       const { data, error } = res || {};
 
-      if (!error || error.code === '23505') {
-        console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + userId + '\nstatus: ' + (error ? 'already synced (23505)' : 'success'));
+      if (!error) {
+        console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + userId + '\nstatus: success');
         return { success: true, cloud: true, data: data || localRun };
+      } else if (error.code === '23505') {
+        // Idempotent retry recovery: retrieve existing record to verify it belongs to user and operation
+        const { data: existingRun, error: fetchErr } = await supabase
+          .from('runs')
+          .select('*')
+          .eq('user_id', authenticatedSessionUser.id)
+          .eq('operation_id', operationId)
+          .maybeSingle();
+
+        if (!fetchErr && existingRun) {
+          console.log('[SUPABASE]\noperation: INSERT\ntable: runs\nuser: ' + userId + '\nstatus: already synced (23505 verified)');
+          return { success: true, cloud: true, data: existingRun };
+        } else {
+          console.warn('[SUPABASE] 23505 run collision could not be verified, queueing offline:', fetchErr?.message);
+          syncQueueService.enqueueRun({ ...runData, operationId });
+          return { success: true, cloud: false, queued: true, data: localRun };
+        }
       } else {
         console.warn('Supabase insert run warning:', error.message);
         syncQueueService.enqueueRun({ ...runData, operationId });
@@ -1232,6 +1295,8 @@ export const saveCompletedRun = async (runData) => {
       console.warn('Supabase insert run failed, queueing offline:', err.message);
       syncQueueService.enqueueRun({ ...runData, operationId });
       return { success: true, cloud: false, queued: true, data: localRun };
+    } finally {
+      if (insertTimerId) clearTimeout(insertTimerId);
     }
   } else {
     console.log('[RUN SAVE] Unauthenticated or offline user. Queueing run to offline sync queue.');

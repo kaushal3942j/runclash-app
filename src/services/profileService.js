@@ -253,28 +253,66 @@ export const loadProfileStats = async (targetUserId) => {
   }
 
   try {
-    const { data: runs, error: runsError } = await supabase
-      .from('runs')
-      .select('distance, duration, pace')
-      .eq('user_id', targetUserId);
+    const { data: { session } } = await supabase.auth.getSession();
+    const currentUserId = session?.user?.id;
+    const isOwner = Boolean(currentUserId && currentUserId === targetUserId);
+
+    // If viewing another runner, query privacy-safe runner_activities_public view (no gps_path).
+    // If viewing own profile, query runs directly.
+    let runs = null;
+    let runsError = null;
+
+    if (!isOwner) {
+      const res = await supabase
+        .from('runner_activities_public')
+        .select('distance_km, duration_seconds, pace_seconds_per_km')
+        .eq('user_id', targetUserId);
+      runs = res.data;
+      runsError = res.error;
+
+      if (runsError) {
+        console.warn('[PROFILE STATS] runner_activities_public fetch warning, falling back to runs:', runsError.message);
+        const fallbackRes = await supabase
+          .from('runs')
+          .select('distance_km, duration_seconds, pace_seconds_per_km')
+          .eq('user_id', targetUserId);
+        if (!fallbackRes.error) {
+          runs = fallbackRes.data;
+          runsError = null;
+        }
+      }
+    } else {
+      const res = await supabase
+        .from('runs')
+        .select('distance_km, duration_seconds, pace_seconds_per_km')
+        .eq('user_id', targetUserId);
+      runs = res.data;
+      runsError = res.error;
+    }
 
     if (runsError) console.warn('[PROFILE STATS] runs fetch error:', runsError.message);
 
     const { data: territories, error: terrError } = await supabase
       .from('territories')
-      .select('id, area_sqm')
+      .select('id, area_sqm, is_active')
       .eq('owner_id', targetUserId);
 
     if (terrError) console.warn('[PROFILE STATS] territories fetch error:', terrError.message);
 
     const runList = runs || [];
-    const terrList = territories || [];
+    const terrList = (territories || []).filter(t => t.is_active !== false);
 
     const totalRuns = runList.length;
-    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance) || 0), 0);
-    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance) || 0), 0);
+    const totalDistanceKm = runList.reduce((acc, r) => acc + (Number(r.distance_km != null ? r.distance_km : r.distance) || 0), 0);
+    const longestRunKm = runList.reduce((max, r) => Math.max(max, Number(r.distance_km != null ? r.distance_km : r.distance) || 0), 0);
 
     const validPaces = runList.map(r => {
+      if (typeof r.pace_seconds_per_km === 'number' && r.pace_seconds_per_km > 0) {
+        return r.pace_seconds_per_km;
+      }
+      if (typeof r.pace === 'number' && r.pace > 0) {
+        return r.pace;
+      }
       if (typeof r.pace === 'string' && r.pace.includes(':')) {
         const [m, s] = r.pace.split(':').map(Number);
         if (!isNaN(m) && !isNaN(s)) return (m * 60) + s;
@@ -367,6 +405,33 @@ export const ensureProfile = async (user, preferredDisplayName = 'Guest Runner',
     }
 
     return { success: true, data: newProfile, created: true, error: null };
+  } catch (err) {
+    return { success: false, data: null, error: err.message };
+  }
+};
+
+export const fetchRunnerPublicStatsRPC = async (targetUserId) => {
+  if (!useSupabase || !targetUserId) {
+    return { success: false, data: null, error: 'Target user ID is required.' };
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('get_runner_public_stats', { target_user_id: targetUserId });
+    if (error) {
+      return { success: false, data: null, error: error.message };
+    }
+    const statsRow = Array.isArray(data) ? data[0] : data;
+    return {
+      success: true,
+      data: statsRow ? {
+        totalDistanceKm: Number(statsRow.total_distance_km) || 0,
+        totalRuns: Number(statsRow.total_runs) || 0,
+        longestRunKm: Number(statsRow.longest_run_km) || 0,
+        fastestPaceSec: Number(statsRow.fastest_pace_seconds) || 0,
+        avgPaceSec: Number(statsRow.average_pace_seconds) || 0
+      } : null,
+      error: null
+    };
   } catch (err) {
     return { success: false, data: null, error: err.message };
   }

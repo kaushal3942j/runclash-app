@@ -23,6 +23,24 @@ alter table public.territories add column if not exists status text default 'act
 alter table public.territories add column if not exists conquered_by_id uuid;
 alter table public.territories add column if not exists expires_at timestamp with time zone default (now() + interval '72 hours');
 
+-- Ensure polygon_geom accepts both Polygon and MultiPolygon geometries
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'territories'
+      and column_name = 'polygon_geom'
+  ) then
+    alter table public.territories
+      alter column polygon_geom type geometry(Geometry, 4326)
+      using polygon_geom::geometry(Geometry, 4326);
+  else
+    alter table public.territories
+      add column polygon_geom geometry(Geometry, 4326);
+  end if;
+end $$;
+
 -- 3. Database Performance & Spatial Indexes
 create index if not exists profiles_xp_idx on public.profiles (xp desc);
 create index if not exists territories_owner_idx on public.territories (owner_id);
@@ -65,9 +83,12 @@ create policy "Error logs insert" on public.error_logs for insert with check (tr
 create or replace function public.cleanup_old_logs()
 returns void as $$
 begin
-  delete from public.error_logs where created_at < now() - interval '30 days';
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'error_logs') then
+    delete from public.error_logs where created_at < now() - interval '30 days';
+  end if;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp;
 
 -- 7. Profile Auto-creation Trigger (SignUp)
 create or replace function public.handle_new_user()
@@ -85,7 +106,8 @@ begin
   );
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -96,40 +118,189 @@ create trigger on_auth_user_created
 create or replace function public.update_territory_geom()
 returns trigger as $$
 declare
-  points_str text;
-  coord_rec json;
-  first_coord json;
+  points_str text := '';
+  coord_rec jsonb;
+  prev_lng numeric := null;
+  prev_lat numeric := null;
+  curr_lng_str text;
+  curr_lat_str text;
+  curr_lng numeric;
+  curr_lat numeric;
+  first_lng numeric := null;
+  first_lat numeric := null;
+  pt_count integer := 0;
+  raw_geom geometry;
 begin
-  if new.coords is null or jsonb_array_length(new.coords) < 3 then
-    new.polygon_geom := null;
+  -- On UPDATE where coords did not change and a fully compliant polygonal geometry already exists, preserve it
+  if TG_OP = 'UPDATE'
+     and new.coords = old.coords
+     and new.polygon_geom is not null
+     and ST_IsValid(new.polygon_geom)
+     and not ST_IsEmpty(new.polygon_geom)
+     and ST_SRID(new.polygon_geom) = 4326
+     and ST_GeometryType(new.polygon_geom) in ('ST_Polygon', 'ST_MultiPolygon')
+     and ST_Area(new.polygon_geom::geography) > 0 then
     return new;
   end if;
 
-  points_str := '';
-  for coord_rec in select jsonb_array_elements(new.coords) loop
-    if points_str <> '' then
-      points_str := points_str || ', ';
-    end if;
-    points_str := points_str || (coord_rec->>1) || ' ' || (coord_rec->>0);
-  end loop;
-
-  first_coord := new.coords->0;
-  if (first_coord->>0) <> (new.coords->-1->>0) or (first_coord->>1) <> (new.coords->-1->>1) then
-    points_str := points_str || ', ' || (first_coord->>1) || ' ' || (first_coord->>0);
+  if new.coords is null
+     or jsonb_typeof(new.coords::jsonb) <> 'array'
+     or jsonb_array_length(new.coords::jsonb) < 3 then
+    raise exception 'Invalid territory coords: must provide a JSON array with at least 3 coordinates.';
   end if;
 
-  new.polygon_geom := ST_GeomFromText('POLYGON((' || points_str || '))', 4326);
+  -- 1. Deduplicate consecutive identical GPS points and validate geographic ranges
+  for coord_rec in select jsonb_array_elements(new.coords::jsonb) loop
+    if jsonb_typeof(coord_rec) <> 'array' or jsonb_array_length(coord_rec) < 2 then
+      raise exception 'Invalid territory coordinate: each entry must be a [latitude, longitude] array.';
+    end if;
 
-  if not ST_IsValid(new.polygon_geom) then
-    new.polygon_geom := ST_MakeValid(new.polygon_geom);
+    curr_lat_str := coord_rec->>0;
+    curr_lng_str := coord_rec->>1;
+
+    if curr_lat_str is null or curr_lng_str is null or curr_lat_str = '' or curr_lng_str = '' then
+      raise exception 'Invalid territory coordinate: latitude and longitude cannot be null or empty.';
+    end if;
+
+    begin
+      curr_lat := curr_lat_str::numeric;
+      curr_lng := curr_lng_str::numeric;
+    exception when others then
+      raise exception 'Invalid territory coordinate: non-numeric latitude (%) or longitude (%).', curr_lat_str, curr_lng_str;
+    end;
+
+    -- Validate geographic bounds
+    if curr_lat < -90.0 or curr_lat > 90.0 then
+      raise exception 'Invalid territory coordinate: latitude % out of bounds [-90, 90].', curr_lat;
+    end if;
+
+    if curr_lng < -180.0 or curr_lng > 180.0 then
+      raise exception 'Invalid territory coordinate: longitude % out of bounds [-180, 180].', curr_lng;
+    end if;
+
+    if prev_lat is null or curr_lat <> prev_lat or curr_lng <> prev_lng then
+      if points_str <> '' then
+        points_str := points_str || ', ';
+      end if;
+      -- PostGIS standard X Y order: Longitude Latitude
+      points_str := points_str || curr_lng::text || ' ' || curr_lat::text;
+      if first_lng is null then
+        first_lng := curr_lng;
+        first_lat := curr_lat;
+      end if;
+      prev_lng := curr_lng;
+      prev_lat := curr_lat;
+      pt_count := pt_count + 1;
+    end if;
+  end loop;
+
+  -- Must have at least 3 distinct vertices to form a polygon
+  if pt_count < 3 then
+    raise exception 'Invalid territory coords: coordinates contain fewer than 3 distinct vertices.';
+  end if;
+
+  -- 2. Ensure closed ring
+  if prev_lng <> first_lng or prev_lat <> first_lat then
+    points_str := points_str || ', ' || first_lng::text || ' ' || first_lat::text;
+  end if;
+
+  -- 3. Construct Geometry safely with ST_MakeValid repair paths
+  begin
+    raw_geom := ST_GeomFromText('POLYGON((' || points_str || '))', 4326);
+  exception when others then
+    raw_geom := null;
+  end;
+
+  -- Ensure invalid or unformed polygons pass through the appropriate ST_MakeValid repair paths
+  -- Note: ST_GeomFromText can successfully construct a geometry that is topologically invalid
+  if raw_geom is null or not ST_IsValid(raw_geom) then
+    begin
+      if raw_geom is not null then
+        raw_geom := ST_MakeValid(raw_geom);
+      end if;
+    exception when others then
+      raw_geom := null;
+    end;
+
+    -- If direct ST_MakeValid was unsuccessful or resulted in empty/non-polygonal geometry,
+    -- fallback to linestring nodal reconstruction
+    if raw_geom is null
+       or not ST_IsValid(raw_geom)
+       or ST_IsEmpty(raw_geom)
+       or ST_GeometryType(raw_geom) not in ('ST_Polygon', 'ST_MultiPolygon', 'ST_GeometryCollection') then
+      begin
+        raw_geom := ST_MakeValid(ST_BuildArea(ST_Node(ST_GeomFromText('LINESTRING(' || points_str || ')', 4326))));
+      exception when others then
+        begin
+          raw_geom := ST_MakeValid(ST_Polygon(ST_GeomFromText('LINESTRING(' || points_str || ')', 4326), 4326));
+        exception when others then
+          raw_geom := null;
+        end;
+      end;
+    end if;
+  end if;
+
+  if raw_geom is not null then
+    -- Ensure SRID is 4326 even if ST_BuildArea or ST_Node dropped it to 0
+    if ST_SRID(raw_geom) = 0 or ST_SRID(raw_geom) is null then
+      raw_geom := ST_SetSRID(raw_geom, 4326);
+    end if;
+
+    if not ST_IsValid(raw_geom) then
+      begin
+        raw_geom := ST_MakeValid(raw_geom);
+      exception when others then
+        null;
+      end;
+    end if;
+
+    -- Extract 2D polygonal components if ST_MakeValid returns a GeometryCollection
+    if ST_GeometryType(raw_geom) = 'ST_GeometryCollection' then
+      raw_geom := ST_CollectionExtract(raw_geom, 3);
+    end if;
+
+    -- Guarantee SRID is preserved after extraction
+    if ST_SRID(raw_geom) = 0 or ST_SRID(raw_geom) is null then
+      raw_geom := ST_SetSRID(raw_geom, 4326);
+    end if;
+
+    -- Accept both Polygon and MultiPolygon without discarding components, requiring valid, non-empty, positive area, and SRID 4326
+    if ST_GeometryType(raw_geom) in ('ST_Polygon', 'ST_MultiPolygon')
+       and not ST_IsEmpty(raw_geom)
+       and ST_IsValid(raw_geom)
+       and ST_SRID(raw_geom) = 4326
+       and ST_Area(raw_geom::geography) > 0 then
+      new.polygon_geom := raw_geom;
+      if (new.area_sqm is null or new.area_sqm <= 0) then
+        begin
+          new.area_sqm := round(ST_Area(raw_geom::geography));
+        exception when others then
+          null;
+        end;
+      end if;
+    else
+      new.polygon_geom := null;
+    end if;
+  else
+    new.polygon_geom := null;
+  end if;
+
+  if new.polygon_geom is null then
+    if raw_geom is not null and ST_GeometryType(raw_geom) not in ('ST_Polygon', 'ST_MultiPolygon') then
+      raise exception 'Unrecoverable territory geometry: coordinates collapsed into non-polygonal geometry (%) during repair. A valid 2D polygon or multipolygon is required.', ST_GeometryType(raw_geom);
+    elsif raw_geom is not null and ST_IsEmpty(raw_geom) then
+      raise exception 'Unrecoverable territory geometry: repair produced an empty geometry.';
+    elsif raw_geom is not null and ST_Area(raw_geom::geography) <= 0 then
+      raise exception 'Unrecoverable territory geometry: repair produced zero geodesic area.';
+    else
+      raise exception 'Failed to generate valid territory geometry: coordinates could not be formed or repaired into a valid, non-empty 2D polygon or multipolygon with positive area (SRID 4326).';
+    end if;
   end if;
 
   return new;
 exception
   when others then
-    raise warning 'Failed to generate polygon geometry: %', SQLERRM;
-    new.polygon_geom := null;
-    return new;
+    raise exception 'Territory geometry generation failed: %', SQLERRM;
 end;
 $$ language plpgsql;
 
@@ -147,20 +318,29 @@ declare
   old_area numeric;
   ratio numeric;
 begin
-  if new.polygon_geom is null then
+  if new.polygon_geom is null or not ST_IsValid(new.polygon_geom) then
     return new;
   end if;
 
   -- Soft-delete overlapping territories (> 50% overlap of the old territory)
+  -- Uses GiST bounding box operator (&&) for index-accelerated candidate filtering
   for old_terr in
     select id, owner_id, area_sqm, polygon_geom
     from public.territories
-    where id <> new.id and is_active = true and polygon_geom is not null and ST_IsValid(polygon_geom)
+    where id <> new.id
+      and is_active = true
+      and polygon_geom is not null
+      and ST_IsValid(polygon_geom)
+      and polygon_geom && new.polygon_geom
   loop
     begin
       if ST_Intersects(new.polygon_geom, old_terr.polygon_geom) then
-        overlap_area := ST_Area(ST_Intersection(new.polygon_geom::geography, old_terr.polygon_geom::geography));
-        old_area := ST_Area(old_terr.polygon_geom::geography);
+        overlap_area := ST_Area(ST_CollectionExtract(ST_Intersection(new.polygon_geom, old_terr.polygon_geom), 3)::geography);
+        old_area := ST_Area(ST_CollectionExtract(old_terr.polygon_geom, 3)::geography);
+
+        if (old_area is null or old_area <= 0) and old_terr.area_sqm > 0 then
+          old_area := old_terr.area_sqm;
+        end if;
 
         if old_area > 0 then
           ratio := overlap_area / old_area;
@@ -174,52 +354,174 @@ begin
     exception
       when others then
         raise warning 'Skipping topology exception for territory %: %', old_terr.id, SQLERRM;
+        -- ARCHITECTURAL TRADE-OFF:
+        -- Skipping candidate topology exceptions allows the new territory claim to commit,
+        -- preventing corrupt historical polygons from blocking gameplay. However, if this candidate
+        -- truly had > 50% overlap, skipping it leaves both territories co-active (incomplete takeover).
+        -- If strict all-or-nothing transactional consistency is preferred, replace with:
+        -- RAISE EXCEPTION 'Takeover calculation failed for candidate territory %: %', old_terr.id, SQLERRM;
     end;
   end loop;
-
 
   -- Soft-delete expired territories on new captures
   update public.territories
   set is_active = false, status = 'expired'
-  where expires_at <= now() and is_active = true;
-
-  -- Prune old logs as part of the database maintenance
-  perform public.cleanup_old_logs();
+  where expires_at is not null and expires_at <= now() and is_active = true;
 
   return new;
 end;
-$ language plpgsql;
+$$ language plpgsql;
 
 drop trigger if exists on_territory_insert_takeover on public.territories;
 create trigger on_territory_insert_takeover
   after insert on public.territories
   for each row execute procedure public.handle_territory_takeovers();
 
--- 10. Create Runs Table for Run History
+-- 10. Create Runs Table for Run History (Production monolithic schema)
 create table if not exists public.runs (
-  id uuid default gen_random_uuid() primary key,
-  user_id uuid references public.profiles(id) on delete cascade,
-  gps_path jsonb not null,
-  distance numeric not null,
-  duration integer not null,
-  pace text not null,
-  speed numeric not null,
-  calories numeric not null,
+  id uuid primary key default gen_random_uuid(),
+  operation_id uuid not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  distance_km numeric not null default 0,
+  duration_seconds integer not null default 0,
+  pace_seconds_per_km numeric null,
+  average_speed_kmh numeric null,
+  calories integer not null default 0,
+  gps_path jsonb not null default '[]'::jsonb,
   start_time timestamp with time zone not null,
   end_time timestamp with time zone not null,
-  summary_statistics jsonb,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  summary_statistics jsonb not null default '{}'::jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  constraint uq_runs_user_operation unique (user_id, operation_id)
 );
 
 -- Enable RLS for runs
 alter table public.runs enable row level security;
 
--- Policies for runs
-drop policy if exists "Users can view their own runs" on public.runs;
-create policy "Users can view their own runs" on public.runs for select using (auth.uid() = user_id);
+-- Permissions & Policies for runs
+revoke all on table public.runs from anon, public;
+revoke truncate, references, trigger on table public.runs from authenticated;
+grant select, insert, update, delete on table public.runs to authenticated;
 
-drop policy if exists "Users can insert their own runs" on public.runs;
-create policy "Users can insert their own runs" on public.runs for insert with check (auth.uid() = user_id);
+-- Dynamically drop all existing policies on public.runs to eliminate any rogue or legacy permissive rules
+do $$
+declare
+  pol record;
+begin
+  for pol in
+    select policyname
+    from pg_policies
+    where schemaname = 'public' and tablename = 'runs'
+  loop
+    execute format('drop policy if exists %I on public.runs', pol.policyname);
+  end loop;
+end $$;
+
+drop policy if exists "runs_select_policy" on public.runs;
+create policy "runs_select_policy"
+  on public.runs
+  for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "runs_insert_policy" on public.runs;
+create policy "runs_insert_policy"
+  on public.runs
+  for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "runs_update_policy" on public.runs;
+create policy "runs_update_policy"
+  on public.runs
+  for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "runs_delete_policy" on public.runs;
+create policy "runs_delete_policy"
+  on public.runs
+  for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
+-- Privacy-Safe Public Runner Metrics (No GPS Path Exposure)
+create or replace view public.runner_activities_public with (security_invoker = false) as
+select
+  r.id,
+  r.operation_id,
+  r.user_id,
+  r.distance_km,
+  r.duration_seconds,
+  r.pace_seconds_per_km,
+  r.average_speed_kmh,
+  r.calories,
+  r.created_at
+from public.runs r
+join public.profiles p on p.id = r.user_id
+where (auth.uid() is not null and auth.uid() = r.user_id)
+   or (
+     coalesce(p.is_profile_public, true) = true
+     and coalesce(p.show_activity, true) = true
+   );
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'postgres') then
+    alter view public.runner_activities_public owner to postgres;
+  end if;
+end $$;
+
+revoke all on public.runner_activities_public from public;
+grant select on public.runner_activities_public to anon, authenticated;
+
+create or replace function public.get_runner_public_stats(target_user_id uuid)
+returns table (
+  total_distance_km numeric,
+  total_runs bigint,
+  longest_run_km numeric,
+  fastest_pace_seconds numeric,
+  average_pace_seconds numeric
+)
+language plpgsql security definer
+set search_path = pg_catalog, public, pg_temp as $$
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = target_user_id
+      and (
+        (auth.uid() is not null and auth.uid() = target_user_id)
+        or (
+          coalesce(is_profile_public, true) = true
+          and coalesce(show_activity, true) = true
+        )
+      )
+  ) then
+    return;
+  end if;
+
+  return query
+  select
+    coalesce(round(sum(r.distance_km)::numeric, 2), 0.0)::numeric,
+    count(*)::bigint,
+    coalesce(round(max(r.distance_km)::numeric, 2), 0.0)::numeric,
+    coalesce(min(r.pace_seconds_per_km) filter (where pace_seconds_per_km > 0), 0)::numeric,
+    coalesce(round(avg(r.pace_seconds_per_km) filter (where pace_seconds_per_km > 0)), 0)::numeric
+  from public.runs r
+  where r.user_id = target_user_id;
+end;
+$$;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'postgres') then
+    alter function public.get_runner_public_stats(uuid) owner to postgres;
+  end if;
+end $$;
+
+revoke execute on function public.get_runner_public_stats(uuid) from public;
+grant execute on function public.get_runner_public_stats(uuid) to anon, authenticated;
 
 
 -- 10. STORAGE SPECIFICATION FOR AVATARS BUCKET

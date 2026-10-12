@@ -16,7 +16,7 @@ import {
   isFirebaseActive, useSupabase, isValidUUID, generateUUID, subscribeToAuth, registerUser, loginUser, loginGuest, logout,
   syncUserStats, subscribeToTerritories, saveNewTerritory, updateTerritory, getLeaderboard, reportError,
   saveCompletedRun, updateUserProfile, fetchClans, createClanInCloud, joinClanInCloud, leaveClanInCloud,
-  sendPhoneOtp, verifyPhoneOtp
+  sendPhoneOtp, verifyPhoneOtp, refreshTerritories
 } from './supabase';
 import { PhotoGalleryModal } from './components/profile/PhotoGalleryModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -246,6 +246,7 @@ export default function App() {
   const [authSuccessMessage, setAuthSuccessMessage] = useState('');
   const [isFinalizingRun, setIsFinalizingRun] = useState(false);
   const isFinalizingRunRef = useRef(false);
+  const savedRunOperationIdRef = useRef(null);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
@@ -383,6 +384,7 @@ export default function App() {
 
   const triggerGlobalRefresh = async () => {
     try {
+      refreshTerritories();
       await loadClans();
     } catch (e) {
       console.error(e);
@@ -1608,6 +1610,7 @@ export default function App() {
 
       console.log('[ANDROID-DIAG] requesting WakeLock');
       requestWakeLock();
+      savedRunOperationIdRef.current = null;
 
       // Start canonical Run Engine session and register GPS watch
       console.log('[ANDROID-DIAG] calling runEngine.startSession()');
@@ -1683,6 +1686,15 @@ export default function App() {
     isFinalizingRunRef.current = true;
     setIsFinalizingRun(true);
 
+    const safetyTimeoutId = setTimeout(() => {
+      if (isFinalizingRunRef.current) {
+        console.warn('[STOP CLAIM] Bounded timeout safety triggered: resetting isFinalizingRun state.');
+        setIsFinalizingRun(false);
+        isFinalizingRunRef.current = false;
+        setToastMessage("Claim timed out. You may retry.");
+      }
+    }, 12000);
+
     try {
       const currentPath = (gpsPathRef.current && gpsPathRef.current.length > 0)
         ? [...gpsPathRef.current]
@@ -1713,6 +1725,7 @@ export default function App() {
       addLog(errMsg);
       setToastMessage(errMsg);
     } finally {
+      clearTimeout(safetyTimeoutId);
       setIsFinalizingRun(false);
       isFinalizingRunRef.current = false;
     }
@@ -1896,8 +1909,8 @@ export default function App() {
       ? `Sector_${Math.floor(100 + Math.random() * 900)}`
       : (SIMULATION_ROUTES[simulationRouteKey]?.name || 'Simulated Sector');
 
-    // CHECKPOINT 2: Run payload created
-    const operationId = generateUUID();
+    // CHECKPOINT 2: Run payload created (Idempotent: preserve operationId across retries)
+    const operationId = savedRunOperationIdRef.current || generateUUID();
     const runSummary = {
       operationId,
       userId: currentUser.uid,
@@ -1918,15 +1931,22 @@ export default function App() {
 
     // CHECKPOINT 3: Save completed run FIRST (Independent of territory result)
     let runRes = null;
-    try {
-      runRes = await saveCompletedRun(runSummary);
-      if (runRes?.cloud === true) {
-        createRunActivity(runSummary, 'run', runSummary.operationId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
+    if (!savedRunOperationIdRef.current) {
+      try {
+        runRes = await saveCompletedRun(runSummary);
+        if (runRes?.cloud === true || runRes?.queued === true) {
+          savedRunOperationIdRef.current = operationId;
+        }
+        if (runRes?.cloud === true) {
+          createRunActivity(runSummary, 'run', runSummary.operationId).catch(e => console.warn('[ACTIVITY LOG ERROR]', e));
+        }
+        console.log('[STOP CLAIM] 3 run saved or queued');
+        addLog(`System: Run history successfully saved.`);
+      } catch (runErr) {
+        console.error('[STOP CLAIM] Run save exception:', runErr);
       }
-      console.log('[STOP CLAIM] 3 run saved or queued');
-      addLog(`System: Run history successfully saved.`);
-    } catch (runErr) {
-      console.error('[STOP CLAIM] Run save exception:', runErr);
+    } else {
+      console.log('[STOP CLAIM] 3 run already saved for this session, preserving existing run record');
     }
 
     // CHECKPOINT 4: Territory payload created
@@ -1959,16 +1979,19 @@ export default function App() {
       });
     } catch (terrErr) {
       console.error('[STOP CLAIM] Territory save exception:', terrErr);
-      territoryRes = { success: true, queued: true, cloud: false, error: terrErr.message };
+      territoryRes = { success: false, queued: false, cloud: false, error: terrErr.message };
     }
 
     if (!territoryRes?.success) {
-      addLog(`System Error: Territory save failed: ${territoryRes?.error || 'Unknown error'}`);
-      setToastMessage("Failed to claim territory. Please try again.");
-      throw new Error(territoryRes?.error || "Failed to save territory to cloud.");
+      const claimErrMsg = territoryRes?.error || "Failed to save territory to cloud.";
+      addLog(`System Error: Territory save failed: ${claimErrMsg}`);
+      setToastMessage(`Failed to claim territory: ${claimErrMsg}`);
+      throw new Error(claimErrMsg);
     }
 
     addLog(`System: Conquest confirmed! Territory '${sectorName}' registered.`);
+    refreshTerritories();
+    savedRunOperationIdRef.current = null;
 
     // CHECKPOINT 6: Reward Stats & UI Finalized
     const coinReward = Math.ceil(areaSqM / 100) + 20;

@@ -45,6 +45,7 @@ import { uploadMedia, createPost } from './services/socialService';
 import * as ClanService from './services/clanService';
 import { ClanManagement } from './components/clan/ClanManagement';
 import { SocialComposerModal } from './components/social/SocialComposerModal';
+import { ProtectAccountModal } from './components/profile/ProtectAccountModal';
 
 // Dynamic Crew/Clan color assignment based on name hash
 const getClanColor = (clanName) => {
@@ -224,7 +225,8 @@ export default function App() {
     authErrorMessage,
     legacyMigrationNeeded,
     signOutCurrentUser,
-    loginGuestUser
+    loginGuestUser,
+    upgradeGuestAccount
   } = useIdentity();
 
   const currentUser = currentProfile;
@@ -363,6 +365,7 @@ export default function App() {
   // Runner HQ Configuration & Subpages States
   const [activeSettingSubpage, setActiveSettingSubpage] = useState(null); // null, 'notifications', 'privacy', 'preferences', 'gps', 'appearance', 'support', 'about', 'account'
   const [editClanName, setEditClanName] = useState('');
+  const [showProtectAccountModal, setShowProtectAccountModal] = useState(false);
 
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -3262,6 +3265,27 @@ export default function App() {
 
                       {activeSettingSubpage === 'account' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          {/* Account Protection Callout for Guest Runners */}
+                          {Boolean(currentUser?.isAnonymous || currentUser?.is_guest || authUser?.is_anonymous) ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '14px', background: 'rgba(252,76,2,0.06)', border: '1px solid #FC4C02', borderRadius: '12px' }}>
+                              <span style={{ fontSize: '11px', fontWeight: '800', color: '#FC4C02', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Account Security: Unprotected Guest</span>
+                              <span style={{ fontSize: '11px', color: 'var(--clash-text-secondary)', lineHeight: '1.4' }}>
+                                Link an email and password to secure runner {currentUser?.displayName || 'Hioo'} and all conquered sectors from browser storage clears.
+                              </span>
+                              <button
+                                onClick={() => setShowProtectAccountModal(true)}
+                                className="clash-btn-primary btn-sm"
+                                style={{ height: '34px', fontSize: '11px', fontWeight: '800', borderRadius: '8px', cursor: 'pointer', textTransform: 'uppercase' }}
+                              >
+                                Protect Account (Link Email)
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '10px', fontSize: '11px', color: '#D1D5DB' }}>
+                              <span style={{ color: '#10B981', fontWeight: '800' }}>✓ Protected Account:</span>
+                              <span>{currentUser?.email || authUser?.email || 'Email Linked'}</span>
+                            </div>
+                          )}
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                             <label style={{ fontSize: '11px', color: 'var(--clash-text-secondary)' }}>Display Name</label>
                             <input
@@ -5151,6 +5175,8 @@ export default function App() {
             <div style={{ display: activeTab === 'profile' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }} className="fade-in">
               <ProfileScreen
                 currentProfile={currentUser}
+                authUser={authUser}
+                onUpgradeAccount={upgradeGuestAccount}
                 onUpdateProfile={(updated) => {
                   const updatedProfile = {
                     ...currentUser,
@@ -5678,6 +5704,16 @@ export default function App() {
             <PublicProfileScreen
               targetUserId={viewingPublicProfileId}
               onClose={() => setViewingPublicProfileId(null)}
+            />
+          )}
+
+          {/* Protect Account Modal Overlay */}
+          {showProtectAccountModal && (
+            <ProtectAccountModal
+              isOpen={showProtectAccountModal}
+              onClose={() => setShowProtectAccountModal(false)}
+              onUpgrade={upgradeGuestAccount}
+              currentDisplayName={currentUser?.displayName}
             />
           )}
         </div>

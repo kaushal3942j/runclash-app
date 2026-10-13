@@ -140,6 +140,151 @@ export const createAnonymousSession = async () => {
   return await pendingAnonSessionPromise;
 };
 
+export const upgradeAnonymousAccount = async (email, password) => {
+  if (!useSupabase) {
+    return { success: false, data: null, error: 'Supabase client disabled.', message: 'Supabase client disabled.' };
+  }
+
+  // 1. Validate inputs
+  const trimmedEmail = typeof email === 'string' ? email.trim() : '';
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!trimmedEmail || !emailRegex.test(trimmedEmail)) {
+    return {
+      success: false,
+      data: null,
+      error: 'invalid_email',
+      message: 'Please enter a valid email address (e.g. runner@domain.com).'
+    };
+  }
+
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    return {
+      success: false,
+      data: null,
+      error: 'weak_password',
+      message: 'Password must be at least 6 characters long.'
+    };
+  }
+
+  // 2. Verify current active session and anonymous status
+  try {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !sessionData?.session?.user) {
+      return {
+        success: false,
+        data: null,
+        error: 'no_session',
+        message: 'No active session found. Please refresh or reopen the app.'
+      };
+    }
+
+    const currentUser = sessionData.session.user;
+
+    // Check if user is actually anonymous
+    if (!currentUser.is_anonymous) {
+      return {
+        success: false,
+        data: null,
+        error: 'already_permanent',
+        message: 'This account is already protected with a permanent sign-in method.'
+      };
+    }
+
+    // Determine environment-aware redirect URL for email confirmation
+    const getRedirectUrl = () => {
+      if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.PROD) {
+        return 'https://runclash.vercel.app/';
+      }
+      if (typeof window !== 'undefined' && window.location && window.location.origin) {
+        return window.location.origin + '/';
+      }
+      return 'http://localhost:3000/';
+    };
+
+    const redirectUrl = getRedirectUrl();
+
+    // 3. Upgrade existing anonymous user in-place (DO NOT call signUp())
+    const { data: updateData, error: updateError } = await supabase.auth.updateUser(
+      {
+        email: trimmedEmail,
+        password: password
+      },
+      {
+        emailRedirectTo: redirectUrl
+      }
+    );
+
+    if (updateError) {
+      const errMsg = updateError.message || '';
+      const isDuplicate = updateError.status === 422 ||
+        errMsg.toLowerCase().includes('already registered') ||
+        errMsg.toLowerCase().includes('already in use') ||
+        errMsg.toLowerCase().includes('duplicate') ||
+        errMsg.toLowerCase().includes('exists');
+
+      if (isDuplicate) {
+        return {
+          success: false,
+          data: null,
+          error: 'email_taken',
+          message: 'This email is already associated with another account. Please use a different email address.'
+        };
+      }
+
+      return {
+        success: false,
+        data: null,
+        error: updateError.code || 'upgrade_failed',
+        message: updateError.message || 'Failed to update account credentials.'
+      };
+    }
+
+    const updatedUser = updateData?.user || currentUser;
+
+    // 4. Update profile is_guest flag in public.profiles while preserving user id
+    try {
+      await supabase
+        .from('profiles')
+        .update({
+          is_guest: false,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', currentUser.id);
+    } catch (profileSyncErr) {
+      console.warn('[AUTH] Warning updating profile guest status:', profileSyncErr?.message || profileSyncErr);
+    }
+
+    // 5. Determine whether email confirmation is required
+    const requiresEmailConfirmation = Boolean(
+      updatedUser.new_email ||
+      !updatedUser.email_confirmed_at
+    );
+
+    const message = requiresEmailConfirmation
+      ? `Confirmation email sent to ${trimmedEmail}. Please check your inbox and verify the link to finish linking your account.`
+      : `Account successfully protected! Your progress is now linked to ${trimmedEmail}.`;
+
+    return {
+      success: true,
+      data: updateData?.session || sessionData.session,
+      user: updatedUser,
+      requiresEmailConfirmation,
+      message,
+      error: null
+    };
+  } catch (err) {
+    const isNetworkError = err instanceof TypeError || (err.message && err.message.toLowerCase().includes('network')) || (err.message && err.message.toLowerCase().includes('fetch'));
+    return {
+      success: false,
+      data: null,
+      error: isNetworkError ? 'network_error' : 'unexpected_error',
+      message: isNetworkError
+        ? 'Network error. Please check your internet connection and try again.'
+        : (err.message || 'An unexpected error occurred while linking your account.')
+    };
+  }
+};
+
 export const recoverSession = async () => {
   return await getCurrentSession();
 };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, useSupabase } from '../supabase';
-import { getCurrentSession, createAnonymousSession } from '../services/authService';
+import { getCurrentSession, createAnonymousSession, upgradeAnonymousAccount } from '../services/authService';
 import { ensureProfile, isDefaultName } from '../services/profileService';
 import { updateLastActive } from '../services/friendService';
 import { syncQueueService } from '../services/syncQueueService';
@@ -177,6 +177,9 @@ export const useIdentity = () => {
           is_profile_public: profile.is_profile_public !== false,
           show_activity: profile.show_activity !== false,
           allow_friend_requests: profile.allow_friend_requests !== false,
+          isAnonymous: Boolean(user?.is_anonymous ?? profile.is_guest ?? cached?.isAnonymous),
+          is_guest: Boolean(user?.is_anonymous ?? profile.is_guest ?? cached?.is_guest),
+          email: user?.email || user?.new_email || profile.email || cached?.email || null,
         };
 
         setCurrentProfile(normalizedProfile);
@@ -381,6 +384,31 @@ export const useIdentity = () => {
     };
   }, [isLoadingIdentity]);
 
+  // Upgrade Guest Account to Permanent Sign-in Method
+  const upgradeGuestAccount = useCallback(async (email, password) => {
+    const res = await upgradeAnonymousAccount(email, password);
+    if (res.success && res.user) {
+      const updatedUser = res.user;
+      setAuthUser(updatedUser);
+      setCurrentProfile(prev => {
+        if (!prev) return prev;
+        const updated = {
+          ...prev,
+          email: updatedUser.email || updatedUser.new_email || (typeof email === 'string' ? email.trim() : null),
+          isAnonymous: Boolean(updatedUser.is_anonymous),
+          is_guest: false
+        };
+        try {
+          localStorage.setItem('clash_user', JSON.stringify(updated));
+        } catch (e) {
+          console.warn('[IDENTITY] Cache sync warning on upgrade:', e);
+        }
+        return updated;
+      });
+    }
+    return res;
+  }, []);
+
   return {
     isLoadingIdentity,
     authUser,
@@ -391,6 +419,7 @@ export const useIdentity = () => {
     legacyMigrationNeeded,
     signOutCurrentUser,
     loginGuestUser,
+    upgradeGuestAccount,
     refreshIdentity: () => {
       explicitLogoutRef.current = false;
       isInitializingRef.current = false;

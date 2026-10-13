@@ -30,7 +30,7 @@ import { PublicProfileScreen } from './screens/PublicProfileScreen';
 import { createRunActivity, createTerritoryActivity } from './services/activityService';
 import { RankBadge } from './components/profile/RankBadge';
 import { runEngine } from './run-engine/runEngine';
-import { validateTerritoryCapture } from './territory-engine/geometryEngine.js';
+import { validateTerritoryCapture, isValidPolygonCoords } from './territory-engine/geometryEngine.js';
 import { TERRITORY_ENGINE_CONFIG } from './territory-engine/territoryEngineConfig.js';
 import { rechargeSector, DECAY_DURATION_HOURS } from './territory-engine/decayEngine.js';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
@@ -1306,8 +1306,14 @@ export default function App() {
 
     // Redraw list based on active mapMode (solo vs clan)
     territories.forEach(terr => {
+      if (!terr) return;
+
       // 1. Render Official Landmark (Always Visible)
       if (terr.isLandmark) {
+        if (!Array.isArray(terr.coords) || terr.coords.length === 0 || !Array.isArray(terr.coords[0])) return;
+        const [lat, lng] = terr.coords[0];
+        if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
         if (!territoryPolygonsRef.current[terr.id]) {
           const starIcon = L.divIcon({
             className: 'custom-landmark-icon',
@@ -1316,7 +1322,7 @@ export default function App() {
             </div>`,
             iconSize: [28, 28]
           });
-          const marker = L.marker(terr.coords[0], { icon: starIcon }).addTo(mapInstanceRef.current);
+          const marker = L.marker([lat, lng], { icon: starIcon }).addTo(mapInstanceRef.current);
           marker.bindTooltip(terr.name, { permanent: false, direction: 'top', className: 'clash-tooltip' });
   
           marker.on('click', (e) => {
@@ -1328,13 +1334,23 @@ export default function App() {
           territoryPolygonsRef.current[terr.id] = marker;
         } else {
           const marker = territoryPolygonsRef.current[terr.id];
-          marker.setLatLng(terr.coords[0]);
+          marker.setLatLng([lat, lng]);
           marker.setTooltipContent(terr.name);
         }
         return;
       }
 
-      // 2. Render Player-Created Territories per mapMode
+      // 2. Validate coordinate geometry: must contain at least 3 usable coordinate pairs
+      if (!isValidPolygonCoords(terr.coords)) {
+        console.warn(`[MAP] Skipping territory "${terr.name || terr.id}" due to malformed coordinate geometry.`);
+        if (territoryPolygonsRef.current[terr.id]) {
+          mapInstanceRef.current.removeLayer(territoryPolygonsRef.current[terr.id]);
+          delete territoryPolygonsRef.current[terr.id];
+        }
+        return;
+      }
+
+      // 3. Render Player-Created Territories per mapMode
       const isOwner = currentUser && terr.ownerId === currentUser.uid;
       const isUserClan = currentUser?.clan && currentUser.clan !== 'None' && terr.clan === currentUser.clan;
       const isEnemyClan = terr.clan && terr.clan !== 'None' && (!currentUser?.clan || terr.clan !== currentUser.clan);
@@ -2318,22 +2334,26 @@ export default function App() {
     const terr = territories.find(t => t.id === territoryId);
     if (!terr) return;
 
-    setInventory(prev => ({ ...prev, shields: prev.shields - 1 }));
-    
-    // Instead of raw +24 decayHours, we use the new decayEngine to recharge health to 100%
-    const rechargedTerr = rechargeSector(terr, Date.now());
-
     if (!currentUser.is_verified && !currentUser.isAnonymous) {
       alert("Phone verification required to shield territories.");
       return;
     }
 
-    await updateTerritory(territoryId, { 
+    // Instead of raw +24 decayHours, we use the new decayEngine to recharge health to 100%
+    const rechargedTerr = rechargeSector(terr, Date.now());
+
+    const result = await updateTerritory(territoryId, { 
       last_recharged_at: rechargedTerr.last_recharged_at,
       expires_at: rechargedTerr.expires_at,
       decay_hours: DECAY_DURATION_HOURS // For legacy compat if needed
     });
-    
+
+    if (result && result.success === false) {
+      alert(`Failed to shield territory: ${result.error || 'Database update failed'}`);
+      return;
+    }
+
+    setInventory(prev => ({ ...prev, shields: prev.shields - 1 }));
     addLog(`System: Recharged '${terr.name}' to full health with Shield.`);
   };
 

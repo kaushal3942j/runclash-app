@@ -683,23 +683,54 @@ export const subscribeToTerritories = (onUpdate) => {
         list = data
           .filter(t => t.is_active !== false)
           .map(t => {
-          // Calculate remaining decay hours dynamically based on expires_at
-          const expires = t.expires_at ? new Date(t.expires_at) : new Date(new Date(t.created_at).getTime() + 72 * 3600000);
+          // Authentic timestamp extraction with valid historical fallbacks (do not invent timestamps)
+          const lastRechargedAt = t.last_recharged_at || t.claimed_at || t.created_at || null;
+          const createdAt = t.created_at || t.claimed_at || null;
+          const expiresAt = t.expires_at || null;
+          const decayHoursSetting = t.decay_hours !== undefined && t.decay_hours !== null ? t.decay_hours : (t.max_decay_hours || 72);
+
+          // Calculate remaining decay hours dynamically based on expires_at or recharge/creation timestamp
           const now = new Date();
-          const diffMs = expires - now;
-          const decayHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
+          let remainingDecayHours = decayHoursSetting;
+          if (expiresAt && !isNaN(new Date(expiresAt).getTime())) {
+            const expiresDate = new Date(expiresAt);
+            const diffMs = expiresDate.getTime() - now.getTime();
+            remainingDecayHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
+          } else if (lastRechargedAt && !isNaN(new Date(lastRechargedAt).getTime())) {
+            const rechargeDate = new Date(lastRechargedAt);
+            const totalSpanMs = (decayHoursSetting || 72) * 3600000;
+            const diffMs = (rechargeDate.getTime() + totalSpanMs) - now.getTime();
+            remainingDecayHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
+          }
 
           return {
             id: t.id,
             name: t.name,
             ownerId: t.owner_id,
+            owner_id: t.owner_id,
             ownerName: t.owner_name || 'Unclaimed',
+            owner_name: t.owner_name || 'Unclaimed',
             clan: t.clan_name,
-            area: t.area_sqm + ' m²',
-            decayHours: decayHours,
+            clan_name: t.clan_name,
+            area: t.area_sqm ? `${t.area_sqm} m²` : (t.area || '0 m²'),
+            area_sqm: t.area_sqm || 0,
+            decay_hours: decayHoursSetting,
+            decayHours: remainingDecayHours,
             maxDecayHours: t.max_decay_hours || 72,
-            rate: t.rate,
-            coords: t.coords
+            max_decay_hours: t.max_decay_hours || 72,
+            last_recharged_at: lastRechargedAt,
+            lastRechargedAt: lastRechargedAt,
+            created_at: createdAt,
+            createdAt: createdAt,
+            expires_at: expiresAt,
+            expiresAt: expiresAt,
+            rate: t.rate || 1.0,
+            coords: t.coords,
+            is_active: t.is_active !== false,
+            status: t.status || (t.is_active === false ? 'expired' : 'active'),
+            color: t.color || '#FC4C02',
+            points: t.points || 0,
+            conquered_by_id: t.conquered_by_id || null
           };
         });
       }
@@ -711,7 +742,19 @@ export const subscribeToTerritories = (onUpdate) => {
           const locals = JSON.parse(localData);
           locals.forEach(loc => {
             if (loc && loc.is_active !== false && !list.some(t => t.id === loc.id)) {
-              list.push(loc);
+              const lastRechargedAt = loc.last_recharged_at || loc.lastRechargedAt || loc.claimed_at || loc.created_at || loc.createdAt || null;
+              const createdAt = loc.created_at || loc.createdAt || loc.claimed_at || null;
+              const expiresAt = loc.expires_at || loc.expiresAt || null;
+              list.push({
+                ...loc,
+                last_recharged_at: lastRechargedAt,
+                lastRechargedAt: lastRechargedAt,
+                created_at: createdAt,
+                createdAt: createdAt,
+                expires_at: expiresAt,
+                expiresAt: expiresAt,
+                decay_hours: loc.decay_hours !== undefined ? loc.decay_hours : (loc.decayHours || 72)
+              });
             }
           });
         }
@@ -1097,38 +1140,123 @@ export const saveNewTerritory = async (territory) => {
   };
 };
 
-export const updateTerritory = async (id, updates) => {
-  if (useSupabase) {
-    // Map properties
-    const mapped = {};
-    if (updates.ownerId !== undefined) mapped.owner_id = updates.ownerId;
-    if (updates.ownerName !== undefined) mapped.owner_name = updates.ownerName;
-    if (updates.clan !== undefined) mapped.clan_name = updates.clan;
+export const updateTerritory = async (id, updates = {}) => {
+  if (!id) {
+    return { success: false, data: null, error: 'Territory ID is required' };
+  }
 
-    if (updates.decayHours !== undefined) {
-      mapped.decay_hours = updates.decayHours;
-      // Calculate new expires_at based on updates.decayHours
+  // Map properties supporting both snake_case and camelCase
+  const mapped = {};
+
+  const ownerIdVal = updates.owner_id !== undefined ? updates.owner_id : updates.ownerId;
+  if (ownerIdVal !== undefined) mapped.owner_id = ownerIdVal;
+
+  const ownerNameVal = updates.owner_name !== undefined ? updates.owner_name : updates.ownerName;
+  if (ownerNameVal !== undefined) mapped.owner_name = ownerNameVal;
+
+  const clanVal = updates.clan_name !== undefined ? updates.clan_name : (updates.clan !== undefined ? updates.clan : undefined);
+  if (clanVal !== undefined) mapped.clan_name = clanVal;
+
+  if (updates.name !== undefined) mapped.name = updates.name;
+  if (updates.color !== undefined) mapped.color = updates.color;
+  if (updates.is_active !== undefined) mapped.is_active = updates.is_active;
+  if (updates.status !== undefined) mapped.status = updates.status;
+
+  // Handle decay_hours / decayHours (CRITICAL: numeric 0 is valid and must not be treated as missing)
+  const decayHoursVal = updates.decay_hours !== undefined ? updates.decay_hours : updates.decayHours;
+  if (decayHoursVal !== undefined && decayHoursVal !== null) {
+    const num = Number(decayHoursVal);
+    if (!Number.isNaN(num)) {
+      mapped.decay_hours = num;
+    }
+  }
+
+  // Handle expires_at / expiresAt
+  const expiresAtVal = updates.expires_at !== undefined ? updates.expires_at : updates.expiresAt;
+  if (expiresAtVal !== undefined && expiresAtVal !== null) {
+    mapped.expires_at = typeof expiresAtVal === 'number'
+      ? new Date(expiresAtVal).toISOString()
+      : (expiresAtVal instanceof Date ? expiresAtVal.toISOString() : expiresAtVal);
+  } else if (decayHoursVal !== undefined && decayHoursVal !== null && mapped.expires_at === undefined) {
+    // Legacy fallback: calculate new expires_at if only decayHours/decay_hours was provided without expires_at
+    const num = Number(decayHoursVal);
+    if (!Number.isNaN(num)) {
       const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + updates.decayHours);
+      expiresAt.setHours(expiresAt.getHours() + num);
       mapped.expires_at = expiresAt.toISOString();
     }
+  }
 
-    const { error } = await supabase
+  // Handle last_recharged_at / lastRechargedAt
+  const lastRechargedAtVal = updates.last_recharged_at !== undefined ? updates.last_recharged_at : updates.lastRechargedAt;
+  if (lastRechargedAtVal !== undefined && lastRechargedAtVal !== null) {
+    mapped.last_recharged_at = typeof lastRechargedAtVal === 'number'
+      ? new Date(lastRechargedAtVal).toISOString()
+      : (lastRechargedAtVal instanceof Date ? lastRechargedAtVal.toISOString() : lastRechargedAtVal);
+  }
+
+  if (useSupabase) {
+    const { data, error } = await supabase
       .from('territories')
       .update(mapped)
-      .eq('id', id);
+      .eq('id', id)
+      .select();
 
     console.log(`[SUPABASE]\noperation: UPDATE\ntable: territories\nuser: system\nstatus: ${error ? `error: ${error.message}` : 'success'}`);
+
+    if (error) {
+      console.error('[SUPABASE] Failed to update territory:', error);
+      return {
+        success: false,
+        data: null,
+        error: error.message || String(error)
+      };
+    }
+
+    // Update local cache
+    try {
+      const localData = localStorage.getItem('clash_territories');
+      if (localData) {
+        const list = JSON.parse(localData);
+        const updated = list.map(t => {
+          if (t.id === id) {
+            return { ...t, ...updates, ...mapped };
+          }
+          return t;
+        });
+        localStorage.setItem('clash_territories', JSON.stringify(updated));
+        triggerListeners(updated);
+      }
+    } catch (e) {
+      console.warn("Failed to update local territories cache on updateTerritory:", e);
+    }
+
+    if (activeLoadTerritories) {
+      activeLoadTerritories();
+    }
+
+    return {
+      success: true,
+      data: (data && data.length > 0) ? data[0] : { id, ...mapped },
+      error: null
+    };
   } else {
     const list = getMockTerritories();
+    let updatedItem = null;
     const updated = list.map(t => {
       if (t.id === id) {
-        return { ...t, ...updates };
+        updatedItem = { ...t, ...updates, ...mapped };
+        return updatedItem;
       }
       return t;
     });
     localStorage.setItem('clash_territories', JSON.stringify(updated));
     triggerListeners(updated);
+    return {
+      success: true,
+      data: updatedItem || { id, ...updates, ...mapped },
+      error: null
+    };
   }
 };
 

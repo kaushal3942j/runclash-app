@@ -193,3 +193,37 @@ export function validateTerritoryCapture(path, config = TERRITORY_ENGINE_CONFIG)
   result.valid = true;
   return result;
 }
+
+/**
+ * Validates that coordinate data represents usable polygon geometry for map rendering.
+ * Requires an array containing at least 3 usable, finite coordinate points [lat, lng].
+ * Supports both standard flat coordinate rings and nested MultiPolygon/hole rings.
+ * @param {any} coords
+ * @returns {boolean}
+ */
+export function isValidPolygonCoords(coords) {
+  if (!Array.isArray(coords)) return false;
+
+  // Handle nested ring structure (e.g. MultiPolygon or polygon with holes: [[[lat, lng], ...]])
+  if (coords.length > 0 && Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
+    const ring = coords[0];
+    if (ring.length < 3) return false;
+    let validCount = 0;
+    for (const pt of ring) {
+      if (Array.isArray(pt) && pt.length >= 2 && typeof pt[0] === 'number' && Number.isFinite(pt[0]) && typeof pt[1] === 'number' && Number.isFinite(pt[1])) {
+        validCount++;
+      }
+    }
+    return validCount >= 3;
+  }
+
+  // Standard flat polygon coordinates: [[lat, lng], [lat, lng], [lat, lng], ...]
+  if (coords.length < 3) return false;
+  let validCount = 0;
+  for (const pt of coords) {
+    if (Array.isArray(pt) && pt.length >= 2 && typeof pt[0] === 'number' && Number.isFinite(pt[0]) && typeof pt[1] === 'number' && Number.isFinite(pt[1])) {
+      validCount++;
+    }
+  }
+  return validCount >= 3;
+}

@@ -131,6 +131,20 @@ export function checkPathSelfIntersection(path) {
 }
 
 /**
+ * Validates that a single coordinate is a valid, finite [latitude, longitude] pair.
+ * Latitude must be in [-90, 90], Longitude must be in [-180, 180].
+ * @param {any} coord
+ * @returns {boolean}
+ */
+export function isValidCoordinate(coord) {
+  if (!Array.isArray(coord) || coord.length < 2) return false;
+  const lat = coord[0];
+  const lng = coord[1];
+  return typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+         typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
+}
+
+/**
  * Master validation for territory capture.
  * @param {Array<[number, number]>} path
  * @param {Object} config
@@ -150,6 +164,14 @@ export function validateTerritoryCapture(path, config = TERRITORY_ENGINE_CONFIG)
   if (!path || path.length < config.MIN_LOOP_POINTS) {
     result.reason = 'INSUFFICIENT_POINTS';
     return result;
+  }
+
+  // Validate every coordinate point's bounds and types
+  for (const pt of path) {
+    if (!isValidCoordinate(pt)) {
+      result.reason = 'INVALID_COORDINATES';
+      return result;
+    }
   }
 
   // Calculate total path distance
@@ -208,22 +230,20 @@ export function isValidPolygonCoords(coords) {
   if (coords.length > 0 && Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
     const ring = coords[0];
     if (ring.length < 3) return false;
-    let validCount = 0;
     for (const pt of ring) {
-      if (Array.isArray(pt) && pt.length >= 2 && typeof pt[0] === 'number' && Number.isFinite(pt[0]) && typeof pt[1] === 'number' && Number.isFinite(pt[1])) {
-        validCount++;
+      if (!isValidCoordinate(pt)) {
+        return false;
       }
     }
-    return validCount >= 3;
+    return true;
   }
 
   // Standard flat polygon coordinates: [[lat, lng], [lat, lng], [lat, lng], ...]
   if (coords.length < 3) return false;
-  let validCount = 0;
   for (const pt of coords) {
-    if (Array.isArray(pt) && pt.length >= 2 && typeof pt[0] === 'number' && Number.isFinite(pt[0]) && typeof pt[1] === 'number' && Number.isFinite(pt[1])) {
-      validCount++;
+    if (!isValidCoordinate(pt)) {
+      return false;
     }
   }
-  return validCount >= 3;
+  return true;
 }

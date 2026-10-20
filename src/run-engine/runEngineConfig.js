@@ -5,8 +5,9 @@
  */
 export const RUN_ENGINE_CONFIG = {
   // GPS Accuracy Thresholds (in meters)
-  GPS_ACCURACY_THRESHOLD: 25,       // Max accuracy allowed for official distance fix
-  GPS_STATIONARY_ACCURACY: 25,      // Max accuracy allowed for stationary classification
+  GPS_ACCURACY_THRESHOLD: 20,       // Max accuracy allowed for official distance fix (configurable 20m)
+  GPS_ACQUISITION_ACCURACY: 20,     // Max accuracy allowed for initial lock / acquiring baseline (20m)
+  GPS_STATIONARY_ACCURACY: 20,      // Max accuracy allowed for stationary classification (20m)
 
   // Waiting State Thresholds
   WAITING_BUFFER_WINDOW_SEC: 12,    // 12-second rolling window for waiting motion classification
@@ -16,11 +17,13 @@ export const RUN_ENGINE_CONFIG = {
   WAITING_MIN_EFFICIENCY: 0.40,     // Direction efficiency ratio (net / path)
   WAITING_MIN_SPEED_KMH: 0.8,       // Min calculated speed (km/h) for slow walking
   WAITING_FALLBACK_DISPLACEMENT: 10.0, // Absolute displacement fallback for fast start
+  WAITING_MAX_INSTANT_JUMP_METERS: 25.0, // Max instant displacement from baseline without progressive points
+  WAITING_MAX_JUMP_SPEED_KMH: 30.0, // Max plausible speed before treating displacement as a jump/reacquisition
 
   // Tracking State Motion Classifier Thresholds
   TRACKING_WINDOW_SEC: 8,           // 8-second rolling active motion window
   TRACKING_MIN_STEP_METERS: 2.0,    // Min step meters between fixes to register distance
-  TRACKING_MAX_STEP_METERS: 60.0,   // Max plausible step distance per fix (teleport filter)
+  TRACKING_MAX_STEP_METERS: 100.0,  // Upper bound step distance per fix (caps long GPS outage jumps)
   TRACKING_MAX_SPEED_KMH: 30.0,     // Max plausible human running speed (speed spike filter)
 
   // Motion Classifier Evidence Thresholds

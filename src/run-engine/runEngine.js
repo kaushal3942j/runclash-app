@@ -116,6 +116,7 @@ export class RunEngine {
         this.activeMovementWindow = [];
         this.pausedCandidateWindow = [];
         this.stationarySince = null;
+        this.lastAcceptedFixTime = timestamp;
         this.metrics.assertInvariants('waiting');
         break;
 
@@ -217,10 +218,20 @@ export class RunEngine {
     console.log('[GPS WATCH REGISTERED]');
     this.watchId = geolocationProvider.watchPosition(
       (pos) => {
+        if (!pos || !pos.coords) {
+          console.warn('[GPS WATCH: EMPTY POSITION]');
+          return;
+        }
+
+        const rawAcc = pos.coords.accuracy;
+        const verifiedAccuracy = (typeof rawAcc === 'number' && Number.isFinite(rawAcc) && rawAcc > 0)
+          ? rawAcc
+          : null;
+
         this.handleRawGpsFix({
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy || 15,
+          accuracy: verifiedAccuracy,
           speed: pos.coords.speed,
           heading: pos.coords.heading,
           timestamp: pos.timestamp || Date.now()
@@ -231,7 +242,7 @@ export class RunEngine {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 5000
+        maximumAge: 0
       }
     );
   }
@@ -251,10 +262,34 @@ export class RunEngine {
    * Processes each GPS fix strictly according to the canonical state.
    */
   handleRawGpsFix(fix) {
-    const fixTime = fix.timestamp || Date.now();
-    const wLat = fix.latitude;
-    const wLng = fix.longitude;
-    const wAccuracy = fix.accuracy || 15;
+    if (!fix || typeof fix !== 'object') {
+      console.warn('[GPS FIX REJECTED: INVALID OBJECT]', fix);
+      return;
+    }
+
+    const fixTime = Number(fix.timestamp) || Date.now();
+    const wLat = Number(fix.latitude);
+    const wLng = Number(fix.longitude);
+
+    // Coordinate integrity: strictly finite numbers in valid geographic range [-90, 90] and [-180, 180]
+    if (!Number.isFinite(wLat) || !Number.isFinite(wLng) || wLat < -90 || wLat > 90 || wLng < -180 || wLng > 180) {
+      console.warn('[GPS FIX REJECTED: OUT OF BOUNDS COORDINATES]', { wLat, wLng });
+      this.metrics.rejectedFixesCount++;
+      this.notifyListeners('FIX_PROCESSED', { decision: 'INVALID_COORDS_REJECTED', lat: wLat, lng: wLng });
+      return;
+    }
+
+    // Accuracy validation: MUST be a finite, strictly positive number (never substitute fabricated 15m)
+    const rawAccuracy = fix.accuracy;
+    const isValidAccuracy = typeof rawAccuracy === 'number' && Number.isFinite(rawAccuracy) && rawAccuracy > 0;
+    if (!isValidAccuracy) {
+      console.warn('[GPS FIX REJECTED: MISSING OR NON-POSITIVE ACCURACY]', { rawAccuracy });
+      this.metrics.rejectedFixesCount++;
+      this.notifyListeners('FIX_PROCESSED', { decision: 'INVALID_ACCURACY_REJECTED', rawAccuracy });
+      return;
+    }
+
+    const wAccuracy = rawAccuracy;
     const newPoint = [wLat, wLng];
 
     // Trace buffer recording (PART 1)
@@ -297,10 +332,14 @@ export class RunEngine {
    * STATE HANDLER: ACQUIRING
    */
   _handleAcquiringFix(fix, newPoint, wAccuracy, fixTime) {
-    if (wAccuracy <= 40) {
-      this.waitingBaseline = { lat: newPoint[0], lng: newPoint[1], accuracy: wAccuracy };
+    if (wAccuracy <= RUN_ENGINE_CONFIG.GPS_ACQUISITION_ACCURACY) {
+      this.waitingBaseline = { lat: newPoint[0], lng: newPoint[1], accuracy: wAccuracy, timestamp: fixTime };
       this.lastPoint = newPoint;
+      this.lastAcceptedFixTime = fixTime;
       this.transitionTo('waiting', 'Initial usable GPS fix acquired', fixTime);
+    } else {
+      console.warn('[GPS ACQUIRING REJECTED: ACCURACY TOO POOR]', { wAccuracy, threshold: RUN_ENGINE_CONFIG.GPS_ACQUISITION_ACCURACY });
+      this.notifyListeners('FIX_PROCESSED', { decision: 'ACQUIRING_POOR_ACCURACY_REJECTED', accuracy: wAccuracy });
     }
   }
 
@@ -309,31 +348,93 @@ export class RunEngine {
    * Strictly enforces: distance = 0, duration = 0, speed = 0, pace = '--:--'.
    */
   _handleWaitingFix(fix, newPoint, wAccuracy, fixTime) {
-    // Use 40m here to match the _handleAcquiringFix threshold.
-    // If we used GPS_ACCURACY_THRESHOLD (25m), we could acquire at 35m and then instantly reject all fixes in waiting.
-    if (wAccuracy > 40) {
-      console.warn('[GPS WAITING REJECTED]', { wAccuracy, fixTime });
-      return; // Reject poor accuracy fixes to keep the baseline and buffer clean
+    if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+      console.warn('[GPS WAITING REJECTED: ACCURACY TOO POOR]', { wAccuracy, threshold: RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD });
+      this.notifyListeners('FIX_PROCESSED', { decision: 'WAITING_POOR_ACCURACY_REJECTED', accuracy: wAccuracy });
+      return;
+    }
+
+    const currentFixTime = (typeof fixTime === 'number' && Number.isFinite(fixTime) && fixTime > 0)
+      ? fixTime
+      : Date.now();
+
+    if (!this.waitingBaseline) {
+      this.waitingBaseline = { lat: newPoint[0], lng: newPoint[1], accuracy: wAccuracy, timestamp: currentFixTime };
+      this.lastPoint = newPoint;
+      this.lastAcceptedFixTime = currentFixTime;
+      return;
+    }
+
+    const prevPoint = this.lastPoint || [this.waitingBaseline.lat, this.waitingBaseline.lng];
+    const prevTimestamp = (typeof this.lastAcceptedFixTime === 'number' && Number.isFinite(this.lastAcceptedFixTime) && this.lastAcceptedFixTime > 0)
+      ? this.lastAcceptedFixTime
+      : (this.waitingBaseline && typeof this.waitingBaseline.timestamp === 'number' && Number.isFinite(this.waitingBaseline.timestamp) && this.waitingBaseline.timestamp > 0)
+        ? this.waitingBaseline.timestamp
+        : null;
+
+    // Out-of-order fix rejection: drop stale fixes delivered out of sequence
+    if (prevTimestamp !== null && currentFixTime < prevTimestamp) {
+      console.warn('[GPS WAITING REJECTED: OUT OF ORDER FIX]', { currentFixTime, prevTimestamp });
+      this.metrics.rejectedFixesCount++;
+      this.notifyListeners('FIX_PROCESSED', { decision: 'WAITING_OUT_OF_ORDER_REJECTED', currentFixTime, prevTimestamp });
+      return;
+    }
+
+    // Safe elapsed time calculation between previous accepted fix and current fix
+    const rawDtSeconds = prevTimestamp !== null ? (currentFixTime - prevTimestamp) / 1000 : 1.0;
+    const dtSeconds = Math.max(0.5, rawDtSeconds);
+
+    const distFromPrev = getDistanceInMeters(prevPoint[0], prevPoint[1], newPoint[0], newPoint[1]);
+    const distFromBaseline = getDistanceInMeters(this.waitingBaseline.lat, this.waitingBaseline.lng, newPoint[0], newPoint[1]);
+    const jumpSpeedKmh = calculateSpeedKmh(distFromPrev, dtSeconds);
+
+    // Jump detection in waiting state:
+    // 1. Sudden step > 25m at speed > 30 km/h from previous accepted fix
+    // 2. Large instant step > 80m from previous accepted fix
+    // 3. Or total displacement > 80m from baseline without confirmed motion
+    const isJump = (distFromPrev > RUN_ENGINE_CONFIG.WAITING_MAX_INSTANT_JUMP_METERS && jumpSpeedKmh > RUN_ENGINE_CONFIG.WAITING_MAX_JUMP_SPEED_KMH) ||
+      distFromPrev > 80.0 ||
+      distFromBaseline > 80.0;
+
+    if (isJump) {
+      console.warn('[GPS WAITING JUMP REJECTED — REACQUIRING BASELINE]', { distFromPrev, distFromBaseline, jumpSpeedKmh, dtSeconds });
+      // Reset baseline to the new accurate reading without committing any distance
+      this.waitingBaseline = { lat: newPoint[0], lng: newPoint[1], accuracy: wAccuracy, timestamp: currentFixTime };
+      this.waitingBuffer = [];
+      this.lastPoint = newPoint;
+      this.lastAcceptedFixTime = currentFixTime;
+      this.notifyListeners('FIX_PROCESSED', {
+        decision: 'WAITING_JUMP_BASELINE_RESET',
+        distFromPrev,
+        distFromBaseline,
+        jumpSpeedKmh,
+        speedFromBaselineKmh: jumpSpeedKmh
+      });
+      return;
     }
 
     this.waitingBuffer.push({
       lat: newPoint[0],
       lng: newPoint[1],
       accuracy: wAccuracy,
-      timestamp: fixTime
+      timestamp: currentFixTime
     });
-    this.waitingBuffer = this.waitingBuffer.filter(p => fixTime - p.timestamp <= RUN_ENGINE_CONFIG.WAITING_BUFFER_WINDOW_SEC * 1000);
+    this.waitingBuffer = this.waitingBuffer.filter(p => currentFixTime - p.timestamp <= RUN_ENGINE_CONFIG.WAITING_BUFFER_WINDOW_SEC * 1000);
 
     const classification = classifyWaitingBuffer(this.waitingBuffer, this.waitingBaseline);
 
     if (classification.isMoving) {
       // Physical movement confirmed: Transition to TRACKING
       this.lastPoint = newPoint;
-      this.transitionTo('tracking', classification.armReason, fixTime);
+      this.lastAcceptedFixTime = currentFixTime;
+      this.transitionTo('tracking', classification.armReason, currentFixTime);
       this.notifyListeners('FIX_PROCESSED', { decision: 'WAITING_ARMED', classification });
       return;
     }
 
+    // Held in waiting: update lastPoint and lastAcceptedFixTime for subsequent fix interval
+    this.lastPoint = newPoint;
+    this.lastAcceptedFixTime = currentFixTime;
     this.notifyListeners('FIX_PROCESSED', { decision: 'WAITING_HELD', classification });
   }
 
@@ -348,6 +449,14 @@ export class RunEngine {
       return;
     }
 
+    // Reject poor accuracy fixes during tracking
+    if (wAccuracy > RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD) {
+      console.warn('[GPS TRACKING REJECTED: ACCURACY TOO POOR]', { wAccuracy, threshold: RUN_ENGINE_CONFIG.GPS_ACCURACY_THRESHOLD });
+      this.metrics.rejectedFixesCount++;
+      this.notifyListeners('FIX_PROCESSED', { decision: 'TRACKING_POOR_ACCURACY_REJECTED', accuracy: wAccuracy });
+      return;
+    }
+
     // Initialize lastPoint on very first tracking fix to prevent 0-distance infinite loop
     if (!this.lastPoint) {
       this.lastPoint = newPoint;
@@ -359,14 +468,21 @@ export class RunEngine {
 
     const prevPoint = this.lastPoint;
     const stepMeters = getDistanceInMeters(prevPoint[0], prevPoint[1], newPoint[0], newPoint[1]);
-    const dtSeconds = (fixTime - (this.lastAcceptedFixTime || this.lastMovementTimestamp || fixTime)) / 1000;
-    const segmentSpeedKmh = calculateSpeedKmh(stepMeters, Math.max(0.5, dtSeconds));
+    const dtSeconds = Math.max(0.5, (fixTime - (this.lastAcceptedFixTime || this.lastMovementTimestamp || fixTime)) / 1000);
+    const segmentSpeedKmh = calculateSpeedKmh(stepMeters, dtSeconds);
 
-    // Teleport & Speed Spike Filter (TEST 8)
-    if (stepMeters > RUN_ENGINE_CONFIG.TRACKING_MAX_STEP_METERS || segmentSpeedKmh > RUN_ENGINE_CONFIG.TRACKING_MAX_SPEED_KMH) {
-      console.warn('[GPS TELEPORT REJECTED]', { stepMeters, segmentSpeedKmh });
+    // Plausible maximum step distance based on elapsed time:
+    // (30 km/h = 8.33 m/s. For dt=1s, max allowed step is ~15m; for dt=5s, ~52m; capped at TRACKING_MAX_STEP_METERS 100m).
+    const maxAllowedStepForInterval = Math.min(
+      RUN_ENGINE_CONFIG.TRACKING_MAX_STEP_METERS,
+      Math.max(15.0, (RUN_ENGINE_CONFIG.TRACKING_MAX_SPEED_KMH / 3.6) * dtSeconds * 1.25)
+    );
+
+    // Teleport & Speed Spike Filter (Accounts for actual elapsed time)
+    if (stepMeters > maxAllowedStepForInterval || segmentSpeedKmh > RUN_ENGINE_CONFIG.TRACKING_MAX_SPEED_KMH) {
+      console.warn('[GPS TELEPORT/SPEED SPIKE REJECTED]', { stepMeters, maxAllowedStepForInterval, segmentSpeedKmh, dtSeconds });
       this.metrics.rejectedFixesCount++;
-      this.notifyListeners('FIX_PROCESSED', { decision: 'TELEPORT_REJECTED', stepMeters });
+      this.notifyListeners('FIX_PROCESSED', { decision: 'TELEPORT_REJECTED', stepMeters, segmentSpeedKmh });
       return;
     }
 

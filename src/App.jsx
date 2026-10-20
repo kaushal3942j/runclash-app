@@ -1050,7 +1050,7 @@ export default function App() {
         (error) => {
           console.warn("[GPS] Initial tab-load locate failed:", error);
         },
-        { enableHighAccuracy: false, timeout: 60000, maximumAge: 60000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     }
   }, [activeTab, trackingMode]);
@@ -1255,19 +1255,20 @@ export default function App() {
           
           // Re-sync marker position if GPS data is already available but map was unmounted/hidden
           const loc = runEngineStateRef.current?.lastPoint || (runStateRef.current?.path && runStateRef.current.path.length > 0 ? runStateRef.current.path[runStateRef.current.path.length - 1] : null) || (initialGpsLockCoords ? {lat: initialGpsLockCoords[0], lng: initialGpsLockCoords[1]} : null);
-          if (loc && loc.lat && loc.lng) {
+          const locPt = Array.isArray(loc) ? { lat: loc[0], lng: loc[1] } : loc;
+          if (locPt && Number.isFinite(locPt.lat) && Number.isFinite(locPt.lng)) {
             if (runnerMarkerRef.current) {
-              runnerMarkerRef.current.setLatLng([loc.lat, loc.lng]);
+              runnerMarkerRef.current.setLatLng([locPt.lat, locPt.lng]);
             } else {
               const runnerIcon = L.divIcon({
                 className: 'custom-runner-icon',
                 html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
                 iconSize: [16, 16]
               });
-              runnerMarkerRef.current = L.marker([loc.lat, loc.lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+              runnerMarkerRef.current = L.marker([locPt.lat, locPt.lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
             }
             if (mapAutoFollowRef.current) {
-              mapInstanceRef.current.panTo([loc.lat, loc.lng]);
+              mapInstanceRef.current.panTo([locPt.lat, locPt.lng]);
             }
           }
 

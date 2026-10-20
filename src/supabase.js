@@ -909,6 +909,13 @@ export const validateTerritoryPayload = (dbTerr) => {
   if (!Array.isArray(dbTerr.coords) || dbTerr.coords.length < 3) {
     return 'Invalid coords: Polygon must contain at least 3 coordinate pairs.';
   }
+  for (const pt of dbTerr.coords) {
+    if (!Array.isArray(pt) || pt.length < 2 ||
+        typeof pt[0] !== 'number' || !Number.isFinite(pt[0]) || pt[0] < -90 || pt[0] > 90 ||
+        typeof pt[1] !== 'number' || !Number.isFinite(pt[1]) || pt[1] < -180 || pt[1] > 180) {
+      return 'Invalid coords: Coordinates must be valid numbers within latitude [-90, 90] and longitude [-180, 180].';
+    }
+  }
   if (!Number.isFinite(dbTerr.area_sqm) || dbTerr.area_sqm <= 0) {
     return 'Invalid area_sqm: Must be a finite number greater than zero.';
   }
@@ -983,6 +990,22 @@ export const saveNewTerritory = async (territory) => {
       error: 'Invalid run geometry. Not enough unique points for a territory.',
       data: localTerr
     };
+  }
+
+  // Strict coordinate range validation
+  for (const pt of closedCoords) {
+    if (!Array.isArray(pt) || pt.length < 2 ||
+        typeof pt[0] !== 'number' || !Number.isFinite(pt[0]) || pt[0] < -90 || pt[0] > 90 ||
+        typeof pt[1] !== 'number' || !Number.isFinite(pt[1]) || pt[1] < -180 || pt[1] > 180) {
+      console.warn('[STOP CLAIM] Invalid coordinate in territory payload:', pt);
+      return {
+        success: false,
+        cloud: false,
+        queued: false,
+        error: 'Invalid territory coordinates: out of range [-90..90, -180..180].',
+        data: localTerr
+      };
+    }
   }
 
   // STRICT AUTHENTICATION GUARD WITH TIMEOUT (4s)

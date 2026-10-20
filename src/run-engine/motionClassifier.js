@@ -63,9 +63,14 @@ export function classifyWaitingBuffer(buffer, baseline) {
   }
 
   // Fallback Pass: Rapid linear departure from baseline
+  // Require reasonable human walking/running speed and multi-point progress to prevent stationary jitter spikes from triggering
   const fallbackPass =
     distFromBaselineMeters >= RUN_ENGINE_CONFIG.WAITING_FALLBACK_DISPLACEMENT &&
-    directionEfficiency >= 0.50;
+    directionEfficiency >= 0.50 &&
+    medianSpeedKmh >= RUN_ENGINE_CONFIG.WAITING_MIN_SPEED_KMH &&
+    medianSpeedKmh <= RUN_ENGINE_CONFIG.TRACKING_MAX_SPEED_KMH &&
+    totalPathMeters >= RUN_ENGINE_CONFIG.WAITING_MIN_PATH_METERS &&
+    windowSeconds >= 1.5;
 
   if (fallbackPass) {
     return { isMoving: true, armReason: 'Fallback rapid baseline departure confirmed', windowStats };

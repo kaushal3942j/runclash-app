@@ -133,6 +133,7 @@ export function checkPathSelfIntersection(path) {
 /**
  * Validates that a single coordinate is a valid, finite [latitude, longitude] pair.
  * Latitude must be in [-90, 90], Longitude must be in [-180, 180].
+ * Types must strictly be numbers.
  * @param {any} coord
  * @returns {boolean}
  */
@@ -142,6 +143,55 @@ export function isValidCoordinate(coord) {
   const lng = coord[1];
   return typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
          typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
+}
+
+/**
+ * Normalizes coordinate inputs into a standard array of [lat, lng] number pairs.
+ * Accepts JSON strings, arrays of arrays, arrays of {lat, lng} objects, or nested rings.
+ * @param {any} coords
+ * @returns {Array<[number, number]>|null}
+ */
+export function normalizePolygonCoords(coords) {
+  if (!coords) return null;
+  let target = coords;
+  if (typeof target === 'string') {
+    try {
+      target = JSON.parse(target);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(target) || target.length === 0) return null;
+
+  // Unnest if nested ring e.g. [[[lat, lng], ...]]
+  if (Array.isArray(target[0]) && Array.isArray(target[0][0])) {
+    target = target[0];
+  }
+
+  const normalized = [];
+  for (const pt of target) {
+    if (Array.isArray(pt) && pt.length >= 2) {
+      const lat = typeof pt[0] === 'number' ? pt[0] : (typeof pt[0] === 'string' && !isNaN(Number(pt[0])) ? Number(pt[0]) : null);
+      const lng = typeof pt[1] === 'number' ? pt[1] : (typeof pt[1] === 'string' && !isNaN(Number(pt[1])) ? Number(pt[1]) : null);
+      if (lat !== null && lng !== null && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        normalized.push([lat, lng]);
+      } else {
+        return null;
+      }
+    } else if (pt && typeof pt === 'object' && pt !== null && 'lat' in pt && 'lng' in pt) {
+      const lat = typeof pt.lat === 'number' ? pt.lat : (typeof pt.lat === 'string' && !isNaN(Number(pt.lat)) ? Number(pt.lat) : null);
+      const lng = typeof pt.lng === 'number' ? pt.lng : (typeof pt.lng === 'string' && !isNaN(Number(pt.lng)) ? Number(pt.lng) : null);
+      if (lat !== null && lng !== null && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        normalized.push([lat, lng]);
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  }
+
+  return normalized.length >= 3 ? normalized : null;
 }
 
 /**
@@ -218,17 +268,26 @@ export function validateTerritoryCapture(path, config = TERRITORY_ENGINE_CONFIG)
 
 /**
  * Validates that coordinate data represents usable polygon geometry for map rendering.
- * Requires an array containing at least 3 usable, finite coordinate points [lat, lng].
- * Supports both standard flat coordinate rings and nested MultiPolygon/hole rings.
+ * Requires an array or string containing at least 3 usable, finite coordinate points [lat, lng].
+ * Supports JSON strings, standard flat coordinate rings, and nested MultiPolygon/hole rings.
  * @param {any} coords
  * @returns {boolean}
  */
 export function isValidPolygonCoords(coords) {
-  if (!Array.isArray(coords)) return false;
+  if (!coords) return false;
+  let target = coords;
+  if (typeof target === 'string') {
+    try {
+      target = JSON.parse(target);
+    } catch {
+      return false;
+    }
+  }
+  if (!Array.isArray(target)) return false;
 
   // Handle nested ring structure (e.g. MultiPolygon or polygon with holes: [[[lat, lng], ...]])
-  if (coords.length > 0 && Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
-    const ring = coords[0];
+  if (target.length > 0 && Array.isArray(target[0]) && Array.isArray(target[0][0])) {
+    const ring = target[0];
     if (ring.length < 3) return false;
     for (const pt of ring) {
       if (!isValidCoordinate(pt)) {
@@ -239,8 +298,8 @@ export function isValidPolygonCoords(coords) {
   }
 
   // Standard flat polygon coordinates: [[lat, lng], [lat, lng], [lat, lng], ...]
-  if (coords.length < 3) return false;
-  for (const pt of coords) {
+  if (target.length < 3) return false;
+  for (const pt of target) {
     if (!isValidCoordinate(pt)) {
       return false;
     }

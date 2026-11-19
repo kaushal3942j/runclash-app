@@ -5,11 +5,11 @@ export const territoryService = {
     try {
       const res = await saveNewTerritory(territory);
       return {
-        success: res.success !== false,
-        cloud: !!res.cloud,
-        queued: !!res.queued,
-        data: res.data,
-        error: res.error || null
+        success: Boolean(res && res.success),
+        cloud: !!res?.cloud,
+        queued: !!res?.queued,
+        data: res?.data || null,
+        error: res?.error || null
       };
     } catch (err) {
       return { success: false, cloud: false, queued: false, data: null, error: err.message };

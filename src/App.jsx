@@ -30,7 +30,7 @@ import { PublicProfileScreen } from './screens/PublicProfileScreen';
 import { createRunActivity, createTerritoryActivity } from './services/activityService';
 import { RankBadge } from './components/profile/RankBadge';
 import { runEngine } from './run-engine/runEngine';
-import { validateTerritoryCapture, isValidPolygonCoords } from './territory-engine/geometryEngine.js';
+import { validateTerritoryCapture, isValidPolygonCoords, normalizePolygonCoords } from './territory-engine/geometryEngine.js';
 import { TERRITORY_ENGINE_CONFIG } from './territory-engine/territoryEngineConfig.js';
 import { rechargeSector, DECAY_DURATION_HOURS } from './territory-engine/decayEngine.js';
 import { DailyMissionCard } from './components/missions/DailyMissionCard';
@@ -257,6 +257,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'map', 'social', 'conquests', 'profile'
   const [viewingPublicProfileId, setViewingPublicProfileId] = useState(null);
   const [territories, setTerritories] = useState([]);
+  const [mapTileError, setMapTileError] = useState(false);
   const [inventory, setInventory] = useState({
     shields: 2,
     boots: 1,
@@ -1158,11 +1159,9 @@ export default function App() {
   };
 
   // ----------------------------------------------------
-  // Leaflet Map Setup
+  // Leaflet Map Setup & Tile Lifecycle Management
   // ----------------------------------------------------
   useEffect(() => {
-    if (isLoadingIdentity) return;
-    if (!currentUser) return;
     if (mapInstanceRef.current) return;
 
     // Verify map container DOM element exists before calling L.map
@@ -1171,11 +1170,18 @@ export default function App() {
       return;
     }
 
+    // Clean up any stale Leaflet ID to prevent "Map container is already initialized"
+    if (mapElement._leaflet_id && !mapInstanceRef.current) {
+      mapElement._leaflet_id = null;
+    }
+
     const map = L.map(mapElement, {
       zoomControl: false,
       attributionControl: false,
       preferCanvas: true
     }).setView([24.5950, 73.6800], 13.5);
+
+    mapInstanceRef.current = map;
 
     const cartoApiKey = import.meta.env.VITE_CARTO_API_KEY;
     let styleUrl = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -1183,14 +1189,69 @@ export default function App() {
       styleUrl += `?api_key=${cartoApiKey}`;
     }
 
+    let activeTileLayer = null;
+
+    const addOsmRasterFallback = () => {
+      if (!mapInstanceRef.current) return;
+      try {
+        console.log('[Map Setup] Adding high-reliability dark OSM raster tiles.');
+        const rasterLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap contributors',
+          className: 'map-tiles-dark',
+          maxZoom: 19
+        });
+
+        rasterLayer.on('tileerror', () => {
+          console.warn('[Map Layer] Raster tile error detected.');
+          setMapTileError(true);
+        });
+
+        rasterLayer.on('load', () => {
+          setMapTileError(false);
+        });
+
+        rasterLayer.addTo(mapInstanceRef.current);
+        activeTileLayer = rasterLayer;
+      } catch (err) {
+        console.warn('[Map Layer] Failed to add raster tile fallback:', err);
+        setMapTileError(true);
+      }
+    };
+
     let isMapLibreSuccessful = false;
     try {
       if (typeof maplibregl !== 'undefined' && maplibregl.supported()) {
-        L.maplibreGL({
+        const glLayer = L.maplibreGL({
           style: styleUrl,
           attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(map);
+        });
+        glLayer.addTo(map);
         isMapLibreSuccessful = true;
+        activeTileLayer = glLayer;
+
+        // Listen for async style/network errors or WebGL context loss on the MapLibre instance
+        const glMap = glLayer.getMaplibreMap ? glLayer.getMaplibreMap() : null;
+        if (glMap) {
+          glMap.on('error', (e) => {
+            console.warn('[MapLibreGL Error] Vector style/tile error. Switching to raster fallback:', e?.error?.message || e);
+            if (activeTileLayer === glLayer) {
+              try { map.removeLayer(glLayer); } catch (_) {}
+              addOsmRasterFallback();
+            }
+          });
+
+          const glCanvas = glMap.getCanvas ? glMap.getCanvas() : null;
+          if (glCanvas) {
+            glCanvas.addEventListener('webglcontextlost', (ev) => {
+              ev.preventDefault();
+              console.warn('[MapLibreGL] WebGL context lost. Switching to raster fallback.');
+              if (activeTileLayer === glLayer) {
+                try { map.removeLayer(glLayer); } catch (_) {}
+                addOsmRasterFallback();
+              }
+            });
+          }
+        }
       }
     } catch (e) {
       console.warn('[Map Initialization] MapLibreGL failed, falling back to raster tiles:', e);
@@ -1198,13 +1259,9 @@ export default function App() {
 
     if (!isMapLibreSuccessful) {
       console.log('[Map Initialization] Using reliable OSM raster fallback with dark filter.');
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        className: 'map-tiles-dark'
-      }).addTo(map);
+      addOsmRasterFallback();
     }
 
-    mapInstanceRef.current = map;
     addLog("System: Leaflet Map loaded.");
 
     map.on('click', () => {
@@ -1221,10 +1278,29 @@ export default function App() {
       }
     };
 
-    setTimeout(invalidateMap, 300);
+    setTimeout(invalidateMap, 200);
+    setTimeout(invalidateMap, 600);
     window.addEventListener('resize', invalidateMap);
 
+    // ResizeObserver to automatically resize map when container becomes visible
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined' && mapElement) {
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+            if (mapInstanceRef.current) {
+              mapInstanceRef.current.invalidateSize();
+            }
+          }
+        }
+      });
+      resizeObserver.observe(mapElement);
+    }
+
     return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (mapInstanceRef.current) {
         console.log("[Map Setup] Destroying map instance and clearing ref.");
         try {
@@ -1244,72 +1320,116 @@ export default function App() {
       window.removeEventListener('resize', invalidateMap);
       territoryPolygonsRef.current = {};
     };
-  }, [isLoadingIdentity, currentUser]);
+  }, []);
 
   // Resize map when tab changes back to map and re-sync latest location
   useEffect(() => {
-    if (currentUser && activeTab === 'map' && mapInstanceRef.current) {
-      setTimeout(() => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.invalidateSize();
-          
-          // Re-sync marker position if GPS data is already available but map was unmounted/hidden
-          const loc = runEngineStateRef.current?.lastPoint || (runStateRef.current?.path && runStateRef.current.path.length > 0 ? runStateRef.current.path[runStateRef.current.path.length - 1] : null) || (initialGpsLockCoords ? {lat: initialGpsLockCoords[0], lng: initialGpsLockCoords[1]} : null);
-          const locPt = Array.isArray(loc) ? { lat: loc[0], lng: loc[1] } : loc;
-          if (locPt && Number.isFinite(locPt.lat) && Number.isFinite(locPt.lng)) {
-            if (runnerMarkerRef.current) {
-              runnerMarkerRef.current.setLatLng([locPt.lat, locPt.lng]);
-            } else {
-              const runnerIcon = L.divIcon({
-                className: 'custom-runner-icon',
-                html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
-                iconSize: [16, 16]
-              });
-              runnerMarkerRef.current = L.marker([locPt.lat, locPt.lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
-            }
-            if (mapAutoFollowRef.current) {
-              mapInstanceRef.current.panTo([locPt.lat, locPt.lng]);
-            }
+    if (activeTab === 'map') {
+      refreshTerritories();
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+
+        setTimeout(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
           }
+        }, 150);
 
-          // Re-sync polyline if it was unmounted
-          const currentPath = runStateRef.current?.path || [];
-          if (currentPath.length > 0) {
-            if (!polylineRef.current) {
-              polylineRef.current = L.polyline(currentPath, {
-                color: '#FC4C02',
-                weight: 5,
-                opacity: 0.9,
-                lineJoin: 'round',
-                lineCap: 'round'
-              }).addTo(mapInstanceRef.current);
-            } else {
-              polylineRef.current.setLatLngs(currentPath);
-            }
+        setTimeout(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
+          }
+        }, 400);
 
-            const startCoord = currentPath[0];
-            if (!startMarkerRef.current) {
-              const startIcon = L.divIcon({
-                className: 'custom-start-icon',
-                html: `<div style="background-color: #10B981; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);"></div>`,
-                iconSize: [16, 16]
-              });
-              startMarkerRef.current = L.marker(startCoord, { icon: startIcon }).addTo(mapInstanceRef.current);
-            } else {
-              startMarkerRef.current.setLatLng(startCoord);
-            }
+        // Re-sync marker position if GPS data is already available but map was unmounted/hidden
+        const loc = runEngineStateRef.current?.lastPoint || (runStateRef.current?.path && runStateRef.current.path.length > 0 ? runStateRef.current.path[runStateRef.current.path.length - 1] : null) || (initialGpsLockCoords ? {lat: initialGpsLockCoords[0], lng: initialGpsLockCoords[1]} : null);
+        const locPt = Array.isArray(loc) ? { lat: loc[0], lng: loc[1] } : loc;
+        if (locPt && Number.isFinite(locPt.lat) && Number.isFinite(locPt.lng)) {
+          if (runnerMarkerRef.current) {
+            runnerMarkerRef.current.setLatLng([locPt.lat, locPt.lng]);
+          } else {
+            const runnerIcon = L.divIcon({
+              className: 'custom-runner-icon',
+              html: `<div style="background-color: #FC4C02; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+              iconSize: [16, 16]
+            });
+            runnerMarkerRef.current = L.marker([locPt.lat, locPt.lng], { icon: runnerIcon }).addTo(mapInstanceRef.current);
+          }
+          if (mapAutoFollowRef.current) {
+            mapInstanceRef.current.panTo([locPt.lat, locPt.lng]);
           }
         }
-      }, 100);
+
+        // Re-sync polyline if it was unmounted
+        const currentPath = runStateRef.current?.path || [];
+        if (currentPath.length > 0) {
+          if (!polylineRef.current) {
+            polylineRef.current = L.polyline(currentPath, {
+              color: '#FC4C02',
+              weight: 5,
+              opacity: 0.9,
+              lineJoin: 'round',
+              lineCap: 'round'
+            }).addTo(mapInstanceRef.current);
+          } else {
+            polylineRef.current.setLatLngs(currentPath);
+          }
+
+          const startCoord = currentPath[0];
+          if (!startMarkerRef.current) {
+            const startIcon = L.divIcon({
+              className: 'custom-start-icon',
+              html: `<div style="background-color: #10B981; width: 16px; height: 16px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8);"></div>`,
+              iconSize: [16, 16]
+            });
+            startMarkerRef.current = L.marker(startCoord, { icon: startIcon }).addTo(mapInstanceRef.current);
+          } else {
+            startMarkerRef.current.setLatLng(startCoord);
+          }
+        }
+      }
     }
-  }, [activeTab, currentUser]);
+  }, [activeTab]);
+
+  // Mobile Background / Resume Lifecycle Handler
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && activeTab === 'map' && mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+        refreshTerritories();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [activeTab]);
+
+  const retryMapTiles = () => {
+    setMapTileError(false);
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.invalidateSize();
+      refreshTerritories();
+      addLog("Map: Reloading map tiles and refreshing tactical sectors...");
+    }
+  };
 
   // Render territories onto the Leaflet map in real time (SOLO MAP vs CLAN MAP)
   useEffect(() => {
-    if (!mapInstanceRef.current || !currentUser) return;
+    if (!mapInstanceRef.current) return;
+
+    // Clean up removed/expired territories that are no longer in state
+    const activeIds = new Set((territories || []).filter(Boolean).map(t => t.id));
+    Object.keys(territoryPolygonsRef.current).forEach(id => {
+      if (!activeIds.has(id)) {
+        try {
+          mapInstanceRef.current.removeLayer(territoryPolygonsRef.current[id]);
+        } catch (_) {}
+        delete territoryPolygonsRef.current[id];
+      }
+    });
 
     // Redraw list based on active mapMode (solo vs clan)
-    territories.forEach(terr => {
+    (territories || []).forEach(terr => {
       if (!terr) return;
 
       // 1. Render Official Landmark (Always Visible)
@@ -1344,8 +1464,9 @@ export default function App() {
         return;
       }
 
-      // 2. Validate coordinate geometry: must contain at least 3 usable coordinate pairs
-      if (!isValidPolygonCoords(terr.coords)) {
+      // 2. Validate and normalize coordinate geometry
+      const normalizedCoords = normalizePolygonCoords(terr.coords);
+      if (!normalizedCoords || !isValidPolygonCoords(normalizedCoords)) {
         console.warn(`[MAP] Skipping territory "${terr.name || terr.id}" due to malformed coordinate geometry.`);
         if (territoryPolygonsRef.current[terr.id]) {
           mapInstanceRef.current.removeLayer(territoryPolygonsRef.current[terr.id]);
@@ -1355,51 +1476,61 @@ export default function App() {
       }
 
       // 3. Render Player-Created Territories per mapMode
-      const isOwner = currentUser && terr.ownerId === currentUser.uid;
+      const currentUid = (currentUser?.uid || currentUser?.id || '').toLowerCase();
+      const terrOwnerId = (terr.ownerId || terr.owner_id || '').toLowerCase();
+      const isOwner = Boolean(currentUid && terrOwnerId && currentUid === terrOwnerId);
       const isUserClan = currentUser?.clan && currentUser.clan !== 'None' && terr.clan === currentUser.clan;
       const isEnemyClan = terr.clan && terr.clan !== 'None' && (!currentUser?.clan || terr.clan !== currentUser.clan);
       const isUnclaimed = !terr.clan || terr.clan === 'None' || terr.ownerName === 'Unclaimed';
 
       let polyColor = '#888888';
-      let fillOp = 0.12;
+      let fillOp = 0.20;
       let lineWeight = 2;
       let dashStyle = null;
 
       if (mapMode === 'solo') {
-        // SOLO MAP: Highlight personal owned sectors & neutral sectors
+        // SOLO MAP: Highlight owned sectors, show rival sectors clearly with high contrast
         if (isOwner) {
-          polyColor = '#FC4C02';
-          fillOp = 0.25;
+          polyColor = '#FC4C02'; // RunClash Orange (Your Sector)
+          fillOp = 0.28;
           lineWeight = 2.5;
+        } else if (isUnclaimed) {
+          polyColor = '#10B981'; // Unclaimed Neutral Sector (Emerald)
+          fillOp = 0.18;
+          lineWeight = 2;
         } else {
-          polyColor = '#A8A8A8';
-          fillOp = 0.08;
-          lineWeight = 1.5;
+          // Rival Sector: High-contrast Cyber Purple - vivid and unmistakable on dark basemap
+          polyColor = '#8B5CF6';
+          fillOp = 0.22;
+          lineWeight = 2.5;
         }
       } else {
-        // CLAN MAP: Highlight clan sectors prominently, dim rival clan sectors
+        // CLAN MAP: Highlight clan sectors prominently, dim rival clan sectors, show neutral clearly
         if (isUserClan) {
-          polyColor = '#3B82F6';
+          polyColor = '#3B82F6'; // Electric Blue (Ally Clan)
           fillOp = 0.35;
           lineWeight = 3;
         } else if (isEnemyClan) {
-          polyColor = '#EF4444';
-          fillOp = 0.12;
-          lineWeight = 1.5;
+          polyColor = '#EF4444'; // Crimson Red (Rival Clan)
+          fillOp = 0.25;
+          lineWeight = 2.5;
         } else {
-          polyColor = '#6B7280';
-          fillOp = 0.05;
-          lineWeight = 1;
+          // Tactical Amber for independent / neutral clan sectors
+          polyColor = '#F59E0B';
+          fillOp = 0.20;
+          lineWeight = 2;
           dashStyle = '4,4';
         }
       }
 
       const tooltipText = mapMode === 'clan'
-        ? `${terr.name} [${terr.clan || 'Neutral'}]`
-        : `${terr.name} (${terr.ownerName || 'Unclaimed'})`;
+        ? `${terr.name} [${terr.clan || 'Independent'}]`
+        : isOwner
+          ? `${terr.name} (Your Sector)`
+          : `${terr.name} (${terr.ownerName || 'Rival Runner'})`;
 
       if (!territoryPolygonsRef.current[terr.id]) {
-        const poly = L.polygon(terr.coords, {
+        const poly = L.polygon(normalizedCoords, {
           color: polyColor,
           fillColor: polyColor,
           fillOpacity: fillOp,
@@ -1418,7 +1549,7 @@ export default function App() {
         territoryPolygonsRef.current[terr.id] = poly;
       } else {
         const poly = territoryPolygonsRef.current[terr.id];
-        poly.setLatLngs(terr.coords);
+        poly.setLatLngs(normalizedCoords);
         poly.setStyle({
           color: polyColor,
           fillColor: polyColor,
@@ -1429,7 +1560,7 @@ export default function App() {
         poly.setTooltipContent(tooltipText);
       }
     });
-  }, [territories, currentUser?.uid, currentUser?.clan, mapMode]);
+  }, [territories, currentUser?.uid, currentUser?.id, currentUser?.clan, mapMode]);
 
   // ----------------------------------------------------
   // GEOLOCATION & TRACKING ENGINE (REAL GPS & SIMULATOR)
@@ -1855,6 +1986,17 @@ export default function App() {
       const lastCoord = path[path.length - 1];
       mapInstanceRef.current.setView(lastCoord, 16.5);
       addLog("GPS: Centered map on last known coordinate.");
+    } else if (mapInstanceRef.current && territories && territories.length > 0) {
+      const validTerr = territories.find(t => isValidPolygonCoords(t.coords));
+      if (validTerr) {
+        const norm = normalizePolygonCoords(validTerr.coords);
+        if (norm && norm.length > 0) {
+          mapInstanceRef.current.setView(norm[0], 15.5);
+          addLog(`Map: Centered on tactical sector "${validTerr.name}".`);
+          return;
+        }
+      }
+      addLog("GPS: Position not available for centering.");
     } else {
       addLog("GPS: Position not available for centering.");
     }
@@ -3920,8 +4062,46 @@ export default function App() {
             <div style={{ display: activeTab === 'map' ? 'flex' : 'none', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
 
               {/* Fullscreen Map Hero */}
-              <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1 }}></div>
+              <div id="map" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, zIndex: 1, backgroundColor: '#0B0B0D' }}></div>
 
+              {/* Map Tile Recovery / Offline Banner */}
+              {mapTileError && (
+                <div style={{
+                  position: 'absolute',
+                  top: '80px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 1002,
+                  background: 'rgba(23, 23, 28, 0.95)',
+                  border: '1px solid #FC4C02',
+                  borderRadius: '12px',
+                  padding: '8px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+                  backdropFilter: 'blur(8px)'
+                }}>
+                  <span style={{ fontSize: '11px', color: '#F3F4F6', fontWeight: '600' }}>
+                    Map tiles loading slowly or offline
+                  </span>
+                  <button
+                    onClick={retryMapTiles}
+                    style={{
+                      background: '#FC4C02',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
 
               {/* CLAN MAP: Legend Overlay */}
               {mapMode === 'clan' && (
@@ -3948,8 +4128,8 @@ export default function App() {
                     <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Rival Clan</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#6B7280' }}></div>
-                    <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Neutral</span>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#F59E0B' }}></div>
+                    <span style={{ fontSize: '9px', fontWeight: '800', color: 'white' }}>Independent</span>
                   </div>
                 </div>
               )}

@@ -703,6 +703,26 @@ export const subscribeToTerritories = (onUpdate) => {
             remainingDecayHours = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60)));
           }
 
+          let parsedCoords = t.coords;
+          if (typeof parsedCoords === 'string') {
+            try {
+              parsedCoords = JSON.parse(parsedCoords);
+            } catch (e) {
+              console.warn(`[SUPABASE] Failed to parse coords JSON string for territory ${t.id}:`, e);
+            }
+          }
+          if (Array.isArray(parsedCoords)) {
+            parsedCoords = parsedCoords.map(pt => {
+              if (Array.isArray(pt) && pt.length >= 2) {
+                return [Number(pt[0]), Number(pt[1])];
+              }
+              if (pt && typeof pt === 'object' && 'lat' in pt && 'lng' in pt) {
+                return [Number(pt.lat), Number(pt.lng)];
+              }
+              return pt;
+            });
+          }
+
           return {
             id: t.id,
             name: t.name,
@@ -725,7 +745,7 @@ export const subscribeToTerritories = (onUpdate) => {
             expires_at: expiresAt,
             expiresAt: expiresAt,
             rate: t.rate || 1.0,
-            coords: t.coords,
+            coords: parsedCoords || t.coords,
             is_active: t.is_active !== false,
             status: t.status || (t.is_active === false ? 'expired' : 'active'),
             color: t.color || '#FC4C02',
@@ -745,8 +765,17 @@ export const subscribeToTerritories = (onUpdate) => {
               const lastRechargedAt = loc.last_recharged_at || loc.lastRechargedAt || loc.claimed_at || loc.created_at || loc.createdAt || null;
               const createdAt = loc.created_at || loc.createdAt || loc.claimed_at || null;
               const expiresAt = loc.expires_at || loc.expiresAt || null;
+              let locCoords = loc.coords;
+              if (typeof locCoords === 'string') {
+                try {
+                  locCoords = JSON.parse(locCoords);
+                } catch (e) {
+                  console.warn("Failed to parse local territory coords string:", e);
+                }
+              }
               list.push({
                 ...loc,
+                coords: locCoords || loc.coords,
                 last_recharged_at: lastRechargedAt,
                 lastRechargedAt: lastRechargedAt,
                 created_at: createdAt,
@@ -926,13 +955,28 @@ export const validateTerritoryPayload = (dbTerr) => {
 };
 
 export const ensureClosedPolygon = (coords) => {
-  if (!Array.isArray(coords) || coords.length < 3) return coords;
+  let target = coords;
+  if (typeof target === 'string') {
+    try {
+      target = JSON.parse(target);
+    } catch {
+      return coords;
+    }
+  }
+  if (!Array.isArray(target) || target.length < 3) return target;
+
+  const normalized = target.map(pt => {
+    if (Array.isArray(pt) && pt.length >= 2) return [Number(pt[0]), Number(pt[1])];
+    if (pt && typeof pt === 'object' && 'lat' in pt && 'lng' in pt) return [Number(pt.lat), Number(pt.lng)];
+    return pt;
+  });
 
   // 1. Remove consecutive duplicates to prevent PostGIS topology exceptions
-  const cleaned = [coords[0]];
-  for (let i = 1; i < coords.length; i++) {
+  const cleaned = [normalized[0]];
+  for (let i = 1; i < normalized.length; i++) {
     const prev = cleaned[cleaned.length - 1];
-    const curr = coords[i];
+    const curr = normalized[i];
+    if (!Array.isArray(curr) || curr.length < 2) continue;
     if (prev[0] !== curr[0] || prev[1] !== curr[1]) {
       cleaned.push(curr);
     }
@@ -1019,11 +1063,27 @@ export const saveNewTerritory = async (territory) => {
       });
       const { data: sessionData } = await Promise.race([sessionPromise, sessionTimeout]);
       const sUser = sessionData?.session?.user;
-      if (sUser && isValidUUID(sUser.id) && sUser.id === validOwnerId) {
+      if (sUser && isValidUUID(sUser.id) && sUser.id.toLowerCase() === validOwnerId.toLowerCase()) {
         authenticatedSessionUser = sUser;
+      } else if (!sUser) {
+        // Fallback: check getUser directly if session was pending or token is refreshing
+        const { data: userData } = await supabase.auth.getUser();
+        const uUser = userData?.user;
+        if (uUser && isValidUUID(uUser.id) && uUser.id.toLowerCase() === validOwnerId.toLowerCase()) {
+          authenticatedSessionUser = uUser;
+        }
       }
     } catch (e) {
       console.warn('[AUTH GUARD] Error checking session for territory insert:', e);
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const uUser = userData?.user;
+        if (uUser && isValidUUID(uUser.id) && uUser.id.toLowerCase() === validOwnerId.toLowerCase()) {
+          authenticatedSessionUser = uUser;
+        }
+      } catch (fallbackErr) {
+        console.warn('[AUTH GUARD] Fallback user check failed:', fallbackErr);
+      }
     } finally {
       if (authTimerId) clearTimeout(authTimerId);
     }
